@@ -1,0 +1,170 @@
+{
+    "human_profile_mm": [1800, 1000, 1000],
+  
+    "items": [
+  
+      {
+        "name": "bed_double",
+        "title": "Кровать двуспальная",
+        "category": "bed",
+        "min_size_mm": [1900, 1400, 450],
+        "max_size_mm": [2200, 2000, 650],
+        "constraints": {
+          "mount_type": "floor",
+          "touch_floor": { "side": "bottom" },
+          "touch_wall": { "side": "back" },
+          "multi_side_access": 2,
+          "free_side": { "side": "front", "distance_mm": 800 },
+          "human_approach": true
+        }
+      },
+  
+      {
+        "name": "nightstand",
+        "title": "Прикроватная тумбочка",
+        "category": "storage",
+        "min_size_mm": [300, 300, 400],
+        "max_size_mm": [500, 500, 600],
+        "constraints": {
+          "mount_type": "floor",
+          "touch_floor": { "side": "bottom" },
+          "free_side": { "side": "front", "distance_mm": 500 },
+          "human_approach": true
+        }
+      },
+  
+      {
+        "name": "wardrobe",
+        "title": "Гардероб",
+        "category": "storage",
+        "min_size_mm": [900, 500, 2000],
+        "max_size_mm": [2000, 700, 2600],
+        "constraints": {
+          "mount_type": "floor",
+          "touch_floor": { "side": "bottom" },
+          "touch_wall": { "side": "back" },
+          "free_side": { "side": "front", "distance_mm": 900 },
+          "human_approach": true
+        }
+      },
+  
+      {
+        "name": "sofa",
+        "title": "Диван",
+        "category": "seating",
+        "min_size_mm": [1600, 700, 800],
+        "max_size_mm": [2800, 1100, 1000],
+        "constraints": {
+          "mount_type": "floor",
+          "touch_floor": { "side": "bottom" },
+          "touch_wall": { "side": "back" },
+          "free_side": { "side": "front", "distance_mm": 900 },
+          "human_approach": true
+        }
+      },
+  
+      {
+        "name": "table",
+        "title": "Стол",
+        "category": "table",
+        "min_size_mm": [800, 600, 700],
+        "max_size_mm": [1600, 900, 800],
+        "constraints": {
+          "mount_type": "floor",
+          "touch_floor": { "side": "bottom" },
+          "free_side": { "side": "front", "distance_mm": 800 },
+          "human_approach": true
+        }
+      },
+  
+      {
+        "name": "chair",
+        "title": "Стул",
+        "category": "seating",
+        "min_size_mm": [400, 400, 800],
+        "max_size_mm": [550, 550, 1000],
+        "constraints": {
+          "mount_type": "floor",
+          "touch_floor": { "side": "bottom" },
+          "free_side": { "side": "front", "distance_mm": 600 },
+          "human_approach": true
+        }
+      },
+  
+      {
+        "name": "tv",
+        "title": "Телевизор",
+        "category": "media",
+        "min_size_mm": [900, 100, 500],
+        "max_size_mm": [1800, 150, 1100],
+        "constraints": {
+          "mount_type": "wall",
+          "touch_wall": { "side": "back" },
+          "human_approach": true
+        }
+      },
+  
+      {
+        "name": "picture",
+        "title": "Картина",
+        "category": "decor",
+        "min_size_mm": [500, 30, 400],
+        "max_size_mm": [1600, 50, 1200],
+        "constraints": {
+          "mount_type": "wall",
+          "touch_wall": { "side": "back" }
+        }
+      },
+  
+      {
+        "name": "wall_clock",
+        "title": "Настенные часы",
+        "category": "decor",
+        "min_size_mm": [300, 50, 300],
+        "max_size_mm": [600, 100, 600],
+        "constraints": {
+          "mount_type": "wall",
+          "touch_wall": { "side": "back" }
+        }
+      },
+  
+      {
+        "name": "chandelier",
+        "title": "Люстра",
+        "category": "lighting",
+        "min_size_mm": [300, 300, 200],
+        "max_size_mm": [700, 700, 400],
+        "constraints": {
+          "mount_type": "ceiling",
+          "touch_ceiling": { "side": "top" },
+          "free_side": { "side": "bottom", "distance_mm": 600 }
+        }
+      },
+  
+      {
+        "name": "floor_lamp",
+        "title": "Торшер",
+        "category": "lighting",
+        "min_size_mm": [250, 250, 1400],
+        "max_size_mm": [450, 450, 1900],
+        "constraints": {
+          "mount_type": "floor",
+          "touch_floor": { "side": "bottom" },
+          "free_side": { "side": "front", "distance_mm": 600 },
+          "human_approach": true
+        }
+      },
+  
+      {
+        "name": "wall_lamp",
+        "title": "Настенный светильник",
+        "category": "lighting",
+        "min_size_mm": [200, 200, 200],
+        "max_size_mm": [400, 350, 350],
+        "constraints": {
+          "mount_type": "wall",
+          "touch_wall": { "side": "back" }
+        }
+      }
+    ]
+  }

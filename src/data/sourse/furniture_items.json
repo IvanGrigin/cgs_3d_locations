@@ -1,0 +1,492 @@
+{
+    "items": [
+      {
+        "name": "kitchen_base_cabinet_small",
+        "size": [0.6, 0.6, 0.9],
+        "constraints": {
+          "on_floor": true,
+          "touch_wall": true,
+          "free_top": true,
+          "human_approach": true
+        }
+      },
+      {
+        "name": "kitchen_base_cabinet_medium",
+        "size": [1.2, 0.6, 0.9],
+        "constraints": {
+          "on_floor": true,
+          "touch_wall": true,
+          "free_top": true,
+          "human_approach": true
+        }
+      },
+      {
+        "name": "kitchen_base_cabinet_corner",
+        "size": [0.9, 0.9, 0.9],
+        "constraints": {
+          "on_floor": true,
+          "touch_wall": true,
+          "in_corner": true,
+          "free_top": true,
+          "human_approach": true
+        }
+      },
+      {
+        "name": "kitchen_upper_cabinet_small",
+        "size": [0.6, 0.4, 0.8],
+        "constraints": {
+          "touch_wall": true,
+          "free_top": false
+        }
+      },
+      {
+        "name": "kitchen_upper_cabinet_medium",
+        "size": [1.0, 0.4, 0.8],
+        "constraints": {
+          "touch_wall": true
+        }
+      },
+      {
+        "name": "kitchen_fridge_small",
+        "size": [0.6, 0.6, 1.8],
+        "constraints": {
+          "on_floor": true,
+          "touch_wall": true,
+          "free_side_named": {
+            "side": "front",
+            "distance": 0.7
+          },
+          "human_approach": true
+        }
+      },
+      {
+        "name": "kitchen_fridge_large",
+        "size": [0.9, 0.7, 2.0],
+        "constraints": {
+          "on_floor": true,
+          "touch_wall": true,
+          "free_side_named": {
+            "side": "front",
+            "distance": 0.8
+          },
+          "human_approach": true
+        }
+      },
+      {
+        "name": "kitchen_sink_cabinet",
+        "size": [0.8, 0.6, 0.9],
+        "constraints": {
+          "on_floor": true,
+          "touch_wall": true,
+          "free_top": true,
+          "human_approach": true
+        }
+      },
+      {
+        "name": "kitchen_drawer_unit",
+        "size": [0.6, 0.6, 0.9],
+        "constraints": {
+          "on_floor": true,
+          "touch_wall": true,
+          "free_side_named": {
+            "side": "front",
+            "distance": 0.7
+          },
+          "human_approach": true
+        }
+      },
+      {
+        "name": "kitchen_island_small",
+        "size": [1.2, 0.8, 0.9],
+        "constraints": {
+          "on_floor": true,
+          "free_side": {
+            "distance": 0.8
+          },
+          "multi_side_access": 2,
+          "human_approach": true
+        }
+      },
+  
+      {
+        "name": "bedroom_bed_single",
+        "size": [2.0, 0.9, 0.5],
+        "constraints": {
+          "on_floor": true,
+          "touch_wall": true,
+          "free_side": {
+            "distance": 0.6
+          },
+          "human_approach": true
+        }
+      },
+      {
+        "name": "bedroom_bed_double",
+        "size": [2.0, 1.6, 0.5],
+        "constraints": {
+          "on_floor": true,
+          "touch_wall": true,
+          "free_side": {
+            "distance": 0.7
+          },
+          "multi_side_access": 2,
+          "human_approach": true
+        }
+      },
+      {
+        "name": "bedroom_bed_queen",
+        "size": [2.1, 1.8, 0.5],
+        "constraints": {
+          "on_floor": true,
+          "touch_wall": true,
+          "free_side": {
+            "distance": 0.7
+          },
+          "multi_side_access": 2,
+          "human_approach": true
+        }
+      },
+      {
+        "name": "bedroom_nightstand_small",
+        "size": [0.4, 0.4, 0.5],
+        "constraints": {
+          "on_floor": true,
+          "free_side_named": {
+            "side": "front",
+            "distance": 0.5
+          },
+          "human_approach": true
+        }
+      },
+      {
+        "name": "bedroom_wardrobe_small",
+        "size": [1.2, 0.6, 2.2],
+        "constraints": {
+          "on_floor": true,
+          "touch_wall": true,
+          "free_side_named": {
+            "side": "front",
+            "distance": 0.8
+          },
+          "human_approach": true
+        }
+      },
+      {
+        "name": "bedroom_wardrobe_large",
+        "size": [2.4, 0.6, 2.4],
+        "constraints": {
+          "on_floor": true,
+          "touch_wall": true,
+          "in_corner": false,
+          "free_side_named": {
+            "side": "front",
+            "distance": 0.8
+          },
+          "human_approach": true
+        }
+      },
+      {
+        "name": "bedroom_chest_of_drawers",
+        "size": [1.0, 0.5, 1.0],
+        "constraints": {
+          "on_floor": true,
+          "touch_wall": true,
+          "free_side_named": {
+            "side": "front",
+            "distance": 0.7
+          },
+          "human_approach": true
+        }
+      },
+  
+      {
+        "name": "living_sofa_2_seat",
+        "size": [2.0, 0.9, 0.9],
+        "constraints": {
+          "on_floor": true,
+          "touch_wall": true,
+          "free_side_named": {
+            "side": "front",
+            "distance": 0.8
+          },
+          "human_approach": true
+        }
+      },
+      {
+        "name": "living_sofa_corner",
+        "size": [2.4, 1.6, 0.9],
+        "constraints": {
+          "on_floor": true,
+          "in_corner": true,
+          "free_side": {
+            "distance": 0.8
+          },
+          "human_approach": true
+        }
+      },
+      {
+        "name": "living_armchair",
+        "size": [0.9, 0.9, 0.9],
+        "constraints": {
+          "on_floor": true,
+          "free_side": {
+            "distance": 0.7
+          },
+          "human_approach": true
+        }
+      },
+      {
+        "name": "living_tv_stand",
+        "size": [1.8, 0.4, 0.6],
+        "constraints": {
+          "on_floor": true,
+          "touch_wall": true,
+          "free_side_named": {
+            "side": "front",
+            "distance": 2.0
+          },
+          "human_approach": true
+        }
+      },
+      {
+        "name": "living_coffee_table_small",
+        "size": [0.8, 0.6, 0.4],
+        "constraints": {
+          "on_floor": true,
+          "free_side": {
+            "distance": 0.6
+          },
+          "human_approach": true
+        }
+      },
+      {
+        "name": "living_shelf_wall",
+        "size": [1.2, 0.3, 1.8],
+        "constraints": {
+          "touch_wall": true,
+          "free_side": {
+            "distance": 0.5
+          }
+        }
+      },
+      {
+        "name": "living_floor_lamp",
+        "size": [0.4, 0.4, 1.8],
+        "constraints": {
+          "on_floor": true,
+          "free_side": {
+            "distance": 0.5
+          },
+          "human_approach": true
+        }
+      },
+  
+      {
+        "name": "kids_bed_single",
+        "size": [1.8, 0.8, 0.5],
+        "constraints": {
+          "on_floor": true,
+          "touch_wall": true,
+          "free_side": {
+            "distance": 0.6
+          },
+          "human_approach": true
+        }
+      },
+      {
+        "name": "kids_bunk_bed",
+        "size": [2.0, 0.9, 1.6],
+        "constraints": {
+          "on_floor": true,
+          "touch_wall": true,
+          "free_side_named": {
+            "side": "front",
+            "distance": 0.8
+          },
+          "human_approach": true
+        }
+      },
+      {
+        "name": "kids_desk_small",
+        "size": [1.0, 0.6, 0.75],
+        "constraints": {
+          "on_floor": true,
+          "touch_wall": true,
+          "free_side_named": {
+            "side": "front",
+            "distance": 0.8
+          },
+          "human_approach": true
+        }
+      },
+      {
+        "name": "kids_shelf_open",
+        "size": [0.8, 0.3, 1.4],
+        "constraints": {
+          "on_floor": true,
+          "touch_wall": true
+        }
+      },
+      {
+        "name": "kids_toy_box",
+        "size": [0.6, 0.4, 0.5],
+        "constraints": {
+          "on_floor": true,
+          "free_side": {
+            "distance": 0.5
+          },
+          "human_approach": true
+        }
+      },
+  
+      {
+        "name": "bathroom_sink_wall",
+        "size": [0.6, 0.5, 0.9],
+        "constraints": {
+          "on_floor": true,
+          "touch_wall": true,
+          "free_side_named": {
+            "side": "front",
+            "distance": 0.7
+          },
+          "human_approach": true
+        }
+      },
+      {
+        "name": "bathroom_toilet",
+        "size": [0.7, 0.7, 0.8],
+        "constraints": {
+          "on_floor": true,
+          "touch_wall": true,
+          "free_side_named": {
+            "side": "front",
+            "distance": 0.7
+          },
+          "human_approach": true
+        }
+      },
+      {
+        "name": "bathroom_bathtub_small",
+        "size": [1.5, 0.7, 0.6],
+        "constraints": {
+          "on_floor": true,
+          "touch_wall": true,
+          "free_side": {
+            "distance": 0.7
+          },
+          "human_approach": true
+        }
+      },
+      {
+        "name": "bathroom_bathtub_corner",
+        "size": [1.5, 1.5, 0.6],
+        "constraints": {
+          "on_floor": true,
+          "in_corner": true,
+          "human_approach": true
+        }
+      },
+      {
+        "name": "bathroom_washing_machine",
+        "size": [0.6, 0.6, 0.85],
+        "constraints": {
+          "on_floor": true,
+          "touch_wall": true,
+          "free_side_named": {
+            "side": "front",
+            "distance": 0.7
+          },
+          "human_approach": true
+        }
+      },
+  
+      {
+        "name": "hall_shoe_rack_small",
+        "size": [0.8, 0.3, 0.5],
+        "constraints": {
+          "on_floor": true,
+          "touch_wall": true,
+          "free_side_named": {
+            "side": "front",
+            "distance": 0.7
+          },
+          "human_approach": true
+        }
+      },
+      {
+        "name": "hall_shoe_rack_tall",
+        "size": [0.8, 0.35, 1.2],
+        "constraints": {
+          "on_floor": true,
+          "touch_wall": true,
+          "free_side_named": {
+            "side": "front",
+            "distance": 0.7
+          },
+          "human_approach": true
+        }
+      },
+      {
+        "name": "hall_wardrobe",
+        "size": [1.6, 0.6, 2.2],
+        "constraints": {
+          "on_floor": true,
+          "touch_wall": true,
+          "in_corner": false,
+          "free_side_named": {
+            "side": "front",
+            "distance": 0.9
+          },
+          "human_approach": true
+        }
+      },
+      {
+        "name": "hall_bench",
+        "size": [1.0, 0.4, 0.45],
+        "constraints": {
+          "on_floor": true,
+          "free_side_named": {
+            "side": "front",
+            "distance": 0.7
+          },
+          "human_approach": true
+        }
+      },
+      {
+        "name": "hall_mirror_wall",
+        "size": [0.8, 0.1, 1.8],
+        "constraints": {
+          "touch_wall": true
+        }
+      },
+  
+      {
+        "name": "ceiling_lamp_small",
+        "size": [0.4, 0.4, 0.2],
+        "constraints": {
+          "under_ceiling": true,
+          "free_side": {
+            "distance": 0.5
+          }
+        }
+      },
+      {
+        "name": "ceiling_lamp_long",
+        "size": [1.2, 0.3, 0.2],
+        "constraints": {
+          "under_ceiling": true,
+          "free_side": {
+            "distance": 0.5
+          }
+        }
+      },
+      {
+        "name": "wall_lamp",
+        "size": [0.3, 0.2, 0.3],
+        "constraints": {
+          "touch_wall": true,
+          "under_ceiling": false
+        }
+      }
+    ]
+}

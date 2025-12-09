@@ -1,0 +1,10 @@
+archive
+.env
+# venv
+.venv/
+
+# кэш matplotlib
+.mpl-cache/
+
+# macOS мусор
+.DS_Store

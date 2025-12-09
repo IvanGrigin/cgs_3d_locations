@@ -1,0 +1,2572 @@
+{
+  "items": [
+    {
+      "name": "bedroom_bed_1",
+      "category": "bed",
+      "min_size_mm": [
+        2080,
+        957,
+        535
+      ],
+      "max_size_mm": [
+        2168,
+        1070,
+        735
+      ],
+      "constraints": {
+        "on_floor": true,
+        "touch_wall": true,
+        "human_approach": true,
+        "free_side": null,
+        "free_side_named": null,
+        "in_corner": false,
+        "under_ceiling": false
+      }
+    },
+    {
+      "name": "bedroom_bed_2",
+      "category": "bed",
+      "min_size_mm": [
+        1881,
+        1500,
+        447
+      ],
+      "max_size_mm": [
+        2006,
+        1621,
+        550
+      ],
+      "constraints": {
+        "on_floor": true,
+        "touch_wall": true,
+        "human_approach": true,
+        "free_side": null,
+        "free_side_named": null,
+        "in_corner": true,
+        "under_ceiling": false
+      }
+    },
+    {
+      "name": "bedroom_bed_3",
+      "category": "bed",
+      "min_size_mm": [
+        2060,
+        1588,
+        473
+      ],
+      "max_size_mm": [
+        2258,
+        1697,
+        542
+      ],
+      "constraints": {
+        "on_floor": true,
+        "touch_wall": true,
+        "human_approach": true,
+        "free_side": {
+          "distance": 734
+        },
+        "free_side_named": {
+          "side": "front",
+          "distance": 424
+        },
+        "in_corner": false,
+        "under_ceiling": false
+      }
+    },
+    {
+      "name": "bedroom_bed_4",
+      "category": "bed",
+      "min_size_mm": [
+        1955,
+        1797,
+        434
+      ],
+      "max_size_mm": [
+        2100,
+        1968,
+        512
+      ],
+      "constraints": {
+        "on_floor": true,
+        "touch_wall": true,
+        "human_approach": false,
+        "free_side": null,
+        "free_side_named": null,
+        "in_corner": false,
+        "under_ceiling": false
+      }
+    },
+    {
+      "name": "bedroom_bed_5",
+      "category": "bed",
+      "min_size_mm": [
+        1825,
+        1140,
+        469
+      ],
+      "max_size_mm": [
+        1875,
+        1248,
+        607
+      ],
+      "constraints": {
+        "on_floor": true,
+        "touch_wall": false,
+        "human_approach": false,
+        "free_side": null,
+        "free_side_named": null,
+        "in_corner": false,
+        "under_ceiling": false
+      }
+    },
+    {
+      "name": "bedroom_bed_6",
+      "category": "bed",
+      "min_size_mm": [
+        1819,
+        767,
+        482
+      ],
+      "max_size_mm": [
+        1927,
+        908,
+        559
+      ],
+      "constraints": {
+        "on_floor": true,
+        "touch_wall": true,
+        "human_approach": true,
+        "free_side": {
+          "distance": 532
+        },
+        "free_side_named": null,
+        "in_corner": true,
+        "under_ceiling": false
+      }
+    },
+    {
+      "name": "bedroom_bed_7",
+      "category": "bed",
+      "min_size_mm": [
+        1841,
+        957,
+        407
+      ],
+      "max_size_mm": [
+        1997,
+        1114,
+        469
+      ],
+      "constraints": {
+        "on_floor": true,
+        "touch_wall": false,
+        "human_approach": false,
+        "free_side": {
+          "distance": 738
+        },
+        "free_side_named": null,
+        "in_corner": false,
+        "under_ceiling": false
+      }
+    },
+    {
+      "name": "bedroom_bed_8",
+      "category": "bed",
+      "min_size_mm": [
+        1981,
+        1356,
+        443
+      ],
+      "max_size_mm": [
+        2106,
+        1542,
+        549
+      ],
+      "constraints": {
+        "on_floor": true,
+        "touch_wall": false,
+        "human_approach": false,
+        "free_side": {
+          "distance": 561
+        },
+        "free_side_named": null,
+        "in_corner": false,
+        "under_ceiling": false
+      }
+    },
+    {
+      "name": "bedroom_bed_9",
+      "category": "bed",
+      "min_size_mm": [
+        1987,
+        1607,
+        432
+      ],
+      "max_size_mm": [
+        2043,
+        1682,
+        584
+      ],
+      "constraints": {
+        "on_floor": true,
+        "touch_wall": true,
+        "human_approach": false,
+        "free_side": null,
+        "free_side_named": null,
+        "in_corner": false,
+        "under_ceiling": false
+      }
+    },
+    {
+      "name": "bedroom_bed_10",
+      "category": "bed",
+      "min_size_mm": [
+        2025,
+        1279,
+        414
+      ],
+      "max_size_mm": [
+        2121,
+        1358,
+        496
+      ],
+      "constraints": {
+        "on_floor": true,
+        "touch_wall": false,
+        "human_approach": true,
+        "free_side": null,
+        "free_side_named": null,
+        "in_corner": false,
+        "under_ceiling": false
+      }
+    },
+    {
+      "name": "bedroom_bed_11",
+      "category": "bed",
+      "min_size_mm": [
+        2063,
+        1542,
+        486
+      ],
+      "max_size_mm": [
+        2197,
+        1622,
+        661
+      ],
+      "constraints": {
+        "on_floor": true,
+        "touch_wall": true,
+        "human_approach": false,
+        "free_side": null,
+        "free_side_named": null,
+        "in_corner": true,
+        "under_ceiling": false
+      }
+    },
+    {
+      "name": "bedroom_bed_12",
+      "category": "bed",
+      "min_size_mm": [
+        2099,
+        955,
+        491
+      ],
+      "max_size_mm": [
+        2202,
+        1086,
+        549
+      ],
+      "constraints": {
+        "on_floor": true,
+        "touch_wall": true,
+        "human_approach": false,
+        "free_side": null,
+        "free_side_named": {
+          "side": "front",
+          "distance": 722
+        },
+        "in_corner": false,
+        "under_ceiling": false
+      }
+    },
+    {
+      "name": "bedroom_wardrobe_1",
+      "category": "storage",
+      "min_size_mm": [
+        1136,
+        554,
+        2249
+      ],
+      "max_size_mm": [
+        1266,
+        694,
+        2408
+      ],
+      "constraints": {
+        "on_floor": true,
+        "touch_wall": true,
+        "human_approach": false,
+        "free_side": {
+          "distance": 795
+        },
+        "free_side_named": null,
+        "in_corner": true,
+        "under_ceiling": false
+      }
+    },
+    {
+      "name": "bedroom_wardrobe_2",
+      "category": "storage",
+      "min_size_mm": [
+        1261,
+        586,
+        2334
+      ],
+      "max_size_mm": [
+        1389,
+        753,
+        2418
+      ],
+      "constraints": {
+        "on_floor": true,
+        "touch_wall": false,
+        "human_approach": true,
+        "free_side": null,
+        "free_side_named": {
+          "side": "front",
+          "distance": 798
+        },
+        "in_corner": true,
+        "under_ceiling": false
+      }
+    },
+    {
+      "name": "bedroom_wardrobe_3",
+      "category": "storage",
+      "min_size_mm": [
+        1099,
+        476,
+        1832
+      ],
+      "max_size_mm": [
+        1205,
+        611,
+        1942
+      ],
+      "constraints": {
+        "on_floor": true,
+        "touch_wall": true,
+        "human_approach": true,
+        "free_side": null,
+        "free_side_named": null,
+        "in_corner": true,
+        "under_ceiling": false
+      }
+    },
+    {
+      "name": "bedroom_wardrobe_4",
+      "category": "storage",
+      "min_size_mm": [
+        1572,
+        408,
+        2395
+      ],
+      "max_size_mm": [
+        1699,
+        503,
+        2499
+      ],
+      "constraints": {
+        "on_floor": true,
+        "touch_wall": false,
+        "human_approach": true,
+        "free_side": null,
+        "free_side_named": null,
+        "in_corner": false,
+        "under_ceiling": false
+      }
+    },
+    {
+      "name": "bedroom_wardrobe_5",
+      "category": "storage",
+      "min_size_mm": [
+        1348,
+        416,
+        2070
+      ],
+      "max_size_mm": [
+        1541,
+        509,
+        2200
+      ],
+      "constraints": {
+        "on_floor": true,
+        "touch_wall": true,
+        "human_approach": false,
+        "free_side": null,
+        "free_side_named": null,
+        "in_corner": false,
+        "under_ceiling": false
+      }
+    },
+    {
+      "name": "bedroom_wardrobe_6",
+      "category": "storage",
+      "min_size_mm": [
+        1940,
+        405,
+        2148
+      ],
+      "max_size_mm": [
+        1995,
+        496,
+        2318
+      ],
+      "constraints": {
+        "on_floor": true,
+        "touch_wall": true,
+        "human_approach": false,
+        "free_side": {
+          "distance": 555
+        },
+        "free_side_named": null,
+        "in_corner": true,
+        "under_ceiling": false
+      }
+    },
+    {
+      "name": "bedroom_wardrobe_7",
+      "category": "storage",
+      "min_size_mm": [
+        1809,
+        554,
+        1989
+      ],
+      "max_size_mm": [
+        1970,
+        617,
+        2085
+      ],
+      "constraints": {
+        "on_floor": true,
+        "touch_wall": false,
+        "human_approach": false,
+        "free_side": {
+          "distance": 377
+        },
+        "free_side_named": null,
+        "in_corner": false,
+        "under_ceiling": false
+      }
+    },
+    {
+      "name": "bedroom_wardrobe_8",
+      "category": "storage",
+      "min_size_mm": [
+        1625,
+        447,
+        2016
+      ],
+      "max_size_mm": [
+        1768,
+        626,
+        2074
+      ],
+      "constraints": {
+        "on_floor": true,
+        "touch_wall": false,
+        "human_approach": true,
+        "free_side": null,
+        "free_side_named": null,
+        "in_corner": true,
+        "under_ceiling": false
+      }
+    },
+    {
+      "name": "bedroom_wardrobe_9",
+      "category": "storage",
+      "min_size_mm": [
+        1202,
+        409,
+        1843
+      ],
+      "max_size_mm": [
+        1325,
+        502,
+        2021
+      ],
+      "constraints": {
+        "on_floor": true,
+        "touch_wall": false,
+        "human_approach": true,
+        "free_side": {
+          "distance": 350
+        },
+        "free_side_named": null,
+        "in_corner": false,
+        "under_ceiling": false
+      }
+    },
+    {
+      "name": "bedroom_wardrobe_10",
+      "category": "storage",
+      "min_size_mm": [
+        1143,
+        454,
+        2034
+      ],
+      "max_size_mm": [
+        1317,
+        586,
+        2103
+      ],
+      "constraints": {
+        "on_floor": true,
+        "touch_wall": true,
+        "human_approach": false,
+        "free_side": null,
+        "free_side_named": null,
+        "in_corner": true,
+        "under_ceiling": false
+      }
+    },
+    {
+      "name": "kitchen_cabinet_1",
+      "category": "storage",
+      "min_size_mm": [
+        987,
+        582,
+        741
+      ],
+      "max_size_mm": [
+        1141,
+        689,
+        939
+      ],
+      "constraints": {
+        "on_floor": true,
+        "touch_wall": false,
+        "human_approach": false,
+        "free_side": null,
+        "free_side_named": null,
+        "in_corner": true,
+        "under_ceiling": false
+      }
+    },
+    {
+      "name": "kitchen_cabinet_2",
+      "category": "storage",
+      "min_size_mm": [
+        1045,
+        685,
+        757
+      ],
+      "max_size_mm": [
+        1234,
+        817,
+        945
+      ],
+      "constraints": {
+        "on_floor": true,
+        "touch_wall": true,
+        "human_approach": false,
+        "free_side": null,
+        "free_side_named": null,
+        "in_corner": true,
+        "under_ceiling": false
+      }
+    },
+    {
+      "name": "kitchen_cabinet_3",
+      "category": "storage",
+      "min_size_mm": [
+        610,
+        320,
+        700
+      ],
+      "max_size_mm": [
+        669,
+        371,
+        781
+      ],
+      "constraints": {
+        "on_floor": true,
+        "touch_wall": true,
+        "human_approach": true,
+        "free_side": {
+          "distance": 833
+        },
+        "free_side_named": null,
+        "in_corner": false,
+        "under_ceiling": false
+      }
+    },
+    {
+      "name": "kitchen_cabinet_4",
+      "category": "storage",
+      "min_size_mm": [
+        637,
+        361,
+        922
+      ],
+      "max_size_mm": [
+        710,
+        442,
+        1053
+      ],
+      "constraints": {
+        "on_floor": true,
+        "touch_wall": true,
+        "human_approach": true,
+        "free_side": null,
+        "free_side_named": {
+          "side": "front",
+          "distance": 461
+        },
+        "in_corner": false,
+        "under_ceiling": false
+      }
+    },
+    {
+      "name": "kitchen_cabinet_5",
+      "category": "storage",
+      "min_size_mm": [
+        952,
+        628,
+        793
+      ],
+      "max_size_mm": [
+        1074,
+        795,
+        879
+      ],
+      "constraints": {
+        "on_floor": true,
+        "touch_wall": true,
+        "human_approach": false,
+        "free_side": {
+          "distance": 799
+        },
+        "free_side_named": {
+          "side": "front",
+          "distance": 464
+        },
+        "in_corner": true,
+        "under_ceiling": false
+      }
+    },
+    {
+      "name": "kitchen_cabinet_6",
+      "category": "storage",
+      "min_size_mm": [
+        735,
+        620,
+        900
+      ],
+      "max_size_mm": [
+        805,
+        681,
+        990
+      ],
+      "constraints": {
+        "on_floor": true,
+        "touch_wall": true,
+        "human_approach": false,
+        "free_side": null,
+        "free_side_named": null,
+        "in_corner": false,
+        "under_ceiling": false
+      }
+    },
+    {
+      "name": "kitchen_cabinet_7",
+      "category": "storage",
+      "min_size_mm": [
+        641,
+        449,
+        799
+      ],
+      "max_size_mm": [
+        750,
+        507,
+        942
+      ],
+      "constraints": {
+        "on_floor": true,
+        "touch_wall": false,
+        "human_approach": false,
+        "free_side": null,
+        "free_side_named": {
+          "side": "front",
+          "distance": 674
+        },
+        "in_corner": false,
+        "under_ceiling": false
+      }
+    },
+    {
+      "name": "kitchen_cabinet_8",
+      "category": "storage",
+      "min_size_mm": [
+        1178,
+        395,
+        713
+      ],
+      "max_size_mm": [
+        1327,
+        507,
+        847
+      ],
+      "constraints": {
+        "on_floor": true,
+        "touch_wall": true,
+        "human_approach": true,
+        "free_side": null,
+        "free_side_named": null,
+        "in_corner": true,
+        "under_ceiling": false
+      }
+    },
+    {
+      "name": "kitchen_cabinet_9",
+      "category": "storage",
+      "min_size_mm": [
+        612,
+        540,
+        716
+      ],
+      "max_size_mm": [
+        791,
+        734,
+        823
+      ],
+      "constraints": {
+        "on_floor": true,
+        "touch_wall": true,
+        "human_approach": false,
+        "free_side": null,
+        "free_side_named": null,
+        "in_corner": false,
+        "under_ceiling": false
+      }
+    },
+    {
+      "name": "kitchen_cabinet_10",
+      "category": "storage",
+      "min_size_mm": [
+        1057,
+        426,
+        766
+      ],
+      "max_size_mm": [
+        1196,
+        603,
+        956
+      ],
+      "constraints": {
+        "on_floor": true,
+        "touch_wall": true,
+        "human_approach": false,
+        "free_side": null,
+        "free_side_named": {
+          "side": "front",
+          "distance": 550
+        },
+        "in_corner": false,
+        "under_ceiling": false
+      }
+    },
+    {
+      "name": "kitchen_cabinet_11",
+      "category": "storage",
+      "min_size_mm": [
+        991,
+        642,
+        841
+      ],
+      "max_size_mm": [
+        1179,
+        770,
+        891
+      ],
+      "constraints": {
+        "on_floor": true,
+        "touch_wall": true,
+        "human_approach": true,
+        "free_side": null,
+        "free_side_named": {
+          "side": "front",
+          "distance": 724
+        },
+        "in_corner": false,
+        "under_ceiling": false
+      }
+    },
+    {
+      "name": "kitchen_cabinet_12",
+      "category": "storage",
+      "min_size_mm": [
+        1089,
+        414,
+        809
+      ],
+      "max_size_mm": [
+        1158,
+        482,
+        937
+      ],
+      "constraints": {
+        "on_floor": true,
+        "touch_wall": false,
+        "human_approach": true,
+        "free_side": null,
+        "free_side_named": null,
+        "in_corner": false,
+        "under_ceiling": false
+      }
+    },
+    {
+      "name": "kitchen_cabinet_13",
+      "category": "storage",
+      "min_size_mm": [
+        700,
+        691,
+        731
+      ],
+      "max_size_mm": [
+        832,
+        781,
+        788
+      ],
+      "constraints": {
+        "on_floor": true,
+        "touch_wall": false,
+        "human_approach": false,
+        "free_side": null,
+        "free_side_named": {
+          "side": "front",
+          "distance": 527
+        },
+        "in_corner": false,
+        "under_ceiling": false
+      }
+    },
+    {
+      "name": "kitchen_cabinet_14",
+      "category": "storage",
+      "min_size_mm": [
+        910,
+        679,
+        701
+      ],
+      "max_size_mm": [
+        1059,
+        863,
+        895
+      ],
+      "constraints": {
+        "on_floor": true,
+        "touch_wall": false,
+        "human_approach": true,
+        "free_side": {
+          "distance": 723
+        },
+        "free_side_named": null,
+        "in_corner": false,
+        "under_ceiling": false
+      }
+    },
+    {
+      "name": "kitchen_cabinet_15",
+      "category": "storage",
+      "min_size_mm": [
+        1096,
+        519,
+        711
+      ],
+      "max_size_mm": [
+        1166,
+        611,
+        807
+      ],
+      "constraints": {
+        "on_floor": true,
+        "touch_wall": true,
+        "human_approach": false,
+        "free_side": {
+          "distance": 559
+        },
+        "free_side_named": {
+          "side": "front",
+          "distance": 595
+        },
+        "in_corner": true,
+        "under_ceiling": false
+      }
+    },
+    {
+      "name": "kitchen_fridge_1",
+      "category": "appliance",
+      "min_size_mm": [
+        824,
+        751,
+        1847
+      ],
+      "max_size_mm": [
+        884,
+        863,
+        1922
+      ],
+      "constraints": {
+        "on_floor": true,
+        "touch_wall": true,
+        "human_approach": true,
+        "free_side": null,
+        "free_side_named": null,
+        "in_corner": false,
+        "under_ceiling": false
+      }
+    },
+    {
+      "name": "kitchen_fridge_2",
+      "category": "appliance",
+      "min_size_mm": [
+        821,
+        796,
+        2067
+      ],
+      "max_size_mm": [
+        939,
+        942,
+        2258
+      ],
+      "constraints": {
+        "on_floor": true,
+        "touch_wall": false,
+        "human_approach": true,
+        "free_side": {
+          "distance": 859
+        },
+        "free_side_named": {
+          "side": "front",
+          "distance": 653
+        },
+        "in_corner": false,
+        "under_ceiling": false
+      }
+    },
+    {
+      "name": "kitchen_fridge_3",
+      "category": "appliance",
+      "min_size_mm": [
+        797,
+        700,
+        1736
+      ],
+      "max_size_mm": [
+        862,
+        856,
+        1896
+      ],
+      "constraints": {
+        "on_floor": true,
+        "touch_wall": true,
+        "human_approach": false,
+        "free_side": null,
+        "free_side_named": null,
+        "in_corner": true,
+        "under_ceiling": false
+      }
+    },
+    {
+      "name": "kitchen_fridge_4",
+      "category": "appliance",
+      "min_size_mm": [
+        754,
+        620,
+        1707
+      ],
+      "max_size_mm": [
+        874,
+        754,
+        1901
+      ],
+      "constraints": {
+        "on_floor": true,
+        "touch_wall": false,
+        "human_approach": false,
+        "free_side": {
+          "distance": 527
+        },
+        "free_side_named": null,
+        "in_corner": true,
+        "under_ceiling": false
+      }
+    },
+    {
+      "name": "kitchen_fridge_5",
+      "category": "appliance",
+      "min_size_mm": [
+        830,
+        789,
+        1715
+      ],
+      "max_size_mm": [
+        978,
+        911,
+        1912
+      ],
+      "constraints": {
+        "on_floor": true,
+        "touch_wall": false,
+        "human_approach": true,
+        "free_side": null,
+        "free_side_named": {
+          "side": "front",
+          "distance": 661
+        },
+        "in_corner": false,
+        "under_ceiling": false
+      }
+    },
+    {
+      "name": "living_sofa_1",
+      "category": "seating",
+      "min_size_mm": [
+        2591,
+        828,
+        853
+      ],
+      "max_size_mm": [
+        2764,
+        895,
+        978
+      ],
+      "constraints": {
+        "on_floor": true,
+        "touch_wall": false,
+        "human_approach": true,
+        "free_side": null,
+        "free_side_named": null,
+        "in_corner": true,
+        "under_ceiling": false
+      }
+    },
+    {
+      "name": "living_sofa_2",
+      "category": "seating",
+      "min_size_mm": [
+        2061,
+        1052,
+        921
+      ],
+      "max_size_mm": [
+        2234,
+        1164,
+        1097
+      ],
+      "constraints": {
+        "on_floor": true,
+        "touch_wall": false,
+        "human_approach": true,
+        "free_side": null,
+        "free_side_named": null,
+        "in_corner": true,
+        "under_ceiling": false
+      }
+    },
+    {
+      "name": "living_sofa_3",
+      "category": "seating",
+      "min_size_mm": [
+        1989,
+        1063,
+        870
+      ],
+      "max_size_mm": [
+        2097,
+        1224,
+        998
+      ],
+      "constraints": {
+        "on_floor": true,
+        "touch_wall": true,
+        "human_approach": true,
+        "free_side": null,
+        "free_side_named": null,
+        "in_corner": false,
+        "under_ceiling": false
+      }
+    },
+    {
+      "name": "living_sofa_4",
+      "category": "seating",
+      "min_size_mm": [
+        1659,
+        1194,
+        859
+      ],
+      "max_size_mm": [
+        1767,
+        1350,
+        926
+      ],
+      "constraints": {
+        "on_floor": true,
+        "touch_wall": true,
+        "human_approach": false,
+        "free_side": null,
+        "free_side_named": null,
+        "in_corner": false,
+        "under_ceiling": false
+      }
+    },
+    {
+      "name": "living_sofa_5",
+      "category": "seating",
+      "min_size_mm": [
+        1636,
+        870,
+        961
+      ],
+      "max_size_mm": [
+        1756,
+        1044,
+        1123
+      ],
+      "constraints": {
+        "on_floor": true,
+        "touch_wall": false,
+        "human_approach": false,
+        "free_side": null,
+        "free_side_named": {
+          "side": "front",
+          "distance": 779
+        },
+        "in_corner": false,
+        "under_ceiling": false
+      }
+    },
+    {
+      "name": "living_sofa_6",
+      "category": "seating",
+      "min_size_mm": [
+        2030,
+        1036,
+        921
+      ],
+      "max_size_mm": [
+        2128,
+        1121,
+        1089
+      ],
+      "constraints": {
+        "on_floor": true,
+        "touch_wall": false,
+        "human_approach": false,
+        "free_side": {
+          "distance": 828
+        },
+        "free_side_named": null,
+        "in_corner": false,
+        "under_ceiling": false
+      }
+    },
+    {
+      "name": "living_sofa_7",
+      "category": "seating",
+      "min_size_mm": [
+        2019,
+        1118,
+        817
+      ],
+      "max_size_mm": [
+        2199,
+        1316,
+        899
+      ],
+      "constraints": {
+        "on_floor": true,
+        "touch_wall": false,
+        "human_approach": true,
+        "free_side": null,
+        "free_side_named": null,
+        "in_corner": true,
+        "under_ceiling": false
+      }
+    },
+    {
+      "name": "living_sofa_8",
+      "category": "seating",
+      "min_size_mm": [
+        2363,
+        960,
+        945
+      ],
+      "max_size_mm": [
+        2553,
+        1010,
+        1141
+      ],
+      "constraints": {
+        "on_floor": true,
+        "touch_wall": true,
+        "human_approach": true,
+        "free_side": {
+          "distance": 620
+        },
+        "free_side_named": null,
+        "in_corner": true,
+        "under_ceiling": false
+      }
+    },
+    {
+      "name": "living_sofa_9",
+      "category": "seating",
+      "min_size_mm": [
+        2182,
+        840,
+        846
+      ],
+      "max_size_mm": [
+        2295,
+        947,
+        923
+      ],
+      "constraints": {
+        "on_floor": true,
+        "touch_wall": false,
+        "human_approach": false,
+        "free_side": null,
+        "free_side_named": {
+          "side": "front",
+          "distance": 638
+        },
+        "in_corner": false,
+        "under_ceiling": false
+      }
+    },
+    {
+      "name": "living_sofa_10",
+      "category": "seating",
+      "min_size_mm": [
+        2253,
+        1129,
+        830
+      ],
+      "max_size_mm": [
+        2384,
+        1322,
+        916
+      ],
+      "constraints": {
+        "on_floor": true,
+        "touch_wall": false,
+        "human_approach": false,
+        "free_side": null,
+        "free_side_named": null,
+        "in_corner": true,
+        "under_ceiling": false
+      }
+    },
+    {
+      "name": "living_chair_1",
+      "category": "seating",
+      "min_size_mm": [
+        587,
+        587,
+        891
+      ],
+      "max_size_mm": [
+        772,
+        758,
+        1010
+      ],
+      "constraints": {
+        "on_floor": true,
+        "touch_wall": true,
+        "human_approach": true,
+        "free_side": null,
+        "free_side_named": {
+          "side": "front",
+          "distance": 400
+        },
+        "in_corner": false,
+        "under_ceiling": false
+      }
+    },
+    {
+      "name": "living_chair_2",
+      "category": "seating",
+      "min_size_mm": [
+        669,
+        409,
+        861
+      ],
+      "max_size_mm": [
+        760,
+        479,
+        927
+      ],
+      "constraints": {
+        "on_floor": true,
+        "touch_wall": true,
+        "human_approach": true,
+        "free_side": null,
+        "free_side_named": {
+          "side": "front",
+          "distance": 596
+        },
+        "in_corner": true,
+        "under_ceiling": false
+      }
+    },
+    {
+      "name": "living_chair_3",
+      "category": "seating",
+      "min_size_mm": [
+        501,
+        629,
+        859
+      ],
+      "max_size_mm": [
+        605,
+        775,
+        1034
+      ],
+      "constraints": {
+        "on_floor": true,
+        "touch_wall": false,
+        "human_approach": true,
+        "free_side": {
+          "distance": 835
+        },
+        "free_side_named": null,
+        "in_corner": true,
+        "under_ceiling": false
+      }
+    },
+    {
+      "name": "living_chair_4",
+      "category": "seating",
+      "min_size_mm": [
+        588,
+        694,
+        879
+      ],
+      "max_size_mm": [
+        705,
+        824,
+        1069
+      ],
+      "constraints": {
+        "on_floor": true,
+        "touch_wall": true,
+        "human_approach": false,
+        "free_side": null,
+        "free_side_named": null,
+        "in_corner": false,
+        "under_ceiling": false
+      }
+    },
+    {
+      "name": "living_chair_5",
+      "category": "seating",
+      "min_size_mm": [
+        599,
+        600,
+        953
+      ],
+      "max_size_mm": [
+        720,
+        681,
+        1130
+      ],
+      "constraints": {
+        "on_floor": true,
+        "touch_wall": true,
+        "human_approach": true,
+        "free_side": {
+          "distance": 779
+        },
+        "free_side_named": null,
+        "in_corner": false,
+        "under_ceiling": false
+      }
+    },
+    {
+      "name": "living_chair_6",
+      "category": "seating",
+      "min_size_mm": [
+        607,
+        626,
+        710
+      ],
+      "max_size_mm": [
+        700,
+        807,
+        909
+      ],
+      "constraints": {
+        "on_floor": true,
+        "touch_wall": false,
+        "human_approach": false,
+        "free_side": null,
+        "free_side_named": null,
+        "in_corner": false,
+        "under_ceiling": false
+      }
+    },
+    {
+      "name": "living_chair_7",
+      "category": "seating",
+      "min_size_mm": [
+        498,
+        689,
+        772
+      ],
+      "max_size_mm": [
+        570,
+        842,
+        830
+      ],
+      "constraints": {
+        "on_floor": true,
+        "touch_wall": true,
+        "human_approach": true,
+        "free_side": null,
+        "free_side_named": {
+          "side": "front",
+          "distance": 641
+        },
+        "in_corner": false,
+        "under_ceiling": false
+      }
+    },
+    {
+      "name": "living_chair_8",
+      "category": "seating",
+      "min_size_mm": [
+        411,
+        462,
+        827
+      ],
+      "max_size_mm": [
+        575,
+        605,
+        980
+      ],
+      "constraints": {
+        "on_floor": true,
+        "touch_wall": false,
+        "human_approach": true,
+        "free_side": null,
+        "free_side_named": null,
+        "in_corner": false,
+        "under_ceiling": false
+      }
+    },
+    {
+      "name": "storage_shelf_1",
+      "category": "storage",
+      "min_size_mm": [
+        1125,
+        390,
+        2168
+      ],
+      "max_size_mm": [
+        1195,
+        486,
+        2313
+      ],
+      "constraints": {
+        "on_floor": true,
+        "touch_wall": true,
+        "human_approach": false,
+        "free_side": {
+          "distance": 601
+        },
+        "free_side_named": null,
+        "in_corner": true,
+        "under_ceiling": false
+      }
+    },
+    {
+      "name": "storage_shelf_2",
+      "category": "storage",
+      "min_size_mm": [
+        959,
+        353,
+        2096
+      ],
+      "max_size_mm": [
+        1028,
+        514,
+        2251
+      ],
+      "constraints": {
+        "on_floor": true,
+        "touch_wall": true,
+        "human_approach": true,
+        "free_side": null,
+        "free_side_named": {
+          "side": "front",
+          "distance": 719
+        },
+        "in_corner": false,
+        "under_ceiling": false
+      }
+    },
+    {
+      "name": "storage_shelf_3",
+      "category": "storage",
+      "min_size_mm": [
+        809,
+        421,
+        1742
+      ],
+      "max_size_mm": [
+        863,
+        559,
+        1806
+      ],
+      "constraints": {
+        "on_floor": true,
+        "touch_wall": false,
+        "human_approach": false,
+        "free_side": null,
+        "free_side_named": {
+          "side": "front",
+          "distance": 530
+        },
+        "in_corner": false,
+        "under_ceiling": false
+      }
+    },
+    {
+      "name": "storage_shelf_4",
+      "category": "storage",
+      "min_size_mm": [
+        1047,
+        541,
+        1943
+      ],
+      "max_size_mm": [
+        1177,
+        626,
+        2017
+      ],
+      "constraints": {
+        "on_floor": true,
+        "touch_wall": false,
+        "human_approach": true,
+        "free_side": {
+          "distance": 319
+        },
+        "free_side_named": null,
+        "in_corner": true,
+        "under_ceiling": false
+      }
+    },
+    {
+      "name": "storage_shelf_5",
+      "category": "storage",
+      "min_size_mm": [
+        891,
+        415,
+        2131
+      ],
+      "max_size_mm": [
+        1062,
+        611,
+        2307
+      ],
+      "constraints": {
+        "on_floor": true,
+        "touch_wall": true,
+        "human_approach": true,
+        "free_side": null,
+        "free_side_named": null,
+        "in_corner": true,
+        "under_ceiling": false
+      }
+    },
+    {
+      "name": "storage_shelf_6",
+      "category": "storage",
+      "min_size_mm": [
+        640,
+        502,
+        1447
+      ],
+      "max_size_mm": [
+        699,
+        588,
+        1642
+      ],
+      "constraints": {
+        "on_floor": true,
+        "touch_wall": false,
+        "human_approach": true,
+        "free_side": null,
+        "free_side_named": null,
+        "in_corner": true,
+        "under_ceiling": false
+      }
+    },
+    {
+      "name": "storage_shelf_7",
+      "category": "storage",
+      "min_size_mm": [
+        1182,
+        519,
+        2088
+      ],
+      "max_size_mm": [
+        1359,
+        718,
+        2178
+      ],
+      "constraints": {
+        "on_floor": true,
+        "touch_wall": false,
+        "human_approach": true,
+        "free_side": null,
+        "free_side_named": null,
+        "in_corner": false,
+        "under_ceiling": false
+      }
+    },
+    {
+      "name": "storage_shelf_8",
+      "category": "storage",
+      "min_size_mm": [
+        1062,
+        351,
+        1778
+      ],
+      "max_size_mm": [
+        1120,
+        454,
+        1855
+      ],
+      "constraints": {
+        "on_floor": true,
+        "touch_wall": false,
+        "human_approach": false,
+        "free_side": null,
+        "free_side_named": {
+          "side": "front",
+          "distance": 787
+        },
+        "in_corner": false,
+        "under_ceiling": false
+      }
+    },
+    {
+      "name": "storage_shelf_9",
+      "category": "storage",
+      "min_size_mm": [
+        698,
+        585,
+        1265
+      ],
+      "max_size_mm": [
+        781,
+        780,
+        1357
+      ],
+      "constraints": {
+        "on_floor": true,
+        "touch_wall": false,
+        "human_approach": true,
+        "free_side": null,
+        "free_side_named": null,
+        "in_corner": false,
+        "under_ceiling": false
+      }
+    },
+    {
+      "name": "storage_shelf_10",
+      "category": "storage",
+      "min_size_mm": [
+        1436,
+        377,
+        1384
+      ],
+      "max_size_mm": [
+        1530,
+        486,
+        1553
+      ],
+      "constraints": {
+        "on_floor": true,
+        "touch_wall": false,
+        "human_approach": false,
+        "free_side": {
+          "distance": 519
+        },
+        "free_side_named": null,
+        "in_corner": true,
+        "under_ceiling": false
+      }
+    },
+    {
+      "name": "bathroom_sink_1",
+      "category": "appliance",
+      "min_size_mm": [
+        418,
+        447,
+        942
+      ],
+      "max_size_mm": [
+        497,
+        608,
+        1047
+      ],
+      "constraints": {
+        "on_floor": true,
+        "touch_wall": true,
+        "human_approach": false,
+        "free_side": null,
+        "free_side_named": null,
+        "in_corner": false,
+        "under_ceiling": false
+      }
+    },
+    {
+      "name": "bathroom_sink_2",
+      "category": "appliance",
+      "min_size_mm": [
+        604,
+        324,
+        896
+      ],
+      "max_size_mm": [
+        744,
+        447,
+        956
+      ],
+      "constraints": {
+        "on_floor": true,
+        "touch_wall": true,
+        "human_approach": false,
+        "free_side": null,
+        "free_side_named": null,
+        "in_corner": false,
+        "under_ceiling": false
+      }
+    },
+    {
+      "name": "bathroom_sink_3",
+      "category": "appliance",
+      "min_size_mm": [
+        626,
+        321,
+        1091
+      ],
+      "max_size_mm": [
+        817,
+        504,
+        1160
+      ],
+      "constraints": {
+        "on_floor": true,
+        "touch_wall": false,
+        "human_approach": false,
+        "free_side": null,
+        "free_side_named": null,
+        "in_corner": false,
+        "under_ceiling": false
+      }
+    },
+    {
+      "name": "bathroom_sink_4",
+      "category": "appliance",
+      "min_size_mm": [
+        440,
+        379,
+        848
+      ],
+      "max_size_mm": [
+        614,
+        558,
+        949
+      ],
+      "constraints": {
+        "on_floor": true,
+        "touch_wall": true,
+        "human_approach": false,
+        "free_side": null,
+        "free_side_named": {
+          "side": "front",
+          "distance": 655
+        },
+        "in_corner": false,
+        "under_ceiling": false
+      }
+    },
+    {
+      "name": "bathroom_sink_5",
+      "category": "appliance",
+      "min_size_mm": [
+        657,
+        417,
+        816
+      ],
+      "max_size_mm": [
+        821,
+        538,
+        873
+      ],
+      "constraints": {
+        "on_floor": true,
+        "touch_wall": true,
+        "human_approach": true,
+        "free_side": null,
+        "free_side_named": {
+          "side": "front",
+          "distance": 677
+        },
+        "in_corner": false,
+        "under_ceiling": false
+      }
+    },
+    {
+      "name": "bathroom_bathtub_1",
+      "category": "appliance",
+      "min_size_mm": [
+        1461,
+        634,
+        534
+      ],
+      "max_size_mm": [
+        1579,
+        727,
+        613
+      ],
+      "constraints": {
+        "on_floor": true,
+        "touch_wall": false,
+        "human_approach": false,
+        "free_side": null,
+        "free_side_named": null,
+        "in_corner": true,
+        "under_ceiling": false
+      }
+    },
+    {
+      "name": "bathroom_bathtub_2",
+      "category": "appliance",
+      "min_size_mm": [
+        1693,
+        816,
+        602
+      ],
+      "max_size_mm": [
+        1768,
+        939,
+        777
+      ],
+      "constraints": {
+        "on_floor": true,
+        "touch_wall": true,
+        "human_approach": false,
+        "free_side": null,
+        "free_side_named": {
+          "side": "front",
+          "distance": 525
+        },
+        "in_corner": false,
+        "under_ceiling": false
+      }
+    },
+    {
+      "name": "bathroom_bathtub_3",
+      "category": "appliance",
+      "min_size_mm": [
+        1638,
+        707,
+        509
+      ],
+      "max_size_mm": [
+        1828,
+        905,
+        685
+      ],
+      "constraints": {
+        "on_floor": true,
+        "touch_wall": false,
+        "human_approach": false,
+        "free_side": null,
+        "free_side_named": null,
+        "in_corner": true,
+        "under_ceiling": false
+      }
+    },
+    {
+      "name": "bathroom_bathtub_4",
+      "category": "appliance",
+      "min_size_mm": [
+        1564,
+        859,
+        685
+      ],
+      "max_size_mm": [
+        1762,
+        1018,
+        809
+      ],
+      "constraints": {
+        "on_floor": true,
+        "touch_wall": false,
+        "human_approach": true,
+        "free_side": null,
+        "free_side_named": {
+          "side": "front",
+          "distance": 565
+        },
+        "in_corner": false,
+        "under_ceiling": false
+      }
+    },
+    {
+      "name": "hall_shoe_rack_1",
+      "category": "storage",
+      "min_size_mm": [
+        794,
+        251,
+        514
+      ],
+      "max_size_mm": [
+        926,
+        378,
+        668
+      ],
+      "constraints": {
+        "on_floor": true,
+        "touch_wall": true,
+        "human_approach": false,
+        "free_side": null,
+        "free_side_named": null,
+        "in_corner": false,
+        "under_ceiling": false
+      }
+    },
+    {
+      "name": "hall_shoe_rack_2",
+      "category": "storage",
+      "min_size_mm": [
+        615,
+        314,
+        517
+      ],
+      "max_size_mm": [
+        810,
+        415,
+        590
+      ],
+      "constraints": {
+        "on_floor": true,
+        "touch_wall": true,
+        "human_approach": false,
+        "free_side": null,
+        "free_side_named": {
+          "side": "front",
+          "distance": 750
+        },
+        "in_corner": true,
+        "under_ceiling": false
+      }
+    },
+    {
+      "name": "hall_shoe_rack_3",
+      "category": "storage",
+      "min_size_mm": [
+        658,
+        318,
+        479
+      ],
+      "max_size_mm": [
+        847,
+        482,
+        578
+      ],
+      "constraints": {
+        "on_floor": true,
+        "touch_wall": true,
+        "human_approach": true,
+        "free_side": null,
+        "free_side_named": {
+          "side": "front",
+          "distance": 591
+        },
+        "in_corner": false,
+        "under_ceiling": false
+      }
+    },
+    {
+      "name": "hall_shoe_rack_4",
+      "category": "storage",
+      "min_size_mm": [
+        842,
+        261,
+        607
+      ],
+      "max_size_mm": [
+        1001,
+        440,
+        754
+      ],
+      "constraints": {
+        "on_floor": true,
+        "touch_wall": true,
+        "human_approach": false,
+        "free_side": null,
+        "free_side_named": null,
+        "in_corner": false,
+        "under_ceiling": false
+      }
+    },
+    {
+      "name": "hall_shoe_rack_5",
+      "category": "storage",
+      "min_size_mm": [
+        661,
+        310,
+        419
+      ],
+      "max_size_mm": [
+        811,
+        420,
+        484
+      ],
+      "constraints": {
+        "on_floor": true,
+        "touch_wall": false,
+        "human_approach": true,
+        "free_side": null,
+        "free_side_named": null,
+        "in_corner": false,
+        "under_ceiling": false
+      }
+    },
+    {
+      "name": "hall_shoe_rack_6",
+      "category": "storage",
+      "min_size_mm": [
+        520,
+        391,
+        568
+      ],
+      "max_size_mm": [
+        671,
+        465,
+        749
+      ],
+      "constraints": {
+        "on_floor": true,
+        "touch_wall": true,
+        "human_approach": true,
+        "free_side": {
+          "distance": 745
+        },
+        "free_side_named": null,
+        "in_corner": false,
+        "under_ceiling": false
+      }
+    },
+    {
+      "name": "hall_shoe_rack_7",
+      "category": "storage",
+      "min_size_mm": [
+        708,
+        305,
+        647
+      ],
+      "max_size_mm": [
+        825,
+        407,
+        722
+      ],
+      "constraints": {
+        "on_floor": true,
+        "touch_wall": false,
+        "human_approach": true,
+        "free_side": {
+          "distance": 551
+        },
+        "free_side_named": null,
+        "in_corner": false,
+        "under_ceiling": false
+      }
+    },
+    {
+      "name": "hall_shoe_rack_8",
+      "category": "storage",
+      "min_size_mm": [
+        818,
+        363,
+        613
+      ],
+      "max_size_mm": [
+        913,
+        464,
+        721
+      ],
+      "constraints": {
+        "on_floor": true,
+        "touch_wall": true,
+        "human_approach": false,
+        "free_side": {
+          "distance": 733
+        },
+        "free_side_named": null,
+        "in_corner": false,
+        "under_ceiling": false
+      }
+    },
+    {
+      "name": "kids_toybox_1",
+      "category": "bed",
+      "min_size_mm": [
+        472,
+        486,
+        433
+      ],
+      "max_size_mm": [
+        610,
+        558,
+        572
+      ],
+      "constraints": {
+        "on_floor": true,
+        "touch_wall": false,
+        "human_approach": true,
+        "free_side": {
+          "distance": 871
+        },
+        "free_side_named": null,
+        "in_corner": true,
+        "under_ceiling": false
+      }
+    },
+    {
+      "name": "kids_toybox_2",
+      "category": "bed",
+      "min_size_mm": [
+        574,
+        383,
+        453
+      ],
+      "max_size_mm": [
+        749,
+        535,
+        548
+      ],
+      "constraints": {
+        "on_floor": true,
+        "touch_wall": false,
+        "human_approach": true,
+        "free_side": null,
+        "free_side_named": null,
+        "in_corner": false,
+        "under_ceiling": false
+      }
+    },
+    {
+      "name": "kids_toybox_3",
+      "category": "bed",
+      "min_size_mm": [
+        490,
+        489,
+        429
+      ],
+      "max_size_mm": [
+        690,
+        639,
+        531
+      ],
+      "constraints": {
+        "on_floor": true,
+        "touch_wall": true,
+        "human_approach": false,
+        "free_side": null,
+        "free_side_named": {
+          "side": "front",
+          "distance": 777
+        },
+        "in_corner": false,
+        "under_ceiling": false
+      }
+    },
+    {
+      "name": "kids_toybox_4",
+      "category": "bed",
+      "min_size_mm": [
+        699,
+        374,
+        555
+      ],
+      "max_size_mm": [
+        879,
+        434,
+        671
+      ],
+      "constraints": {
+        "on_floor": true,
+        "touch_wall": true,
+        "human_approach": false,
+        "free_side": null,
+        "free_side_named": null,
+        "in_corner": true,
+        "under_ceiling": false
+      }
+    },
+    {
+      "name": "kids_toybox_5",
+      "category": "bed",
+      "min_size_mm": [
+        517,
+        310,
+        531
+      ],
+      "max_size_mm": [
+        647,
+        396,
+        600
+      ],
+      "constraints": {
+        "on_floor": true,
+        "touch_wall": true,
+        "human_approach": false,
+        "free_side": null,
+        "free_side_named": null,
+        "in_corner": false,
+        "under_ceiling": false
+      }
+    },
+    {
+      "name": "kids_toybox_6",
+      "category": "bed",
+      "min_size_mm": [
+        648,
+        496,
+        590
+      ],
+      "max_size_mm": [
+        777,
+        692,
+        721
+      ],
+      "constraints": {
+        "on_floor": true,
+        "touch_wall": true,
+        "human_approach": false,
+        "free_side": {
+          "distance": 807
+        },
+        "free_side_named": {
+          "side": "front",
+          "distance": 744
+        },
+        "in_corner": true,
+        "under_ceiling": false
+      }
+    },
+    {
+      "name": "lighting_lamp_1",
+      "category": "other",
+      "min_size_mm": [
+        199,
+        215,
+        272
+      ],
+      "max_size_mm": [
+        288,
+        280,
+        449
+      ],
+      "constraints": {
+        "on_floor": true,
+        "touch_wall": false,
+        "human_approach": true,
+        "free_side": null,
+        "free_side_named": null,
+        "in_corner": true,
+        "under_ceiling": true
+      }
+    },
+    {
+      "name": "lighting_lamp_2",
+      "category": "other",
+      "min_size_mm": [
+        196,
+        250,
+        181
+      ],
+      "max_size_mm": [
+        291,
+        334,
+        234
+      ],
+      "constraints": {
+        "on_floor": true,
+        "touch_wall": true,
+        "human_approach": true,
+        "free_side": {
+          "distance": 487
+        },
+        "free_side_named": {
+          "side": "front",
+          "distance": 650
+        },
+        "in_corner": true,
+        "under_ceiling": true
+      }
+    },
+    {
+      "name": "lighting_lamp_3",
+      "category": "other",
+      "min_size_mm": [
+        211,
+        287,
+        282
+      ],
+      "max_size_mm": [
+        274,
+        377,
+        390
+      ],
+      "constraints": {
+        "on_floor": true,
+        "touch_wall": false,
+        "human_approach": true,
+        "free_side": null,
+        "free_side_named": null,
+        "in_corner": false,
+        "under_ceiling": true
+      }
+    },
+    {
+      "name": "lighting_lamp_4",
+      "category": "other",
+      "min_size_mm": [
+        164,
+        260,
+        223
+      ],
+      "max_size_mm": [
+        239,
+        333,
+        344
+      ],
+      "constraints": {
+        "on_floor": true,
+        "touch_wall": true,
+        "human_approach": true,
+        "free_side": null,
+        "free_side_named": null,
+        "in_corner": false,
+        "under_ceiling": true
+      }
+    },
+    {
+      "name": "lighting_lamp_5",
+      "category": "other",
+      "min_size_mm": [
+        223,
+        228,
+        185
+      ],
+      "max_size_mm": [
+        379,
+        299,
+        254
+      ],
+      "constraints": {
+        "on_floor": true,
+        "touch_wall": false,
+        "human_approach": false,
+        "free_side": null,
+        "free_side_named": null,
+        "in_corner": true,
+        "under_ceiling": true
+      }
+    },
+    {
+      "name": "lighting_lamp_6",
+      "category": "other",
+      "min_size_mm": [
+        174,
+        175,
+        295
+      ],
+      "max_size_mm": [
+        372,
+        262,
+        430
+      ],
+      "constraints": {
+        "on_floor": true,
+        "touch_wall": true,
+        "human_approach": false,
+        "free_side": {
+          "distance": 440
+        },
+        "free_side_named": {
+          "side": "front",
+          "distance": 790
+        },
+        "in_corner": true,
+        "under_ceiling": true
+      }
+    },
+    {
+      "name": "lighting_lamp_7",
+      "category": "other",
+      "min_size_mm": [
+        238,
+        282,
+        162
+      ],
+      "max_size_mm": [
+        315,
+        416,
+        319
+      ],
+      "constraints": {
+        "on_floor": true,
+        "touch_wall": false,
+        "human_approach": true,
+        "free_side": null,
+        "free_side_named": null,
+        "in_corner": false,
+        "under_ceiling": true
+      }
+    },
+    {
+      "name": "lighting_lamp_8",
+      "category": "other",
+      "min_size_mm": [
+        283,
+        276,
+        210
+      ],
+      "max_size_mm": [
+        387,
+        407,
+        319
+      ],
+      "constraints": {
+        "on_floor": true,
+        "touch_wall": false,
+        "human_approach": true,
+        "free_side": null,
+        "free_side_named": null,
+        "in_corner": true,
+        "under_ceiling": true
+      }
+    },
+    {
+      "name": "lighting_lamp_9",
+      "category": "other",
+      "min_size_mm": [
+        198,
+        253,
+        249
+      ],
+      "max_size_mm": [
+        333,
+        417,
+        370
+      ],
+      "constraints": {
+        "on_floor": true,
+        "touch_wall": true,
+        "human_approach": true,
+        "free_side": {
+          "distance": 811
+        },
+        "free_side_named": null,
+        "in_corner": true,
+        "under_ceiling": true
+      }
+    },
+    {
+      "name": "lighting_lamp_10",
+      "category": "other",
+      "min_size_mm": [
+        242,
+        178,
+        233
+      ],
+      "max_size_mm": [
+        300,
+        310,
+        427
+      ],
+      "constraints": {
+        "on_floor": true,
+        "touch_wall": false,
+        "human_approach": false,
+        "free_side": null,
+        "free_side_named": null,
+        "in_corner": false,
+        "under_ceiling": true
+      }
+    },
+    {
+      "name": "lighting_lamp_11",
+      "category": "other",
+      "min_size_mm": [
+        159,
+        182,
+        151
+      ],
+      "max_size_mm": [
+        301,
+        252,
+        294
+      ],
+      "constraints": {
+        "on_floor": true,
+        "touch_wall": true,
+        "human_approach": true,
+        "free_side": {
+          "distance": 322
+        },
+        "free_side_named": {
+          "side": "front",
+          "distance": 772
+        },
+        "in_corner": false,
+        "under_ceiling": true
+      }
+    },
+    {
+      "name": "lighting_lamp_12",
+      "category": "other",
+      "min_size_mm": [
+        218,
+        218,
+        151
+      ],
+      "max_size_mm": [
+        269,
+        386,
+        222
+      ],
+      "constraints": {
+        "on_floor": true,
+        "touch_wall": false,
+        "human_approach": false,
+        "free_side": null,
+        "free_side_named": null,
+        "in_corner": false,
+        "under_ceiling": true
+      }
+    }
+  ]
+}

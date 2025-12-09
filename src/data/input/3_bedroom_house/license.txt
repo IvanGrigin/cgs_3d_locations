@@ -1,0 +1,11 @@
+Model Information:
+* title:	3 Bedroom House
+* source:	https://sketchfab.com/3d-models/3-bedroom-house-f5025ea4e9e14bf5a9e4d20cd4d6b1b9
+* author:	Taranpreet (https://sketchfab.com/Taranpreet)
+
+Model License:
+* license type:	CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)
+* requirements:	Author must be credited. Commercial use is allowed.
+
+If you use this 3D model in your project be sure to copy paste this credit wherever you share it:
+This work is based on "3 Bedroom House" (https://sketchfab.com/3d-models/3-bedroom-house-f5025ea4e9e14bf5a9e4d20cd4d6b1b9) by Taranpreet (https://sketchfab.com/Taranpreet) licensed under CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)
