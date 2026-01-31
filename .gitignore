@@ -8,3 +8,5 @@ archive
 
 # macOS мусор
 .DS_Store
+data/
+.pyc

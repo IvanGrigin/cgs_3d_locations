@@ -1,3 +1,5 @@
+# src/Plasement/VisualizePlacement.py
+
 import json
 from typing import Dict, List, Tuple
 
@@ -28,6 +30,7 @@ def box_vertices(aabb: Dict[str, float]) -> List[List[float]]:
         [x_max, y_max, z_max],
         [x_min, y_max, z_max],
     ]
+
 
 
 def draw_box(

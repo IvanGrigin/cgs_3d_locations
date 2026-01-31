@@ -1,3 +1,5 @@
+# src/Plasement/pathfinding_astar.py
+
 import heapq
 import math
 from typing import Dict, List, Tuple, Optional
