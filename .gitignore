@@ -10,3 +10,6 @@ archive
 .DS_Store
 data/
 .pyc
+*.py
+**/__pycache__/**
+!**/*.pyc
