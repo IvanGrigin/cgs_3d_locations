@@ -8,8 +8,8 @@ import shutil
 import subprocess
 import sys
 
-DEFAULT_GLB = "src/data/input/room.glb"
-DEFAULT_JSON = "src/data/output/placement_result.json"
+DEFAULT_GLB = "data/input/room.glb"
+DEFAULT_JSON = "data/output/placement_result.json"
 THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_BUILDER = os.path.join(THIS_DIR, "blender_scene_builder.py")
 

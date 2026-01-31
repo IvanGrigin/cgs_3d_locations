@@ -9,8 +9,8 @@ from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 from glb_parser import load_room_from_glb, Room
 from pathfinding_astar import find_path_to_object, path_to_band
 
-DEFAULT_GLB = "src/data/input/room.glb"
-DEFAULT_JSON = "src/data/output/placement_result.json"
+DEFAULT_GLB = "data/input/room.glb"
+DEFAULT_JSON = "data/output/placement_result.json"
 
 
 # ---------- геометрия коробок ----------

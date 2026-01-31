@@ -25,6 +25,7 @@ from glob import glob
 
 import bpy
 import mathutils
+import traceback
 
 
 # ============================================================
@@ -68,7 +69,7 @@ def _parse_argv(argv: List[str]) -> argparse.Namespace:
     # Room environment textures (walls/floor/windows/doors)
     ap.add_argument(
         "--env-textures-dir",
-        default="src/data/sourse",
+        default="data/sourse",
         help="Directory with environment textures (floor_*.jpg, wall_*.jpg, window_*.jpg, door_*.jpg)",
     )
     ap.add_argument(
@@ -2315,4 +2316,8 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception:
+        traceback.print_exc()
+        sys.exit(1)

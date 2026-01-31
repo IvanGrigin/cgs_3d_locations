@@ -18,17 +18,17 @@ from pathlib import Path
 CUBE_SCRIPT = "src/Plasement/CubePlacement.py"
 BLENDER_VIS_SCRIPT = "src/Plasement/BlenderVisualizePlacement.py"
 
-DEFAULT_ROOM_GLB = "src/data/input/room.glb"
-DEFAULT_ROOM_JSON = "src/data/input/room.json"   # <-- ДОБАВИЛИ: room-spec
+DEFAULT_ROOM_GLB = "data/input/room.glb"
+DEFAULT_ROOM_JSON = "data/input/room.json"   # <-- ДОБАВИЛИ: room-spec
 
-FURNITURE_DB = "src/data/input/furniture_types.json"
-OBJECTS_JSON = "src/data/input/objects.json"
+FURNITURE_DB = "data/input/furniture_types.json"
+OBJECTS_JSON = "data/input/objects.json"
 
-PLACEMENT_JSON = "src/data/output/placement_result.json"
-SCENE_JSON = "src/data/output/scene_room_and_placements.json"  # <-- ДОБАВИЛИ: склеенный JSON для Blender
+PLACEMENT_JSON = "data/output/placement_result.json"
+SCENE_JSON = "data/output/scene_room_and_placements.json"  # <-- ДОБАВИЛИ: склеенный JSON для Blender
 
 FIND_OBJ_SCRIPT = "src/tools/find_obj_from_db.py"
-EXTRACT_ROOT = "src/data/sourse/imodern"
+EXTRACT_ROOT = "data/sourse/imodern"
 
 MAX_ATTEMPTS = 30
 

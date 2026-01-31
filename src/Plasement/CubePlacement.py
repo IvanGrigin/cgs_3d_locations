@@ -31,9 +31,9 @@ from placement_checks import (
     check_human_access_astar,
 )
 
-DEFAULT_GLB = "src/data/input/room.glb"
-DEFAULT_JSON = "src/data/input/objects.json"
-OUTPUT_JSON = "src/data/output/placement_result.json"
+DEFAULT_GLB = "data/input/room.glb"
+DEFAULT_JSON = "data/input/objects.json"
+OUTPUT_JSON = "data/output/placement_result.json"
 
 EPS_Z = 1e-5
 WALL_MARGIN = 0.01

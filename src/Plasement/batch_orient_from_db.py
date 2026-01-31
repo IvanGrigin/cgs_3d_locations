@@ -199,7 +199,7 @@ def run_blender(
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--db", default="src/data/sourse/imodern.db")
+    ap.add_argument("--db", default="data/sourse/imodern.db")
     ap.add_argument("--table", default="imodern_item")  # фиксируем, но оставим параметр
     ap.add_argument("--model-root", action="append", default=[], help="Repeatable. Roots where extracted models live")
     ap.add_argument("--blender-bin", default="/Applications/Blender.app/Contents/MacOS/Blender")
@@ -220,8 +220,8 @@ def main() -> int:
         # безопасные дефолты под твой репозиторий
         model_roots = [
             Path("extracted").resolve(),
-            Path("src/data/sourse/imodern").resolve(),  # если у тебя там есть распаковка
-            Path("src/data/sourse/imodern/extracted").resolve(),
+            Path("data/sourse/imodern").resolve(),  # если у тебя там есть распаковка
+            Path("data/sourse/imodern/extracted").resolve(),
         ]
 
     logging.basicConfig(
