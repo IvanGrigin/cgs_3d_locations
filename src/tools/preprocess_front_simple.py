@@ -1,291 +1,409 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+#
+# src/tools/preprocess_front_simple.py
+#
+# Пакетная предобработка 3D-FRONT сцен:
+# - читает все *.json из директории input_dir (рекурсивно, опционально)
+# - для каждого файла строит "prepared_scene_*.json" (упрощённый формат)
+# - пишет в output_dir, сохраняя относительную структуру поддиректорий (если recurse=1)
+#
+# Пример запуска:
+# python3 src/tools/preprocess_front_simple.py \
+#   --input_dir data/sourse/3D-FRONT/3D-FRONT \
+#   --output_dir data/sourse/3D-FRONT/3D-FRONT-processed \
+#   --recurse 0 \
+#   --polygon_round_nd 4 \
+#   --window_max_dist 1.5
+#
+# ВАЖНО:
+# - Скрипт ожидает формат 3D-FRONT raw json: поля "mesh", "furniture", "scene".
+#
 
 import argparse
 import json
 import math
-import statistics
+import collections
 from pathlib import Path
-from typing import Any, Dict, List, Tuple, Optional
+from typing import Dict, Any, List, Tuple, Iterator
 
 
-# ----------------------------
-# Math: quaternions (xyzw), Y-up
-# ----------------------------
-
-def quat_norm(q: List[float]) -> List[float]:
+def quat_to_yaw_deg(q: List[float]) -> float:
+    """
+    q = [x, y, z, w], y-up.
+    Возвращает yaw (поворот вокруг оси Y) в градусах.
+    """
     x, y, z, w = q
-    n = math.sqrt(x*x + y*y + z*z + w*w)
-    if n == 0:
-        return [0.0, 0.0, 0.0, 1.0]
-    return [x/n, y/n, z/n, w/n]
-
-def quat_mul(q1: List[float], q2: List[float]) -> List[float]:
-    x1, y1, z1, w1 = q1
-    x2, y2, z2, w2 = q2
-    return [
-        w1*x2 + x1*w2 + y1*z2 - z1*y2,
-        w1*y2 - x1*z2 + y1*w2 + z1*x2,
-        w1*z2 + x1*y2 - y1*x2 + z1*w2,
-        w1*w2 - x1*x2 - y1*y2 - z1*z2
-    ]
-
-def quat_conj(q: List[float]) -> List[float]:
-    x, y, z, w = q
-    return [-x, -y, -z, w]
-
-def quat_rotate_vec(q: List[float], v: List[float]) -> List[float]:
-    # rotate v by quaternion q: q * (v,0) * conj(q)
-    qv = [v[0], v[1], v[2], 0.0]
-    return quat_mul(quat_mul(q, qv), quat_conj(q))[:3]
-
-def yaw_from_quat_y_up(q: List[float]) -> float:
-    # yaw around Y (Tait-Bryan), quaternion in xyzw
-    x, y, z, w = q
-    siny_cosp = 2.0 * (w*y + x*z)
-    cosy_cosp = 1.0 - 2.0 * (y*y + z*z)
-    return math.atan2(siny_cosp, cosy_cosp)
-
-def apply_transform(pos: List[float], rot: List[float], scale: List[float], v: List[float]) -> List[float]:
-    # v_local -> v_world, elementwise scale, then rotate, then translate
-    vs = [v[0]*scale[0], v[1]*scale[1], v[2]*scale[2]]
-    vr = quat_rotate_vec(rot, vs)
-    return [vr[0] + pos[0], vr[1] + pos[1], vr[2] + pos[2]]
-
-def compose_transform(p1: List[float], r1: List[float], s1: List[float],
-                      p2: List[float], r2: List[float], s2: List[float]) -> Tuple[List[float], List[float], List[float]]:
-    # T = T1 * T2 (apply T2 then T1)
-    r = quat_norm(quat_mul(r1, r2))
-    s = [s1[0]*s2[0], s1[1]*s2[1], s1[2]*s2[2]]
-    p2s = [p2[0]*s1[0], p2[1]*s1[1], p2[2]*s1[2]]
-    p2r = quat_rotate_vec(r1, p2s)
-    p = [p1[0] + p2r[0], p1[1] + p2r[1], p1[2] + p2r[2]]
-    return p, r, s
+    siny_cosp = 2.0 * (w * y + x * z)
+    cosy_cosp = 1.0 - 2.0 * (y * y + z * z)
+    yaw = math.atan2(siny_cosp, cosy_cosp)
+    return yaw * 180.0 / math.pi
 
 
-# ----------------------------
-# Geometry: convex hull (XZ) for floor outline
-# ----------------------------
+def mesh_center_and_yaw_deg(mesh: Dict[str, Any]) -> Tuple[float, float, float, float]:
+    """
+    Центр меша по среднему координат вершин + оценка ориентации (yaw) по PCA в плоскости XZ.
+    """
+    xyz = mesh["xyz"]
+    pts = [(xyz[i], xyz[i + 1], xyz[i + 2]) for i in range(0, len(xyz), 3)]
+    if not pts:
+        return 0.0, 0.0, 0.0, 0.0
 
-def convex_hull_2d(points: List[Tuple[float, float]]) -> List[Tuple[float, float]]:
-    # monotonic chain, returns hull in CCW without repeating first point
-    pts = sorted(set(points))
-    if len(pts) <= 1:
-        return pts
+    cx = sum(p[0] for p in pts) / len(pts)
+    cy = sum(p[1] for p in pts) / len(pts)
+    cz = sum(p[2] for p in pts) / len(pts)
 
-    def cross(o, a, b):
-        return (a[0]-o[0])*(b[1]-o[1]) - (a[1]-o[1])*(b[0]-o[0])
+    xs = [p[0] for p in pts]
+    zs = [p[2] for p in pts]
+    mx, mz = cx, cz
 
-    lower = []
-    for p in pts:
-        while len(lower) >= 2 and cross(lower[-2], lower[-1], p) <= 0:
-            lower.pop()
-        lower.append(p)
+    cov_xx = sum((x - mx) ** 2 for x in xs) / len(xs)
+    cov_zz = sum((z - mz) ** 2 for z in zs) / len(zs)
+    cov_xz = sum((x - mx) * (z - mz) for x, z in zip(xs, zs)) / len(xs)
 
-    upper = []
-    for p in reversed(pts):
-        while len(upper) >= 2 and cross(upper[-2], upper[-1], p) <= 0:
-            upper.pop()
-        upper.append(p)
+    trace = cov_xx + cov_zz
+    det = cov_xx * cov_zz - cov_xz * cov_xz
+    disc = max(trace * trace - 4.0 * det, 0.0)
+    lam1 = (trace + math.sqrt(disc)) / 2.0
 
-    return lower[:-1] + upper[:-1]
+    vx = cov_xz
+    vz = lam1 - cov_xx
+    if abs(vx) + abs(vz) < 1e-12:
+        vx = lam1 - cov_zz
+        vz = cov_xz
 
-
-def extract_vertices_xyz(mesh_item: Dict[str, Any]) -> List[List[float]]:
-    xyz = mesh_item.get("xyz", [])
-    if not xyz:
-        return []
-    out = []
-    # xyz is flat array [x,y,z,x,y,z,...], sometimes strings
-    for i in range(0, len(xyz), 3):
-        try:
-            out.append([float(xyz[i]), float(xyz[i+1]), float(xyz[i+2])])
-        except Exception:
-            break
-    return out
+    # yaw: 0° соответствует направлению +Z, далее по atan2
+    yaw = math.atan2(vx, vz) * 180.0 / math.pi
+    return cx, cy, cz, yaw
 
 
-# ----------------------------
-# Main preprocessing
-# ----------------------------
+def boundary_polygon_from_floor_meshes(floor_meshes: List[Dict[str, Any]], nd: int = 4) -> List[Dict[str, float]]:
+    """
+    Периметр комнаты по границе триангуляции пола:
+    1) собираем ребра всех треугольников,
+    2) ребра с кратностью 1 — граничные,
+    3) обходим цикл.
+    """
+    vid_map: Dict[Tuple[float, float], int] = {}
+    vid_pts: List[Tuple[float, float]] = []
 
-FLOOR_TYPES = {"Floor", "SlabBottom"}
-CEILING_TYPES = {"Ceiling", "SlabTop"}
+    def get_vid(x: float, z: float) -> int:
+        k = (round(x, nd), round(z, nd))
+        if k not in vid_map:
+            vid_map[k] = len(vid_pts)
+            vid_pts.append(k)
+        return vid_map[k]
 
+    edge_count = collections.Counter()
 
-def preprocess_front_json(data: Dict[str, Any]) -> Dict[str, Any]:
-    furniture = data.get("furniture", []) or []
-    meshes = data.get("mesh", []) or []
+    for m in floor_meshes:
+        xyz = m.get("xyz", [])
+        faces = m.get("faces", [])
+        if not xyz or not faces:
+            continue
 
-    furn_map = {f["uid"]: f for f in furniture if isinstance(f, dict) and "uid" in f}
-    mesh_map = {m["uid"]: m for m in meshes if isinstance(m, dict) and "uid" in m}
-
-    scene = data.get("scene", {}) or {}
-    scene_p = scene.get("pos", [0.0, 0.0, 0.0])
-    scene_r = quat_norm(scene.get("rot", [0.0, 0.0, 0.0, 1.0]))
-    scene_s = scene.get("scale", [1.0, 1.0, 1.0])
-
-    out: Dict[str, Any] = {
-        "source_uid": data.get("uid"),
-        "design_version": data.get("design_version"),
-        "code_version": data.get("code_version"),
-        "version": data.get("version"),
-        "north_vector": data.get("north_vector"),
-        "meta": {
-            "axis_up": "Y",
-            "quat_order": "xyzw",
-            "yaw_definition": "rotation_about_Y_in_scene_coords_radians",
-            "floor_mesh_types": sorted(FLOOR_TYPES),
-            "ceiling_mesh_types": sorted(CEILING_TYPES),
-            "note": "All transforms are composed: scene -> room -> child. Positions are in scene/world coords."
-        },
-        "rooms": []
-    }
-
-    for room in (scene.get("room") or []):
-        rp = room.get("pos", [0.0, 0.0, 0.0])
-        rr = quat_norm(room.get("rot", [0.0, 0.0, 0.0, 1.0]))
-        rs = room.get("scale", [1.0, 1.0, 1.0])
-
-        # World transform of room = scene * room
-        wp, wr, ws = compose_transform(scene_p, scene_r, scene_s, rp, rr, rs)
-
-        children = room.get("children") or []
-        objects: List[Dict[str, Any]] = []
-
-        floor_pts_xz: List[Tuple[float, float]] = []
-        floor_y_vals: List[float] = []
-        ceiling_y_vals: List[float] = []
-        all_y_vals: List[float] = []
-
-        for ch in children:
-            ref = ch.get("ref")
-            if not ref:
+        verts_xz = [(xyz[i], xyz[i + 2]) for i in range(0, len(xyz), 3)]
+        for i in range(0, len(faces), 3):
+            tri = faces[i: i + 3]
+            if len(tri) != 3:
+                continue
+            a, b, c = tri
+            if not (0 <= a < len(verts_xz) and 0 <= b < len(verts_xz) and 0 <= c < len(verts_xz)):
                 continue
 
-            cp = ch.get("pos", [0.0, 0.0, 0.0])
-            crot_raw = ch.get("rot", [0.0, 0.0, 0.0, 1.0])
-            cr = quat_norm(crot_raw) if isinstance(crot_raw, list) and len(crot_raw) == 4 else [0.0, 0.0, 0.0, 1.0]
-            cs = ch.get("scale", [1.0, 1.0, 1.0])
+            va = get_vid(*verts_xz[a])
+            vb = get_vid(*verts_xz[b])
+            vc = get_vid(*verts_xz[c])
 
-            # World transform of child = room_world * child
-            cwp, cwr, cws = compose_transform(wp, wr, ws, cp, cr, cs)
-
-            # Furniture instance: ref must exist in furniture.uid
-            if ref in furn_map:
-                f = furn_map[ref]
-                if f.get("valid") is False:
+            for u, v in ((va, vb), (vb, vc), (vc, va)):
+                if u == v:
                     continue
-                yaw = yaw_from_quat_y_up(cwr)
+                if u > v:
+                    u, v = v, u
+                edge_count[(u, v)] += 1
+
+    boundary_edges = [e for e, cnt in edge_count.items() if cnt == 1]
+    if not boundary_edges:
+        return []
+
+    adj: Dict[int, List[int]] = collections.defaultdict(list)
+    for u, v in boundary_edges:
+        adj[u].append(v)
+        adj[v].append(u)
+
+    start = min(adj.keys(), key=lambda i: (vid_pts[i][0], vid_pts[i][1]))
+    poly = [start]
+    prev = None
+    cur = start
+
+    while True:
+        neigh = adj[cur]
+        if not neigh:
+            break
+
+        if prev is None:
+            nxt = min(neigh, key=lambda i: (vid_pts[i][0], vid_pts[i][1]))
+        else:
+            if len(neigh) == 1:
+                nxt = neigh[0]
+            else:
+                nxt = neigh[0] if neigh[1] == prev else neigh[1]
+
+        if nxt == start:
+            break
+
+        poly.append(nxt)
+        prev, cur = cur, nxt
+
+        if len(poly) > len(adj) + 10:
+            break
+
+    return [{"x": vid_pts[i][0], "z": vid_pts[i][1]} for i in poly]
+
+
+def dist_point_to_segment(px: float, pz: float, x1: float, z1: float, x2: float, z2: float) -> float:
+    vx, vz = x2 - x1, z2 - z1
+    wx, wz = px - x1, pz - z1
+    c1 = wx * vx + wz * vz
+    if c1 <= 0:
+        return math.hypot(px - x1, pz - z1)
+    c2 = vx * vx + vz * vz
+    if c2 <= c1:
+        return math.hypot(px - x2, pz - z2)
+    b = c1 / c2
+    bx, bz = x1 + b * vx, z1 + b * vz
+    return math.hypot(px - bx, pz - bz)
+
+
+def room_edge_distance(px: float, pz: float, poly: List[Dict[str, float]]) -> float:
+    if not poly:
+        return float("inf")
+    n = len(poly)
+    dmin = float("inf")
+    for i in range(n):
+        x1, z1 = poly[i]["x"], poly[i]["z"]
+        x2, z2 = poly[(i + 1) % n]["x"], poly[(i + 1) % n]["z"]
+        dmin = min(dmin, dist_point_to_segment(px, pz, x1, z1, x2, z2))
+    return dmin
+
+
+def iter_scene_nodes(node: Dict[str, Any]) -> Iterator[Dict[str, Any]]:
+    yield node
+    for ch in node.get("children", []):
+        if isinstance(ch, dict):
+            yield from iter_scene_nodes(ch)
+
+
+def convert_one(
+    input_path: Path,
+    output_path: Path,
+    polygon_round_nd: int = 4,
+    window_max_dist: float = 1.5,
+) -> None:
+    data = json.loads(input_path.read_text(encoding="utf-8"))
+
+    mesh_list = data.get("mesh", [])
+    furn_list = data.get("furniture", [])
+    scene = data.get("scene", {})
+
+    mesh_by_uid = {m.get("uid"): m for m in mesh_list if isinstance(m, dict) and m.get("uid") is not None}
+    furniture_meta = {f.get("uid"): f for f in furn_list if isinstance(f, dict) and f.get("uid") is not None}
+
+    out = {
+        "uid": data.get("uid"),
+        "north_vector": data.get("north_vector"),
+        "rooms": [],
+    }
+
+    rooms = scene.get("room", [])
+    if not isinstance(rooms, list):
+        rooms = []
+
+    window_meshes = [m for m in mesh_list if isinstance(m, dict) and m.get("type") == "Window"]
+
+    for room in rooms:
+        if not isinstance(room, dict):
+            continue
+        nodes = list(iter_scene_nodes(room))
+        room_id = room.get("instanceid")
+        if room_id is None:
+            continue
+
+        mesh_refs = [
+            n.get("ref")
+            for n in nodes
+            if isinstance(n, dict) and str(n.get("instanceid", "")).startswith("mesh/")
+        ]
+        floor_meshes = [
+            mesh_by_uid[r] for r in mesh_refs
+            if r in mesh_by_uid and isinstance(mesh_by_uid[r], dict) and mesh_by_uid[r].get("type") == "Floor"
+        ]
+        polygon = boundary_polygon_from_floor_meshes(floor_meshes, nd=polygon_round_nd)
+
+        objects = []
+        for n in nodes:
+            if not isinstance(n, dict):
+                continue
+            if str(n.get("instanceid", "")).startswith("furniture/"):
+                ref = n.get("ref")
+                meta = furniture_meta.get(ref, {}) if ref is not None else {}
+                jid = meta.get("jid")
+
+                pos = n.get("pos", [0.0, 0.0, 0.0])
+                if not isinstance(pos, list) or len(pos) < 3:
+                    pos = [0.0, 0.0, 0.0]
+
+                rot = n.get("rot", [0, 0, 0, 1])
+                if not isinstance(rot, list) or len(rot) < 4:
+                    rot = [0, 0, 0, 1]
+
+                sc = n.get("scale", [1, 1, 1])
+                if not isinstance(sc, list) or len(sc) < 3:
+                    sc = [1, 1, 1]
+
                 objects.append({
+                    "instanceid": n.get("instanceid"),
                     "ref": ref,
-                    "instanceid": ch.get("instanceid"),
-                    "jid": f.get("jid"),
-                    "sourceCategoryId": f.get("sourceCategoryId"),
-                    "title": f.get("title"),
-                    "category": f.get("category"),
-                    "size": f.get("size"),
-                    "bbox_local": f.get("bbox"),
-                    "pos": cwp,
-                    "rot_quat": cwr,
-                    "yaw": yaw
+                    "jid": jid,  # <-- КЛЮЧЕВО
+                    "category": meta.get("category"),
+                    "pos": {"x": pos[0], "y": pos[1], "z": pos[2]},
+                    "yaw_deg": quat_to_yaw_deg(rot),
+                    "scale": sc,
+                    "bbox": meta.get("bbox") or meta.get("size"),
+                    "valid": meta.get("valid", True),
                 })
 
-            # Room geometry meshes: ref must exist in mesh.uid
-            if ref in mesh_map:
-                m = mesh_map[ref]
-                verts = extract_vertices_xyz(m)
-                if not verts:
-                    continue
+        doors_out = []
+        for d in data.get("extension", {}).get("door", []):
+            if not isinstance(d, dict):
+                continue
+            if d.get("roomId") != room_id:
+                continue
+            meshes = []
+            for ref in d.get("ref", []):
+                m = mesh_by_uid.get(ref)
+                if m and m.get("type") in ("Door", "Pocket", "Hole"):
+                    meshes.append(m)
+            if not meshes:
+                continue
 
-                mtype = m.get("type", "")
-                for v in verts:
-                    vw = apply_transform(cwp, cwr, cws, v)
-                    all_y_vals.append(vw[1])
+            centers = [mesh_center_and_yaw_deg(m) for m in meshes]
+            cx = sum(c[0] for c in centers) / len(centers)
+            cy = sum(c[1] for c in centers) / len(centers)
+            cz = sum(c[2] for c in centers) / len(centers)
+            yaw = sum(c[3] for c in centers) / len(centers)
 
-                    if mtype in FLOOR_TYPES:
-                        floor_pts_xz.append((vw[0], vw[2]))
-                        floor_y_vals.append(vw[1])
-                    if mtype in CEILING_TYPES:
-                        ceiling_y_vals.append(vw[1])
-
-        # Floor summary
-        if floor_pts_xz:
-            xs = [p[0] for p in floor_pts_xz]
-            zs = [p[1] for p in floor_pts_xz]
-            bbox_xz = [min(xs), min(zs), max(xs), max(zs)]
-            outline = convex_hull_2d(floor_pts_xz)
-            floor_y = float(statistics.median(floor_y_vals)) if floor_y_vals else 0.0
-        else:
-            bbox_xz = None
-            outline = []
-            floor_y = 0.0
-
-        # Ceiling height
-        if ceiling_y_vals:
-            ceiling_y = float(max(ceiling_y_vals))
-        else:
-            ceiling_y = float(max(all_y_vals)) if all_y_vals else floor_y
+            doors_out.append({
+                "type": d.get("type"),
+                "dir": d.get("dir"),
+                "refs": d.get("ref"),
+                "center": {"x": cx, "y": cy, "z": cz},
+                "yaw_deg": yaw,
+            })
 
         out["rooms"].append({
-            "room_type": room.get("type"),
-            "room_instanceid": room.get("instanceid"),
-            "transform_scene": {
-                "pos": wp,
-                "rot_quat": wr,
-                "scale": ws
-            },
-            "floor": {
-                "y": floor_y,
-                "ceiling_y": ceiling_y,
-                "bbox_xz": bbox_xz,
-                "outline_xz": [[float(x), float(z)] for x, z in outline]
-            },
-            "objects": objects
+            "id": room_id,
+            "type": room.get("type"),
+            "polygon": polygon,
+            "doors": doors_out,
+            "windows": [],
+            "objects": objects,
         })
 
-    return out
+    for m in window_meshes:
+        cx, cy, cz, yaw = mesh_center_and_yaw_deg(m)
+
+        best_room = None
+        best_dist = float("inf")
+        for r in out["rooms"]:
+            d = room_edge_distance(cx, cz, r["polygon"])
+            if d < best_dist:
+                best_dist = d
+                best_room = r
+
+        if best_room is not None and best_dist <= window_max_dist:
+            best_room["windows"].append({
+                "uid": m.get("uid"),
+                "center": {"x": cx, "y": cy, "z": cz},
+                "yaw_deg": yaw,
+                "dist_to_room": best_dist,
+            })
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def iter_input_files(input_path: Path) -> List[Path]:
-    if input_path.is_file():
-        return [input_path]
-    files = sorted(input_path.rglob("*.json"))
-    return [p for p in files if p.is_file()]
+def make_output_path(input_file: Path, input_dir: Path, output_dir: Path, preserve_tree: bool) -> Path:
+    """
+    Имя: prepared_scene_<stem>.json.
+    Если preserve_tree=True — сохраняем относительный путь от input_dir.
+    """
+    stem = input_file.stem
+    out_name = f"prepared_scene_{stem}.json"
+
+    if preserve_tree:
+        rel = input_file.relative_to(input_dir)
+        rel_parent = rel.parent
+        return (output_dir / rel_parent / out_name).resolve()
+
+    return (output_dir / out_name).resolve()
 
 
-def main():
+def list_input_jsons(input_dir: Path, recurse: bool) -> List[Path]:
+    if recurse:
+        files = sorted([p for p in input_dir.rglob("*.json") if p.is_file()])
+    else:
+        files = sorted([p for p in input_dir.glob("*.json") if p.is_file()])
+    return files
+
+
+def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--input", required=True, help="Path to a 3D-FRONT scene JSON file OR a directory with json files")
-    ap.add_argument("--outdir", default=None, help="Output directory. Default: <input_parent>/_processed")
-    ap.add_argument("--suffix", default=".processed.json", help="Output filename suffix")
+    ap.add_argument("--input_dir", required=True, help="Директория с raw 3D-FRONT json файлами")
+    ap.add_argument("--output_dir", required=True, help="Директория для 3D-FRONT-processed")
+    ap.add_argument("--recurse", type=int, default=0, help="1: рекурсивно по подпапкам; 0: только верхний уровень")
+    ap.add_argument("--preserve_tree", type=int, default=0, help="1: сохранять структуру подпапок в output_dir")
+    ap.add_argument("--polygon_round_nd", type=int, default=4)
+    ap.add_argument("--window_max_dist", type=float, default=1.5)
+    ap.add_argument("--skip_existing", type=int, default=0, help="1: пропускать если файл output уже существует")
+
     args = ap.parse_args()
 
-    input_path = Path(args.input).expanduser().resolve()
-    if not input_path.exists():
-        raise SystemExit(f"Input path not found: {input_path}")
+    input_dir = Path(args.input_dir).resolve()
+    output_dir = Path(args.output_dir).resolve()
+    recurse = bool(int(args.recurse))
+    preserve_tree = bool(int(args.preserve_tree))
+    skip_existing = bool(int(args.skip_existing))
 
-    outdir = Path(args.outdir).expanduser().resolve() if args.outdir else (input_path.parent / "_processed")
-    outdir.mkdir(parents=True, exist_ok=True)
+    if not input_dir.exists() or not input_dir.is_dir():
+        raise SystemExit(f"input_dir не существует или не директория: {input_dir}")
 
-    files = iter_input_files(input_path)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    files = list_input_jsons(input_dir, recurse=recurse)
     if not files:
-        raise SystemExit("No .json files found")
+        print(f"Нет *.json в {input_dir} (recurse={int(recurse)})")
+        return
 
-    for fp in files:
-        with fp.open("r", encoding="utf-8") as f:
-            data = json.load(f)
+    ok = 0
+    fail = 0
+    for f in files:
+        out_path = make_output_path(f, input_dir=input_dir, output_dir=output_dir, preserve_tree=preserve_tree)
+        if skip_existing and out_path.exists():
+            continue
+        try:
+            convert_one(
+                input_path=f,
+                output_path=out_path,
+                polygon_round_nd=int(args.polygon_round_nd),
+                window_max_dist=float(args.window_max_dist),
+            )
+            ok += 1
+        except Exception as e:
+            fail += 1
+            print(f"[FAIL] {f} -> {out_path}: {e}")
 
-        processed = preprocess_front_json(data)
-
-        out_name = fp.stem + args.suffix
-        out_path = outdir / out_name
-        with out_path.open("w", encoding="utf-8") as f:
-            json.dump(processed, f, ensure_ascii=False, indent=2)
-
-        print(f"[ok] {fp.name} -> {out_path}")
-
-    print(f"Done. Output dir: {outdir}")
+    print(f"Done. ok={ok}, fail={fail}, out_dir={output_dir}")
 
 
 if __name__ == "__main__":
