@@ -1,27 +1,59 @@
-# src/ml/baselines/graph_stat_placer.py
+#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+
 """
-GraphStatPlacer (graph_stat):
-- Учится предсказывать попарные смещения (dx,dz) между объектами по их атрибутам и НАЗВАНИЯМ (name/label).
-- На инференсе строит граф связей между объектами и восстанавливает совместные позиции через итеративное согласование
-  + collision repair (для снижения CollisionPairRate).
+src/ml/graph_stat_angle/train_models.py
 
-Входные данные: mini-json (как в примере пользователя).
+Обучение нескольких моделей по CSV пар (cat1, cat2, ...).
 
-Зависимости:
-- numpy
-- scikit-learn
+Главное изменение относительно прежней версии:
+- теперь можно выбирать, по какому столбцу учить угол и расстояние:
+    --angle_col angle_q30 | angle_q60 | angle_q90 | angle_deg
+    --dist_col  dist_norm_q40 | dist_norm | dist_q40 | dist
+- число классов по углу определяется автоматически:
+    - для angle_q30: 12 (0..330 шаг 30)
+    - для angle_q60: 6
+    - для angle_q90: 4
+    - для angle_deg: используется --bins (по умолчанию 36)
+
+Валидация:
+- по строкам (как было).
+  Если захотите: можно сделать split по room_id (GroupSplit), но это отдельная правка.
+
+Скоринг (меньше лучше):
+  score = angle_logloss + 0.3 * dist_mae
+  если logloss недоступен: score = (1-accuracy) + 0.3 * dist_mae
+
+Сохранение:
+  --out_dir/<model>.pkl
+  --out_dir/best.pkl
+  --out_dir/metrics.json
+
+Примеры запуска:
+
+1) УЧИТЬ ПО УГЛУ 30° И ДИСТАНЦИИ 40 СМ:
+  python -m src.ml.graph_stat_angle.train_models \
+    --csv data/input/graph_stat/pairs.csv \
+    --out_dir runs/graph_stat_angle_q30 \
+    --angle_col angle_q30 \
+    --dist_col dist_norm_q40 \
+    --test_size 0.2 \
+    --seed 42
+
+2) По 60°:
+  ... --angle_col angle_q60 --dist_col dist_norm_q40
+
+3) По 90°:
+  ... --angle_col angle_q90 --dist_col dist_norm_q40
 """
 
 from __future__ import annotations
 
 import argparse
-import glob
+import csv
 import json
 import math
-import os
 import pickle
-import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -29,763 +61,433 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 
 try:
-    from sklearn.ensemble import HistGradientBoostingRegressor
-except Exception as e:
-    raise ImportError("graph_stat требует scikit-learn. Установите: pip install scikit-learn") from e
-
-
-# -----------------------------
-# Геометрия полигона (XZ)
-# -----------------------------
-
-def _poly_centroid(poly: np.ndarray) -> Tuple[float, float]:
-    x = poly[:, 0]
-    z = poly[:, 1]
-    x2 = np.roll(x, -1)
-    z2 = np.roll(z, -1)
-    cross = x * z2 - x2 * z
-    a = float(np.sum(cross)) * 0.5
-    if abs(a) < 1e-12:
-        return float(np.mean(x)), float(np.mean(z))
-    cx = float(np.sum((x + x2) * cross) / (6.0 * a))
-    cz = float(np.sum((z + z2) * cross) / (6.0 * a))
-    return cx, cz
-
-
-def _point_in_poly(point: Tuple[float, float], poly: np.ndarray) -> bool:
-    x, z = point
-    inside = False
-    n = poly.shape[0]
-    for i in range(n):
-        x1, z1 = poly[i]
-        x2, z2 = poly[(i + 1) % n]
-        cond = ((z1 > z) != (z2 > z))
-        if cond:
-            x_int = x1 + (x2 - x1) * (z - z1) / (z2 - z1 + 1e-18)
-            if x_int > x:
-                inside = not inside
-    return inside
-
-
-def _closest_feasible_point(
-    xz: Tuple[float, float],
-    poly: np.ndarray,
-    rng: np.random.RandomState,
-    n_grid: int = 25,
-    n_rand: int = 300,
-) -> Tuple[float, float]:
-    if _point_in_poly(xz, poly):
-        return xz
-
-    xmin, zmin = np.min(poly, axis=0)
-    xmax, zmax = np.max(poly, axis=0)
-
-    candidates: List[Tuple[float, float]] = []
-
-    xs = np.linspace(xmin, xmax, n_grid)
-    zs = np.linspace(zmin, zmax, n_grid)
-    for xx in xs:
-        for zz in zs:
-            if _point_in_poly((float(xx), float(zz)), poly):
-                candidates.append((float(xx), float(zz)))
-
-    for _ in range(n_rand):
-        xx = float(rng.uniform(xmin, xmax))
-        zz = float(rng.uniform(zmin, zmax))
-        if _point_in_poly((xx, zz), poly):
-            candidates.append((xx, zz))
-
-    if not candidates:
-        return (float(0.5 * (xmin + xmax)), float(0.5 * (zmin + zmax)))
-
-    px, pz = xz
-    cand = np.array(candidates, dtype=np.float32)
-    d2 = (cand[:, 0] - px) ** 2 + (cand[:, 1] - pz) ** 2
-    best = cand[int(np.argmin(d2))]
-    return float(best[0]), float(best[1])
-
-
-# -----------------------------
-# Размеры объекта (для AABB-коллизий)
-# -----------------------------
-
-def _get_object_dims(obj: Dict[str, Any]) -> Tuple[float, float]:
-    if "bbox_world_xy" in obj and obj["bbox_world_xy"] is not None:
-        bb = obj["bbox_world_xy"]
-        if isinstance(bb, (list, tuple)) and len(bb) == 4:
-            xmin, xmax, zmin, zmax = map(float, bb)
-            return max(0.0, xmax - xmin), max(0.0, zmax - zmin)
-
-    dims = obj.get("dims")
-    if isinstance(dims, dict):
-        w = float(dims.get("width", 0.0))
-        d = float(dims.get("depth", 0.0))
-        return max(0.0, w), max(0.0, d)
-    if isinstance(dims, (list, tuple)) and len(dims) >= 2:
-        w = float(dims[0])
-        d = float(dims[1])
-        return max(0.0, w), max(0.0, d)
-
-    return 0.0, 0.0
-
-
-def _rect_from_center_dims(x: float, z: float, w: float, d: float) -> Tuple[float, float, float, float]:
-    hw = 0.5 * float(w)
-    hd = 0.5 * float(d)
-    return (x - hw, x + hw, z - hd, z + hd)
-
-
-def _rect_intersect(a: Tuple[float, float, float, float], b: Tuple[float, float, float, float]) -> bool:
-    ax1, ax2, az1, az2 = a
-    bx1, bx2, bz1, bz2 = b
-    if ax2 <= bx1 or bx2 <= ax1:
-        return False
-    if az2 <= bz1 or bz2 <= az1:
-        return False
-    return True
-
-
-# -----------------------------
-# Текстовые признаки (name/label) — hashing trick
-# -----------------------------
-
-_TOKEN_SPLIT_RE = re.compile(r"[\/,_\-\s]+")
-
-
-def _iter_tokens(text: str) -> List[str]:
-    text = (text or "").strip().lower()
-    if not text:
-        return []
-    parts = _TOKEN_SPLIT_RE.split(text)
-    out = []
-    for p in parts:
-        p = p.strip()
-        if not p:
-            continue
-        if len(p) > 32:
-            p = p[:32]
-        out.append(p)
-    return out
-
-
-def _iter_char_ngrams(text: str, n: int = 3) -> List[str]:
-    text = (text or "").strip().lower()
-    if not text:
-        return []
-    text = re.sub(r"\s+", " ", text)
-    if len(text) < n:
-        return [text]
-    return [text[i:i + n] for i in range(len(text) - n + 1)]
-
-
-def _fnv1a_32(data: bytes) -> int:
-    h = 2166136261
-    for b in data:
-        h ^= b
-        h = (h * 16777619) & 0xFFFFFFFF
-    return h
-
-
-def _signed_hash_to_index_and_sign(s: str, dim: int) -> Tuple[int, float]:
-    h = _fnv1a_32(s.encode("utf-8", errors="ignore"))
-    idx = int(h % dim)
-    sign = -1.0 if (h & 1) else 1.0
-    return idx, sign
-
-
-def _hash_text_vector(
-    name: str,
-    label: str,
-    tok_dim: int,
-    chr_dim: int,
-    char_n: int = 3,
-) -> np.ndarray:
-    v_tok = np.zeros((tok_dim,), dtype=np.float32)
-    v_chr = np.zeros((chr_dim,), dtype=np.float32)
-
-    toks = _iter_tokens(name or "") + _iter_tokens(label or "")
-    for t in toks:
-        idx, sgn = _signed_hash_to_index_and_sign("tok:" + t, tok_dim)
-        v_tok[idx] += sgn
-
-    chrs = _iter_char_ngrams(name or "", n=char_n) + _iter_char_ngrams(label or "", n=char_n)
-    if len(chrs) > 512:
-        chrs = chrs[:512]
-    for g in chrs:
-        idx, sgn = _signed_hash_to_index_and_sign("chr:" + g, chr_dim)
-        v_chr[idx] += sgn
-
-    def _l2norm(x: np.ndarray) -> np.ndarray:
-        nrm = float(np.linalg.norm(x))
-        if nrm < 1e-6:
-            return x
-        return x / nrm
-
-    v_tok = _l2norm(v_tok)
-    v_chr = _l2norm(v_chr)
-    return np.concatenate([v_tok, v_chr], axis=0)
-
-
-# -----------------------------
-# Узловые/парные признаки
-# -----------------------------
-
-def _safe_int(v: Any, default: int = -1) -> int:
-    try:
-        if v is None:
-            return default
-        return int(v)
-    except Exception:
-        return default
-
-
-def _room_bbox(poly: np.ndarray) -> Tuple[float, float, float, float]:
-    xmin, zmin = np.min(poly, axis=0)
-    xmax, zmax = np.max(poly, axis=0)
-    return float(xmin), float(xmax), float(zmin), float(zmax)
-
-
-def _node_features(
-    obj: Dict[str, Any],
-    room_poly: np.ndarray,
-    tok_dim: int,
-    chr_dim: int,
-) -> np.ndarray:
-    super_id = float(_safe_int(obj.get("super_id", obj.get("super-id", -1)), -1))
-    cat_id = float(_safe_int(obj.get("cat_id", obj.get("cat-id", -1)), -1))
-    style_id = float(_safe_int(obj.get("style_id", obj.get("style-id", -1)), -1))
-    material_id = float(_safe_int(obj.get("material_id", obj.get("material-id", -1)), -1))
-    theme_id = float(_safe_int(obj.get("theme_id", obj.get("theme-id", -1)), -1))
-
-    w, d = _get_object_dims(obj)
-
-    xmin, xmax, zmin, zmax = _room_bbox(room_poly)
-    room_w = max(1e-6, xmax - xmin)
-    room_d = max(1e-6, zmax - zmin)
-
-    rw = float(w / room_w)
-    rd = float(d / room_d)
-
-    name = str(obj.get("name", ""))
-    label = str(obj.get("label", ""))
-    tv = _hash_text_vector(name, label, tok_dim=tok_dim, chr_dim=chr_dim, char_n=3)
-
-    # Важно: НЕ используем GT-позицию в признаках (без утечек).
-    num = np.array(
-        [
-            super_id,
-            cat_id,
-            style_id,
-            material_id,
-            theme_id,
-            float(w),
-            float(d),
-            rw,
-            rd,
-        ],
-        dtype=np.float32,
+    from sklearn.feature_extraction import DictVectorizer
+    from sklearn.model_selection import train_test_split
+    from sklearn.metrics import accuracy_score, log_loss, mean_absolute_error, mean_squared_error
+    from sklearn.ensemble import (
+        RandomForestClassifier,
+        RandomForestRegressor,
+        GradientBoostingClassifier,
+        GradientBoostingRegressor,
     )
-    return np.concatenate([num, tv], axis=0)
-
-
-def _pair_features(hi: np.ndarray, hj: np.ndarray) -> np.ndarray:
-    diff = (hj - hi).astype(np.float32)
-    prod = (hi * hj).astype(np.float32)
-    adiff = np.abs(diff).astype(np.float32)
-    return np.concatenate([hi, hj, diff, prod, adiff], axis=0)
+    from sklearn.linear_model import LogisticRegression, Ridge
+except Exception as e:
+    raise ImportError("scikit-learn is required. Install: pip install scikit-learn") from e
 
 
 # -----------------------------
-# Датасет для обучения попарных смещений
+# Data
 # -----------------------------
 
 @dataclass
-class PairSample:
-    x: np.ndarray
-    y: np.ndarray  # [dx, dz]
+class Dataset:
+    X_dict: List[Dict[str, Any]]
+    y_cls: np.ndarray
+    y_dist: np.ndarray
+    n_classes: int
 
 
-def _iter_rooms_from_mini_json(path: str) -> List[Dict[str, Any]]:
-    with open(path, "r", encoding="utf-8") as f:
-        data = json.load(f)
-    rooms = data.get("rooms", [])
-    if not isinstance(rooms, list):
-        return []
-    return rooms
-
-
-def _poly_from_room(room: Dict[str, Any]) -> np.ndarray:
-    poly_raw = room.get("floor_polygon_xz", [])
-    if not isinstance(poly_raw, list) or len(poly_raw) < 3:
-        return np.zeros((0, 2), dtype=np.float32)
-    return np.array([(float(v["x"]), float(v["z"])) for v in poly_raw], dtype=np.float32)
-
-
-def _get_gt_xz(obj: Dict[str, Any]) -> Optional[Tuple[float, float]]:
-    pos = obj.get("pos")
-    if not isinstance(pos, dict):
+def _parse_float(s: str) -> Optional[float]:
+    try:
+        v = float(s)
+        if not math.isfinite(v):
+            return None
+        return v
+    except Exception:
         return None
-    x = float(pos.get("x", float("nan")))
-    z = float(pos.get("z", float("nan")))
-    if not (math.isfinite(x) and math.isfinite(z)):
-        return None
-    return x, z
 
 
-def _knn_edges_by_gt(xz: np.ndarray, k: int) -> List[Tuple[int, int]]:
-    n = xz.shape[0]
-    if n <= 1:
-        return []
-    edges = []
-    for i in range(n):
-        d2 = np.sum((xz - xz[i:i + 1]) ** 2, axis=1)
-        order = np.argsort(d2)
-        cnt = 0
-        for j in order:
-            if j == i:
-                continue
-            edges.append((i, int(j)))
-            cnt += 1
-            if cnt >= k:
+def _infer_classes_for_quantized_angle(angle_col: str) -> Optional[int]:
+    # angle_q30: 0..330 (12 values), angle_q60: 6, angle_q90: 4
+    if angle_col == "angle_q30":
+        return 12
+    if angle_col == "angle_q60":
+        return 6
+    if angle_col == "angle_q90":
+        return 4
+    return None
+
+
+def _angle_to_bin_deg(angle_deg: float, bins: int) -> int:
+    a = angle_deg % 360.0
+    w = 360.0 / float(bins)
+    b = int(a // w)
+    if b < 0:
+        b = 0
+    if b >= bins:
+        b = bins - 1
+    return b
+
+
+def _quantized_angle_to_class(angle_q: float, step_deg: float) -> int:
+    """
+    angle_q уже кратен step_deg и лежит в [0,360).
+    Переводим в класс: 0..(360/step_deg - 1)
+    """
+    a = angle_q % 360.0
+    k = int(round(a / step_deg))
+    n = int(round(360.0 / step_deg))
+    k %= n
+    return k
+
+
+def load_pairs_csv(
+    csv_path: Path,
+    angle_col: str,
+    dist_col: str,
+    bins_for_angle_deg: int,
+    max_rows: int = 0,
+) -> Dataset:
+    """
+    Требуемые столбцы: cat1, cat2, angle_col, dist_col.
+    Features: только {"cat1":..., "cat2":...}.
+    """
+    Xd: List[Dict[str, Any]] = []
+    y_cls: List[int] = []
+    y_dist: List[float] = []
+
+    n_classes_q = _infer_classes_for_quantized_angle(angle_col)
+    if angle_col == "angle_deg":
+        n_classes = int(bins_for_angle_deg)
+    elif n_classes_q is not None:
+        n_classes = int(n_classes_q)
+    else:
+        # если пользователь дал нестандартный столбец, оценим по уникальным значениям
+        n_classes = -1
+
+    with csv_path.open("r", encoding="utf-8", newline="") as f:
+        r = csv.DictReader(f)
+        if r.fieldnames is None:
+            raise SystemExit("[train_models] CSV has no header.")
+
+        need = {"cat1", "cat2", angle_col, dist_col}
+        if not need.issubset(set(r.fieldnames)):
+            raise SystemExit(f"[train_models] Bad CSV header. Need columns: {sorted(need)}")
+
+        # если n_classes неизвестно, собираем уникальные значения угла
+        uniq_angles: set[float] = set() if n_classes == -1 else set()
+
+        for i, row in enumerate(r):
+            if max_rows and i >= max_rows:
                 break
-    return edges
 
-
-def build_pair_dataset(
-    mini_json_paths: List[str],
-    tok_dim: int,
-    chr_dim: int,
-    k_edges: int,
-    max_rooms: int = 0,
-) -> Tuple[np.ndarray, np.ndarray]:
-    samples: List[PairSample] = []
-    rooms_seen = 0
-    pairs_total = 0
-    dropped = 0
-
-    for p in mini_json_paths:
-        for room in _iter_rooms_from_mini_json(p):
-            if max_rooms and rooms_seen >= max_rooms:
-                break
-
-            poly = _poly_from_room(room)
-            if poly.shape[0] < 3:
+            c1 = (row.get("cat1") or "").strip()
+            c2 = (row.get("cat2") or "").strip()
+            if not c1 or not c2:
                 continue
 
-            objs = room.get("objects", [])
-            if not isinstance(objs, list) or len(objs) < 2:
+            ang_raw = _parse_float(row.get(angle_col, ""))
+            d_raw = _parse_float(row.get(dist_col, ""))
+            if ang_raw is None or d_raw is None:
+                continue
+            if d_raw < 0.0:
                 continue
 
-            idx_map: List[int] = []
-            gt: List[Tuple[float, float]] = []
-            for i, obj in enumerate(objs):
-                g = _get_gt_xz(obj)
-                if g is None:
-                    continue
-                idx_map.append(i)
-                gt.append(g)
-            if len(idx_map) < 2:
-                continue
+            a, b = (c1, c2) if c1 <= c2 else (c2, c1)
+            Xd.append({"cat1": a, "cat2": b})
+            y_dist.append(float(d_raw))
 
-            gt_xz = np.array(gt, dtype=np.float32)
-            m = gt_xz.shape[0]
+            if angle_col == "angle_deg":
+                y_cls.append(_angle_to_bin_deg(ang_raw, bins=int(bins_for_angle_deg)))
+            elif angle_col == "angle_q30":
+                y_cls.append(_quantized_angle_to_class(ang_raw, 30.0))
+            elif angle_col == "angle_q60":
+                y_cls.append(_quantized_angle_to_class(ang_raw, 60.0))
+            elif angle_col == "angle_q90":
+                y_cls.append(_quantized_angle_to_class(ang_raw, 90.0))
+            else:
+                uniq_angles.add(float(ang_raw))
 
-            H = []
-            for ii in idx_map:
-                H.append(_node_features(objs[ii], poly, tok_dim=tok_dim, chr_dim=chr_dim))
-            H = np.stack(H, axis=0).astype(np.float32)
-
-            edges = _knn_edges_by_gt(gt_xz, k=k_edges)
-            if not edges:
-                continue
-
-            for (a, b) in edges:
-                pairs_total += 1
-                dx = float(gt_xz[b, 0] - gt_xz[a, 0])
-                dz = float(gt_xz[b, 1] - gt_xz[a, 1])
-                if not (math.isfinite(dx) and math.isfinite(dz)):
-                    dropped += 1
-                    continue
-
-                x_feat = _pair_features(H[a], H[b])
-                y = np.array([dx, dz], dtype=np.float32)
-
-                if (not np.isfinite(x_feat).all()) or (not np.isfinite(y).all()):
-                    dropped += 1
-                    continue
-                samples.append(PairSample(x=x_feat, y=y))
-
-            rooms_seen += 1
-
-        if max_rooms and rooms_seen >= max_rooms:
-            break
-
-    if not samples:
-        raise ValueError("build_pair_dataset: пусто (нет обучающих пар).")
-
-    X = np.stack([s.x for s in samples], axis=0).astype(np.float32)
-    Y = np.stack([s.y for s in samples], axis=0).astype(np.float32)
-
-    mask = np.isfinite(X).all(axis=1) & np.isfinite(Y).all(axis=1)
-    X = X[mask]
-    Y = Y[mask]
-
-    print(f"[graph_stat] rooms={rooms_seen} pairs_total={pairs_total} kept={int(X.shape[0])} dropped={dropped}")
-    return X, Y
-
-
-# -----------------------------
-# GraphStatPlacer
-# -----------------------------
-
-class GraphStatPlacer:
-    def __init__(
-        self,
-        tok_dim: int = 128,
-        chr_dim: int = 128,
-        k_train_edges: int = 8,
-        k_infer_edges: int = 10,
-        random_state: int = 42,
-        iters: int = 80,
-        relax: float = 0.35,
-        center_pull: float = 0.02,
-        coll_steps: int = 40,
-        coll_push: float = 0.15,
-        coll_margin: float = 0.05,
-    ) -> None:
-        self.tok_dim = int(tok_dim)
-        self.chr_dim = int(chr_dim)
-        self.k_train_edges = int(k_train_edges)
-        self.k_infer_edges = int(k_infer_edges)
-        self.random_state = int(random_state)
-        self.rng = np.random.RandomState(self.random_state)
-
-        self.iters = int(iters)
-        self.relax = float(relax)
-        self.center_pull = float(center_pull)
-
-        self.coll_steps = int(coll_steps)
-        self.coll_push = float(coll_push)
-        self.coll_margin = float(coll_margin)
-
-        base = dict(
-            max_depth=None,
-            max_iter=300,
-            learning_rate=0.05,
-            max_bins=255,
-            l2_regularization=1e-3,
-            random_state=self.random_state,
-        )
-        self.reg_dx = HistGradientBoostingRegressor(**base)
-        self.reg_dz = HistGradientBoostingRegressor(**base)
-
-        self.is_fitted = False
-        self.feat_dim: Optional[int] = None
-
-    def fit(self, mini_json_paths: List[str], max_rooms: int = 0) -> "GraphStatPlacer":
-        X, Y = build_pair_dataset(
-            mini_json_paths=mini_json_paths,
-            tok_dim=self.tok_dim,
-            chr_dim=self.chr_dim,
-            k_edges=self.k_train_edges,
-            max_rooms=max_rooms,
-        )
-        self.feat_dim = int(X.shape[1])
-        self.reg_dx.fit(X, Y[:, 0])
-        self.reg_dz.fit(X, Y[:, 1])
-        self.is_fitted = True
-        return self
-
-    def save(self, path: str) -> None:
-        if not self.is_fitted:
-            raise RuntimeError("GraphStatPlacer: нечего сохранять — модель не обучена.")
-        payload = {
-            "tok_dim": self.tok_dim,
-            "chr_dim": self.chr_dim,
-            "k_train_edges": self.k_train_edges,
-            "k_infer_edges": self.k_infer_edges,
-            "random_state": self.random_state,
-            "iters": self.iters,
-            "relax": self.relax,
-            "center_pull": self.center_pull,
-            "coll_steps": self.coll_steps,
-            "coll_push": self.coll_push,
-            "coll_margin": self.coll_margin,
-            "feat_dim": self.feat_dim,
-            "reg_dx": self.reg_dx,
-            "reg_dz": self.reg_dz,
-        }
-        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-        with open(path, "wb") as f:
-            f.write(pickle.dumps(payload))
-        print(f"[graph_stat] Saved model: {path}")
-
-    @staticmethod
-    def load(path: str) -> "GraphStatPlacer":
-        with open(path, "rb") as f:
-            payload = pickle.loads(f.read())
-        m = GraphStatPlacer(
-            tok_dim=int(payload["tok_dim"]),
-            chr_dim=int(payload["chr_dim"]),
-            k_train_edges=int(payload["k_train_edges"]),
-            k_infer_edges=int(payload["k_infer_edges"]),
-            random_state=int(payload["random_state"]),
-            iters=int(payload["iters"]),
-            relax=float(payload["relax"]),
-            center_pull=float(payload["center_pull"]),
-            coll_steps=int(payload["coll_steps"]),
-            coll_push=float(payload["coll_push"]),
-            coll_margin=float(payload["coll_margin"]),
-        )
-        m.feat_dim = int(payload.get("feat_dim") or 0)
-        m.reg_dx = payload["reg_dx"]
-        m.reg_dz = payload["reg_dz"]
-        m.is_fitted = True
-        return m
-
-    def _infer_graph_edges(self, H: np.ndarray) -> List[Tuple[int, int]]:
-        n, _ = H.shape
-        if n <= 1:
-            return []
-
-        num_dim = 9
-        txt = H[:, num_dim:]
-        txt_norm = np.linalg.norm(txt, axis=1, keepdims=True)
-        txt_norm = np.maximum(txt_norm, 1e-6)
-        txt_u = txt / txt_norm
-
-        edges: List[Tuple[int, int]] = []
-        for i in range(n):
-            sims = np.dot(txt_u, txt_u[i:i + 1].T).reshape(-1)
-            wi = H[i, 5]
-            di = H[i, 6]
-            size = np.abs(H[:, 5] - wi) + np.abs(H[:, 6] - di)
-            sims = sims - 0.05 * size
-
-            order = np.argsort(-sims)
-            cnt = 0
-            for j in order:
-                if j == i:
-                    continue
-                edges.append((i, int(j)))
-                cnt += 1
-                if cnt >= self.k_infer_edges:
-                    break
-        return edges
-
-    def _predict_delta(self, hi: np.ndarray, hj: np.ndarray) -> Tuple[float, float]:
-        x = _pair_features(hi, hj).reshape(1, -1)
-        dx = float(self.reg_dx.predict(x)[0])
-        dz = float(self.reg_dz.predict(x)[0])
-        return dx, dz
-
-    def _collision_repair(self, poly: np.ndarray, objs: List[Dict[str, Any]], P: np.ndarray) -> np.ndarray:
-        n = P.shape[0]
-        dims = [_get_object_dims(o) for o in objs]
-
-        for _ in range(self.coll_steps):
-            moved = False
-            rects: List[Optional[Tuple[float, float, float, float]]] = []
-            for i in range(n):
-                w, d = dims[i]
-                if w <= 0 or d <= 0:
-                    rects.append(None)
-                else:
-                    rects.append(_rect_from_center_dims(P[i, 0], P[i, 1], w + self.coll_margin, d + self.coll_margin))
-
-            for i in range(n):
-                if rects[i] is None:
-                    continue
-                for j in range(i + 1, n):
-                    if rects[j] is None:
-                        continue
-                    if not _rect_intersect(rects[i], rects[j]):
-                        continue
-
-                    v = P[i] - P[j]
-                    norm = float(np.linalg.norm(v))
-                    if norm < 1e-6:
-                        ang = float(self.rng.uniform(0, 2 * math.pi))
-                        v = np.array([math.cos(ang), math.sin(ang)], dtype=np.float32)
-                        norm = 1.0
-                    v = v / norm
-
-                    step = self.coll_push
-                    P[i] = P[i] + step * v
-                    P[j] = P[j] - step * v
-                    moved = True
-
-                    P[i, 0], P[i, 1] = _closest_feasible_point((float(P[i, 0]), float(P[i, 1])), poly, self.rng)
-                    P[j, 0], P[j, 1] = _closest_feasible_point((float(P[j, 0]), float(P[j, 1])), poly, self.rng)
-
-            if not moved:
-                break
-        return P
-
-    def predict_room(self, room: Dict[str, Any]) -> List[Dict[str, Any]]:
-        if not self.is_fitted:
-            raise RuntimeError("GraphStatPlacer: модель не обучена. Вызовите fit() или load().")
-
-        poly = _poly_from_room(room)
-        if poly.shape[0] < 3:
-            raise ValueError("room.floor_polygon_xz должен быть полигоном (>=3 вершины).")
-
-        objs = room.get("objects", [])
-        if not isinstance(objs, list) or not objs:
-            return []
-
-        n = len(objs)
-        H = np.stack([_node_features(objs[i], poly, self.tok_dim, self.chr_dim) for i in range(n)], axis=0).astype(
-            np.float32
-        )
-
-        edges = self._infer_graph_edges(H)
-        if not edges:
-            cx, cz = _poly_centroid(poly)
-            out = []
-            for obj in objs:
-                out.append(
-                    {
-                        "instanceid": obj.get("instanceid"),
-                        "name": obj.get("name"),
-                        "label": obj.get("label"),
-                        "pred": {"pos": {"x": float(cx), "y": 0.0, "z": float(cz)}, "yaw_deg": 0.0},
-                    }
-                )
-            return out
-
-        cx, cz = _poly_centroid(poly)
-        P = np.zeros((n, 2), dtype=np.float32)
-        for i in range(n):
-            dx = float(self.rng.normal(0.0, 0.3))
-            dz = float(self.rng.normal(0.0, 0.3))
-            px, pz = _closest_feasible_point((cx + dx, cz + dz), poly, self.rng)
-            P[i, 0] = px
-            P[i, 1] = pz
-
-        for _ in range(self.iters):
-            P += self.center_pull * (np.array([cx, cz], dtype=np.float32) - P)
-
-            for (i, j) in edges:
-                dx, dz = self._predict_delta(H[i], H[j])
-
-                target_j = P[i] + np.array([dx, dz], dtype=np.float32)
-                target_i = P[j] - np.array([dx, dz], dtype=np.float32)
-
-                P[j] = (1.0 - self.relax) * P[j] + self.relax * target_j
-                P[i] = (1.0 - self.relax) * P[i] + self.relax * target_i
-
-                P[i, 0], P[i, 1] = _closest_feasible_point((float(P[i, 0]), float(P[i, 1])), poly, self.rng)
-                P[j, 0], P[j, 1] = _closest_feasible_point((float(P[j, 0]), float(P[j, 1])), poly, self.rng)
-
-        P = self._collision_repair(poly, objs, P)
-
-        out: List[Dict[str, Any]] = []
-        for i, obj in enumerate(objs):
-            out.append(
-                {
-                    "instanceid": obj.get("instanceid"),
-                    "name": obj.get("name"),
-                    "label": obj.get("label"),
-                    "pred": {
-                        "pos": {"x": float(P[i, 0]), "y": 0.0, "z": float(P[i, 1])},
-                        "yaw_deg": 0.0,
-                    },
-                }
+        if n_classes == -1:
+            # сделаем маппинг по уникальным значениям
+            vals = sorted(uniq_angles)
+            if not vals:
+                raise SystemExit("[train_models] Cannot infer classes: no angle values.")
+            mapping = {v: i for i, v in enumerate(vals)}
+            # пересчитать второй проход без хранения всех строк невозможно,
+            # поэтому запрещаем нестандартный angle_col без фиксированных правил.
+            raise SystemExit(
+                f"[train_models] Unsupported angle_col='{angle_col}'. "
+                f"Use angle_deg/angle_q30/angle_q60/angle_q90."
             )
+
+    if not Xd:
+        raise SystemExit("[train_models] Empty dataset after filtering.")
+
+    return Dataset(
+        X_dict=Xd,
+        y_cls=np.array(y_cls, dtype=np.int32),
+        y_dist=np.array(y_dist, dtype=np.float32),
+        n_classes=int(n_classes),
+    )
+
+
+# -----------------------------
+# Models
+# -----------------------------
+
+@dataclass
+class DualModel:
+    name: str
+    vec: DictVectorizer
+    angle_model: Any
+    dist_model: Any
+    n_classes: int
+
+    def fit(self, X_dict: List[Dict[str, Any]], y_cls: np.ndarray, y_dist: np.ndarray) -> None:
+        X = self.vec.fit_transform(X_dict)
+        self.angle_model.fit(X, y_cls)
+        self.dist_model.fit(X, y_dist)
+
+    def predict_angle(self, X_dict: List[Dict[str, Any]]) -> np.ndarray:
+        X = self.vec.transform(X_dict)
+        return self.angle_model.predict(X)
+
+    def predict_angle_proba(self, X_dict: List[Dict[str, Any]]) -> Optional[np.ndarray]:
+        X = self.vec.transform(X_dict)
+        if not hasattr(self.angle_model, "predict_proba"):
+            return None
+        p = self.angle_model.predict_proba(X)
+
+        if p.shape[1] == self.n_classes:
+            return p
+
+        if hasattr(self.angle_model, "classes_"):
+            classes = getattr(self.angle_model, "classes_")
+            out = np.zeros((p.shape[0], self.n_classes), dtype=np.float64)
+            for j, c in enumerate(classes):
+                ci = int(c)
+                if 0 <= ci < self.n_classes:
+                    out[:, ci] = p[:, j]
+            s = out.sum(axis=1, keepdims=True)
+            s[s == 0] = 1.0
+            return out / s
+
+        return None
+
+    def predict_dist(self, X_dict: List[Dict[str, Any]]) -> np.ndarray:
+        X = self.vec.transform(X_dict)
+        return self.dist_model.predict(X)
+
+
+class BaselineStat:
+    """
+    Статистика по паре категорий:
+      - угол: гистограмма по классам + Laplace smoothing
+      - расстояние: медиана dist_col
+    """
+    def __init__(self, n_classes: int) -> None:
+        self.n_classes = n_classes
+        self.pair_hist: Dict[Tuple[str, str], np.ndarray] = {}
+        self.pair_med: Dict[Tuple[str, str], float] = {}
+        self.global_hist = np.ones((n_classes,), dtype=np.float64)
+        self.global_med = 0.0
+
+    def fit(self, X_dict: List[Dict[str, Any]], y_cls: np.ndarray, y_dist: np.ndarray) -> None:
+        self.global_med = float(np.median(np.array(y_dist, dtype=np.float64)))
+
+        buckets: Dict[Tuple[str, str], List[float]] = {}
+
+        for x, c, d in zip(X_dict, y_cls, y_dist):
+            key = (x["cat1"], x["cat2"])
+            if key not in self.pair_hist:
+                self.pair_hist[key] = np.ones((self.n_classes,), dtype=np.float64)  # Laplace
+            ci = int(c)
+            if 0 <= ci < self.n_classes:
+                self.pair_hist[key][ci] += 1.0
+            buckets.setdefault(key, []).append(float(d))
+
+        for key, arr in buckets.items():
+            self.pair_med[key] = float(np.median(np.array(arr, dtype=np.float64)))
+
+    def predict_angle(self, X_dict: List[Dict[str, Any]]) -> np.ndarray:
+        out = np.zeros((len(X_dict),), dtype=np.int32)
+        for i, x in enumerate(X_dict):
+            key = (x["cat1"], x["cat2"])
+            hist = self.pair_hist.get(key, self.global_hist)
+            out[i] = int(np.argmax(hist))
+        return out
+
+    def predict_angle_proba(self, X_dict: List[Dict[str, Any]]) -> np.ndarray:
+        out = np.zeros((len(X_dict), self.n_classes), dtype=np.float64)
+        for i, x in enumerate(X_dict):
+            key = (x["cat1"], x["cat2"])
+            hist = self.pair_hist.get(key, self.global_hist)
+            p = hist / float(hist.sum())
+            out[i] = p
+        return out
+
+    def predict_dist(self, X_dict: List[Dict[str, Any]]) -> np.ndarray:
+        out = np.zeros((len(X_dict),), dtype=np.float32)
+        for i, x in enumerate(X_dict):
+            key = (x["cat1"], x["cat2"])
+            out[i] = float(self.pair_med.get(key, self.global_med))
         return out
 
 
 # -----------------------------
-# CLI
+# Eval
 # -----------------------------
 
-def _glob_mini_json(pattern_or_dir: str) -> List[str]:
-    s = str(pattern_or_dir)
-    if any(ch in s for ch in ["*", "?", "[", "]"]):
-        files = glob.glob(s, recursive=True)
-        files = [f for f in files if f.endswith(".mini.json")]
-        files.sort()
-        return files
+def evaluate_model(model: Any, X_te: List[Dict[str, Any]], y_cls_te: np.ndarray, y_dist_te: np.ndarray, n_classes: int) -> Dict[str, float]:
+    y_pred = model.predict_angle(X_te)
+    acc = float(accuracy_score(y_cls_te, y_pred))
 
-    p = Path(s)
-    if p.exists() and p.is_file():
-        if str(p).endswith(".mini.json"):
-            return [str(p)]
-        p = p.parent
+    ll: Optional[float] = None
+    proba = model.predict_angle_proba(X_te) if hasattr(model, "predict_angle_proba") else None
+    if proba is not None:
+        try:
+            ll = float(log_loss(y_cls_te, proba, labels=list(range(n_classes))))
+        except Exception:
+            ll = None
 
-    out: List[str] = []
-    if p.exists() and p.is_dir():
-        for dirpath, _, filenames in os.walk(str(p)):
-            for fn in filenames:
-                if fn.endswith(".mini.json"):
-                    out.append(os.path.join(dirpath, fn))
-        out.sort()
+    d_pred = model.predict_dist(X_te)
+    mae = float(mean_absolute_error(y_dist_te, d_pred))
+    rmse = float(math.sqrt(mean_squared_error(y_dist_te, d_pred)))
+
+    score = float((1.0 - acc) + 0.3 * mae) if ll is None else float(ll + 0.3 * mae)
+
+    out: Dict[str, float] = {
+        "angle_accuracy": acc,
+        "dist_mae": mae,
+        "dist_rmse": rmse,
+        "score": score,
+    }
+    if ll is not None:
+        out["angle_logloss"] = ll
     return out
 
 
+def save_pickle(obj: Any, path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("wb") as f:
+        pickle.dump(obj, f, protocol=pickle.HIGHEST_PROTOCOL)
+
+
+# -----------------------------
+# Main
+# -----------------------------
+
 def main() -> None:
     ap = argparse.ArgumentParser()
+    ap.add_argument("--csv", required=True)
+    ap.add_argument("--out_dir", required=True)
 
-    ap.add_argument("--train", type=str, default="", help="Glob/dir for *.mini.json to train")
-    ap.add_argument("--out_model", type=str, default="", help="Where to save model.pkl after training")
-    ap.add_argument("--max_rooms", type=int, default=0, help="0=all rooms, иначе ограничение по комнатам")
+    ap.add_argument("--angle_col", default="angle_deg", choices=["angle_deg", "angle_q30", "angle_q60", "angle_q90"])
+    ap.add_argument(
+        "--dist_col",
+        default="dist_norm",
+        choices=["dist_norm", "dist_norm_q40", "dist", "dist_q40"],
+    )
 
-    ap.add_argument("--model", type=str, default="", help="Path to saved model.pkl for inference")
-    ap.add_argument("--predict_room_json", type=str, default="", help="Path to one *.mini.json to predict (first room)")
-    ap.add_argument("--out_pred", type=str, default="", help="Where to write predictions json")
-
-    ap.add_argument("--iters", type=int, default=80)
-    ap.add_argument("--relax", type=float, default=0.35)
-    ap.add_argument("--center_pull", type=float, default=0.02)
-    ap.add_argument("--coll_steps", type=int, default=40)
-    ap.add_argument("--coll_push", type=float, default=0.15)
-    ap.add_argument("--coll_margin", type=float, default=0.05)
-
+    ap.add_argument("--bins", type=int, default=36, help="Используется только если angle_col=angle_deg")
+    ap.add_argument("--test_size", type=float, default=0.2)
+    ap.add_argument("--seed", type=int, default=42)
+    ap.add_argument("--max_rows", type=int, default=0)
     args = ap.parse_args()
 
-    if args.train:
-        paths = _glob_mini_json(args.train)
-        if not paths:
-            raise SystemExit(f"[graph_stat] No *.mini.json found by: {args.train}")
-        if not args.out_model:
-            raise SystemExit("[graph_stat] --out_model is required when --train is set")
+    csv_path = Path(args.csv)
+    out_dir = Path(args.out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
 
-        m = GraphStatPlacer(
-            random_state=42,
-            iters=int(args.iters),
-            relax=float(args.relax),
-            center_pull=float(args.center_pull),
-            coll_steps=int(args.coll_steps),
-            coll_push=float(args.coll_push),
-            coll_margin=float(args.coll_margin),
-        ).fit(paths, max_rooms=int(args.max_rooms))
-        m.save(args.out_model)
-        return
-
-    if args.model and args.predict_room_json:
-        m = GraphStatPlacer.load(args.model)
-        with open(args.predict_room_json, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        rooms = data.get("rooms", [])
-        if not rooms:
-            raise SystemExit("[graph_stat] predict_room_json: no rooms")
-
-        preds = m.predict_room(rooms[0])
-
-        if args.out_pred:
-            os.makedirs(os.path.dirname(args.out_pred) or ".", exist_ok=True)
-            Path(args.out_pred).write_text(json.dumps(preds, ensure_ascii=False, indent=2), encoding="utf-8")
-            print(f"[graph_stat] Saved predictions: {args.out_pred}")
-        else:
-            print(json.dumps(preds, ensure_ascii=False, indent=2))
-        return
-
-    raise SystemExit(
-        "[graph_stat] Usage:\n"
-        "  Train:   python -m src.ml.baselines.graph_stat_placer --train '<glob>' --out_model runs/graph_stat/model.pkl\n"
-        "  Predict: python -m src.ml.baselines.graph_stat_placer --model runs/graph_stat/model.pkl --predict_room_json <file> --out_pred runs/graph_stat/pred.json"
+    ds = load_pairs_csv(
+        csv_path=csv_path,
+        angle_col=str(args.angle_col),
+        dist_col=str(args.dist_col),
+        bins_for_angle_deg=int(args.bins),
+        max_rows=int(args.max_rows),
     )
+
+    Xd, y_cls, y_dist, n_classes = ds.X_dict, ds.y_cls, ds.y_dist, ds.n_classes
+
+    X_tr, X_te, y_tr, y_te, d_tr, d_te = train_test_split(
+        Xd, y_cls, y_dist,
+        test_size=float(args.test_size),
+        random_state=int(args.seed),
+        stratify=y_cls,
+    )
+
+    models: Dict[str, Any] = {}
+
+    baseline = BaselineStat(n_classes=n_classes)
+    baseline.fit(X_tr, y_tr, d_tr)
+    models["baseline"] = baseline
+
+    models["forest"] = DualModel(
+        name="forest",
+        vec=DictVectorizer(sparse=True),
+        angle_model=RandomForestClassifier(
+            n_estimators=400,
+            max_depth=None,
+            min_samples_leaf=2,
+            random_state=int(args.seed),
+            n_jobs=-1,
+        ),
+        dist_model=RandomForestRegressor(
+            n_estimators=400,
+            max_depth=None,
+            min_samples_leaf=2,
+            random_state=int(args.seed),
+            n_jobs=-1,
+        ),
+        n_classes=n_classes,
+    )
+
+    models["gbdt"] = DualModel(
+        name="gbdt",
+        vec=DictVectorizer(sparse=True),
+        angle_model=GradientBoostingClassifier(random_state=int(args.seed)),
+        dist_model=GradientBoostingRegressor(random_state=int(args.seed)),
+        n_classes=n_classes,
+    )
+
+    # multi_class убран (warning исчезнет), multinomial будет по умолчанию
+    models["linear"] = DualModel(
+        name="linear",
+        vec=DictVectorizer(sparse=True),
+        angle_model=LogisticRegression(
+            max_iter=400,
+            solver="lbfgs",
+        ),
+        dist_model=Ridge(alpha=1.0, random_state=int(args.seed)),
+        n_classes=n_classes,
+    )
+
+    # fit
+    for name, m in models.items():
+        if isinstance(m, DualModel):
+            m.fit(X_tr, y_tr, d_tr)
+
+    # eval
+    metrics: Dict[str, Dict[str, float]] = {}
+    for name, m in models.items():
+        metrics[name] = evaluate_model(m, X_te, y_te, d_te, n_classes=n_classes)
+
+    best_name = min(metrics.keys(), key=lambda k: metrics[k]["score"])
+    best_model = models[best_name]
+
+    # save
+    for name, m in models.items():
+        save_pickle(m, out_dir / f"{name}.pkl")
+    save_pickle(best_model, out_dir / "best.pkl")
+
+    meta = {
+        "csv": str(csv_path),
+        "angle_col": str(args.angle_col),
+        "dist_col": str(args.dist_col),
+        "bins_arg": int(args.bins),
+        "n_classes": int(n_classes),
+        "test_size": float(args.test_size),
+        "seed": int(args.seed),
+        "max_rows": int(args.max_rows),
+        "best_name": best_name,
+        "metrics": metrics,
+    }
+    (out_dir / "metrics.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    print(f"[train_models] saved models to: {out_dir}")
+    print(f"[train_models] best: {best_name} score={metrics[best_name]['score']:.6f}")
+    print(json.dumps(metrics, ensure_ascii=False, indent=2))
 
 
 if __name__ == "__main__":

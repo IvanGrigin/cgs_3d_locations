@@ -13,6 +13,7 @@ import time
 import secrets
 from typing import Any, Optional
 from pathlib import Path
+import importlib.util
 
 
 # ------------------------------------------------------------
@@ -33,6 +34,7 @@ SCENE_JSON = "data/output/scene_room_and_placements.json"  # room-spec + placeme
 IMODERN_ROOT_DEFAULT = "data/sourse/imodern"
 FUTURE_ROOT_DEFAULT = "data/sourse/3D-FRONT/3D-FUTURE-model"
 FUTURE_INFO_DEFAULT = "data/sourse/3D-FRONT/3D-FUTURE-model/model_info.json"
+FUTURE_CATEGORIES_PY_DEFAULT = "data/sourse/3D-FRONT/3D-FUTURE-model/categories.py"
 
 MAX_ATTEMPTS = 30
 
@@ -77,16 +79,19 @@ def fuzzy_score(q: str, name: str) -> float:
 
 
 # ------------------------------------------------------------
-# Типы (категории) по тексту
+# Типы (грубые категории) по тексту — только для подсказки выбора mesh
+# ВАЖНО: ключи здесь НЕ используются для генерации размеров в 3D-FUTURE
+# (размеры берутся по category из model_info.json / categories.py).
 # ------------------------------------------------------------
 _TYPE_KEYS = {
-    "bed":      {"кровать", "кроват", "двуспаль", "односпаль", "полутор", "трехспаль", "трёхспаль"},
-    "sofa":     {"диван", "реклайнер", "софа"},
-    "tv_stand": {"тумба", "тумбочка", "комод", "тв", "tv"},
-    "chair":    {"стул", "табурет"},
-    "armchair": {"кресло", "кресл"},
-    "table":    {"стол", "письменный", "журнальный", "обеденный", "раскладной", "консоль"},
-    "wardrobe": {"шкаф", "гардероб", "стеллаж", "витрина", "буфет", "полка", "тумба"},
+    "bed":      {"кровать", "кроват", "двуспаль", "односпаль", "полутор", "bunk", "couchbed"},
+    "sofa":     {"диван", "софа", "канапе"},
+    "tv_stand": {"тв", "tv", "tvstand", "тумба_тв", "тумба_под_тв", "тумба_твstand"},
+    "nightstand": {"тумбочка", "прикроват", "ночн"},
+    "chair":    {"стул", "табурет", "барстул"},
+    "armchair": {"кресло", "кресл", "armchair"},
+    "table":    {"стол", "письменный", "журнальный", "обеденный", "консоль", "desk", "table"},
+    "wardrobe": {"шкаф", "гардероб", "стеллаж", "витрина", "буфет", "полка", "комод", "сервант"},
     "lighting": {"лампа", "свет", "люстра", "бра", "торшер"},
 }
 
@@ -260,7 +265,7 @@ def _build_3dfuture_index(
 
 def _supercats_for_type(q_type: str | None) -> list[str]:
     """
-    Логика соответствия: внутренний тип -> super-category из 3D-FUTURE.
+    Внутренний грубый тип -> super-category из 3D-FUTURE.
     """
     if q_type == "chair":
         return ["Chair"]
@@ -272,7 +277,7 @@ def _supercats_for_type(q_type: str | None) -> list[str]:
         return ["Table", "Cabinet/Shelf/Desk"]  # coffee/side table иногда в Cabinet/Shelf/Desk
     if q_type == "bed":
         return ["Bed"]
-    if q_type in ("wardrobe", "tv_stand"):
+    if q_type in ("wardrobe", "tv_stand", "nightstand"):
         return ["Cabinet/Shelf/Desk"]
     if q_type == "lighting":
         return ["Lighting"]
@@ -280,18 +285,16 @@ def _supercats_for_type(q_type: str | None) -> list[str]:
 
 
 def _prefer_category_for_type(q_type: str | None, a: dict[str, Any]) -> bool:
-    """
-    Дополнительное уточнение внутри super-category, чтобы armchair != sofa, chair != stool и т.д.
-    Здесь только грубый фильтр, без жёстких требований.
-    """
     cat = (a.get("category") or "").lower()
 
+    if q_type == "nightstand":
+        return "nightstand" in cat
+    if q_type == "tv_stand":
+        return "tv stand" in cat or ("tv" in cat and "stand" in cat)
     if q_type == "armchair":
-        return "armchair" in cat or "chair" in cat
+        return "armchair" in cat
     if q_type == "chair":
         return "chair" in cat or "barstool" in cat or "stool" in cat
-    if q_type == "tv_stand":
-        return "tv" in cat or "stand" in cat or "console" in cat or "sideboard" in cat
     if q_type == "wardrobe":
         return "wardrobe" in cat or "bookcase" in cat or "shelf" in cat or "cabinet" in cat or "drawer" in cat or "sideboard" in cat
     if q_type == "table":
@@ -332,25 +335,20 @@ def resolve_mesh_path_3dfuture(
     q_type = _guess_type_from_text(query_name)
     supercats = set(_supercats_for_type(q_type))
 
-    # 1) кандидаты по super-category
     cands = [a for a in _3DFUTURE_ASSETS if a.get("super_category") in supercats]
     if not cands:
         cands = list(_3DFUTURE_ASSETS)
 
-    # 2) мягкое уточнение по category
     refined = [a for a in cands if _prefer_category_for_type(q_type, a)]
     if refined:
         cands = refined
 
-    # 3) если всё ещё очень много, слегка приоритезируем по “похожести” на текст запроса
-    # (это не поиск точного соответствия, только подсказка)
     scored = []
     for a in cands:
         name = f'{a.get("super_category","")} {a.get("category","")} {a.get("style","")}'
         scored.append((fuzzy_score(query_name, name), a))
     scored.sort(key=lambda x: x[0], reverse=True)
 
-    # берем верхнюю “корзину” и семплируем из неё, чтобы не получать всегда один и тот же
     top_k = min(200, len(scored))
     pool = [a for _s, a in scored[:top_k]] if top_k > 0 else cands
 
@@ -382,6 +380,213 @@ def _texture_dirs_for_3dfuture(meta: dict[str, Any] | None) -> list[str]:
 
 
 # ------------------------------------------------------------
+# 3D-FUTURE categories.py: чтение категорий (источник истины для имён категорий)
+# ------------------------------------------------------------
+_CATEGORIES_3D_LOADED: set[str] | None = None
+_SUPERCATEGORIES_3D_LOADED: set[str] | None = None
+
+
+def _load_3dfuture_categories_py(categories_py_path: str) -> tuple[set[str], set[str]]:
+    """
+    Загружаем data/sourse/3D-FRONT/3D-FUTURE-model/categories.py как модуль
+    и вытаскиваем _CATEGORIES_3D / _SUPER_CATEGORIES_3D.
+    Нужен для:
+      - валидации ключей (чтобы не держать «левые» категории)
+      - явного разделения размеров по category из файла.
+    """
+    p = Path(categories_py_path).resolve()
+    if not p.is_file():
+        return set(), set()
+
+    spec = importlib.util.spec_from_file_location("future_categories", str(p))
+    if spec is None or spec.loader is None:
+        return set(), set()
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)  # type: ignore[attr-defined]
+
+    cats = set()
+    supercats = set()
+
+    raw_cats = getattr(mod, "_CATEGORIES_3D", None)
+    raw_super = getattr(mod, "_SUPER_CATEGORIES_3D", None)
+
+    if isinstance(raw_cats, list):
+        for it in raw_cats:
+            if isinstance(it, dict) and isinstance(it.get("category"), str):
+                cats.add(it["category"])
+    if isinstance(raw_super, list):
+        for it in raw_super:
+            if isinstance(it, dict) and isinstance(it.get("category"), str):
+                supercats.add(it["category"])
+
+    return cats, supercats
+
+
+def _ensure_categories_loaded(categories_py_path: str) -> None:
+    global _CATEGORIES_3D_LOADED, _SUPERCATEGORIES_3D_LOADED
+    if _CATEGORIES_3D_LOADED is not None and _SUPERCATEGORIES_3D_LOADED is not None:
+        return
+    c, sc = _load_3dfuture_categories_py(categories_py_path)
+    _CATEGORIES_3D_LOADED = c
+    _SUPERCATEGORIES_3D_LOADED = sc
+
+
+# ------------------------------------------------------------
+# Реалистичные габариты по категориям 3D-FUTURE (мм)
+# ВАЖНО:
+# - ключи должны совпадать с 'category' из model_info.json / categories.py
+# - min/max используются как диапазон для семплирования в CubePlacement
+# ------------------------------------------------------------
+# Формат: "Category Name": ([min_x, min_y, min_z], [max_x, max_y, max_z])
+CATEGORY_DIM_MM: dict[str, tuple[list[int], list[int]]] = {
+    # Bed
+    "King-size Bed": ([2000, 1800, 400], [2300, 2100, 1100]),
+    "Single bed": ([1900,  900, 400], [2200, 1200, 1100]),
+    "Kids Bed": ([1500,  700, 350], [1900,  900,  900]),
+    "Bunk Bed": ([1900,  900, 1300], [2200, 1200, 1900]),
+    "Couch Bed": ([1800, 1200, 650], [2300, 1700, 1050]),
+    "Bed Frame": ([1900, 1400, 300], [2300, 2100,  800]),
+
+    # Cabinet/Shelf/Desk
+    "Nightstand": ([350, 350, 400], [650, 650, 750]),
+    "Wardrobe": ([800, 500, 1800], [2600, 800, 2800]),
+    "Bookcase / jewelry Armoire": ([600, 250, 1200], [1500, 550, 2400]),
+    "Drawer Chest / Corner cabinet": ([600, 350, 700], [1800, 650, 1500]),
+    "TV Stand": ([800, 350, 350], [2400, 600, 850]),
+    "Sideboard / Side Cabinet / Console Table": ([1000, 350, 650], [2400, 600, 1200]),
+    "Wine Cabinet": ([500, 300, 1200], [1400, 550, 2400]),
+    "Shoe Cabinet": ([600, 250, 800], [1400, 450, 1400]),
+    "Children Cabinet": ([600, 350, 800], [1400, 650, 1500]),
+    "Shelf": ([600, 200, 20], [2000, 450, 80]),  # подразумеваем настенную полку
+
+    # Tables (часть table живёт в Cabinet/Shelf/Desk в датасете)
+    "Coffee Table": ([700, 400, 300], [1500, 800, 550]),
+    "Corner/Side Table": ([350, 350, 450], [650, 650, 700]),
+    "Round End Table": ([350, 350, 450], [650, 650, 700]),
+
+    # Table
+    "Dining Table": ([1200, 700, 700], [2600, 1200, 800]),
+    "Desk": ([900, 450, 700], [2000, 850, 800]),
+    "Dressing Table": ([800, 350, 680], [1600, 600, 800]),
+    "Bar": ([900, 400, 900], [1800, 800, 1250]),
+
+    # Chair
+    "Dining Chair": ([400, 400, 800], [550, 550, 1050]),
+    "Lounge Chair / Cafe Chair / Office Chair": ([500, 500, 800], [900, 950, 1300]),
+    "Dressing Chair": ([450, 450, 800], [700, 750, 1150]),
+    "Classic Chinese Chair": ([450, 450, 850], [700, 700, 1250]),
+    "Barstool": ([350, 350, 650], [500, 500, 900]),
+    "Hanging Chair": ([800, 800, 1400], [1300, 1300, 2200]),
+    "Folding chair": ([400, 400, 750], [550, 550, 1000]),
+
+    # Sofa
+    "Three-Seat / Multi-seat Sofa": ([1800, 800, 700], [2800, 1100, 1050]),
+    "Loveseat Sofa": ([1200, 800, 700], [2000, 1100, 1050]),
+    "L-shaped Sofa": ([2200, 1400, 700], [3600, 2300, 1050]),
+    "U-shaped Sofa": ([2800, 1600, 700], [4500, 2800, 1050]),
+    "Lazy Sofa": ([700, 800, 650], [1200, 1300, 950]),
+    "Chaise Longue Sofa": ([1600, 800, 650], [2400, 1100, 950]),
+    "armchair": ([700, 700, 700], [1200, 1200, 1100]),
+
+    # Pier/Stool
+    "Footstool / Sofastool / Bed End Stool / Stool": ([350, 350, 300], [1400, 700, 550]),
+
+    # Lighting
+    "Pendant Lamp": ([300, 300, 200], [900, 900, 900]),
+    "Ceiling Lamp": ([300, 300, 150], [1300, 1300, 450]),
+    "Floor Lamp": ([250, 250, 1200], [650, 650, 2200]),
+    "Wall Lamp": ([150, 100, 150], [450, 300, 600]),
+}
+
+SUPER_CATEGORY_DIM_MM: dict[str, tuple[list[int], list[int]]] = {
+    "Bed": ([1800, 900, 350], [2400, 2100, 1200]),
+    "Cabinet/Shelf/Desk": ([350, 250, 350], [2600, 900, 2800]),
+    "Chair": ([350, 350, 650], [900, 950, 2200]),
+    "Table": ([700, 350, 650], [2600, 1200, 1250]),
+    "Sofa": ([700, 700, 650], [4500, 2800, 1100]),
+    "Pier/Stool": ([300, 300, 250], [1600, 800, 650]),
+    "Lighting": ([150, 100, 150], [1300, 1300, 2200]),
+    "Other": ([600, 400, 600], [1200, 800, 1000]),
+}
+
+
+CATEGORY_CONSTRAINTS: dict[str, dict[str, Any]] = {
+    # Beds: обычно у стены (изголовье)
+    "King-size Bed": {"touch_wall": {"sides": ["back", "left", "right"]}},
+    "Single bed": {"touch_wall": {"sides": ["back", "left", "right"]}},
+    "Kids Bed": {"touch_wall": {"sides": ["back", "left", "right"]}},
+    "Bunk Bed": {"touch_wall": {"sides": ["back", "left", "right"]}},
+    "Couch Bed": {"touch_wall": {"sides": ["back"]}},
+    "Bed Frame": {"touch_wall": {"sides": ["back", "left", "right"]}},
+
+    # Крупные корпусные — у стены
+    "Wardrobe": {"touch_wall": {"sides": ["back"]}},
+    "Bookcase / jewelry Armoire": {"touch_wall": {"sides": ["back"]}},
+    "Sideboard / Side Cabinet / Console Table": {"touch_wall": {"sides": ["back"]}},
+    "Wine Cabinet": {"touch_wall": {"sides": ["back"]}},
+    "Shoe Cabinet": {"touch_wall": {"sides": ["back"]}},
+    "Children Cabinet": {"touch_wall": {"sides": ["back"]}},
+    "TV Stand": {"touch_wall": {"sides": ["back"]}},
+
+    # Полки — настенные
+    "Shelf": {"mount_type": "wall", "mount_height_m": 1.5, "mount_anchor": "center"},
+
+    # Свет
+    "Pendant Lamp": {"mount_type": "ceiling"},
+    "Ceiling Lamp": {"mount_type": "ceiling"},
+    "Floor Lamp": {"mount_type": "floor"},
+    "Wall Lamp": {"mount_type": "wall", "mount_height_m": 1.6, "mount_anchor": "center"},
+}
+
+
+def _clamp_ranges_mm(
+    base_min: list[int],
+    base_max: list[int],
+    cat_min: list[int],
+    cat_max: list[int],
+) -> tuple[list[int], list[int]]:
+    """
+    Пересечение диапазонов. Если пересечение пустое — берём категорийный диапазон (как "источник истины").
+    """
+    new_min = [max(base_min[i], cat_min[i]) for i in range(3)]
+    new_max = [min(base_max[i], cat_max[i]) for i in range(3)]
+    if any(new_min[i] > new_max[i] for i in range(3)):
+        return list(cat_min), list(cat_max)
+    return new_min, new_max
+
+
+def _category_size_and_constraints_from_meta(
+    meta: dict[str, Any] | None,
+    categories_py_path: str,
+) -> tuple[Optional[tuple[list[int], list[int]]], dict[str, Any]]:
+    """
+    Возвращает (диапазон_мм_по_категории_или_super, constraints_по_категории)
+    """
+    if not meta:
+        return None, {}
+
+    _ensure_categories_loaded(categories_py_path)
+
+    cat = meta.get("category")
+    sc = meta.get("super_category")
+
+    constraints: dict[str, Any] = {}
+
+    # constraints по category (если знаем)
+    if isinstance(cat, str) and cat in CATEGORY_CONSTRAINTS:
+        constraints = dict(CATEGORY_CONSTRAINTS[cat])
+
+    # диапазон: сначала category, потом super-category
+    if isinstance(cat, str) and cat in CATEGORY_DIM_MM:
+        return CATEGORY_DIM_MM[cat], constraints
+
+    if isinstance(sc, str) and sc in SUPER_CATEGORY_DIM_MM:
+        return SUPER_CATEGORY_DIM_MM[sc], constraints
+
+    return None, constraints
+
+
+# ------------------------------------------------------------
 # Загрузка furniture_types.json
 # ------------------------------------------------------------
 def load_furniture_db() -> list[dict[str, Any]]:
@@ -403,22 +608,34 @@ def find_best_spec_from_db(query: str, db: list[dict[str, Any]]) -> dict[str, An
 
 
 # ------------------------------------------------------------
-# Пресеты fallback (мм)
+# Fallback-пресеты (мм) — используются, если нет БД и/или нет meta category
 # ------------------------------------------------------------
 PRESETS = {
-    "кровать":        (([1900, 1400, 450], [2200, 1800, 900]), {"touch_wall": {"sides": ["back", "left", "right"]}}),
-    "двуспальная":    (([1900, 1600, 450], [2200, 2000, 900]), {"touch_wall": {"sides": ["back", "left", "right"]}}),
-    "односпальная":   (([1800,  900, 450], [2000, 1200, 900]), {"touch_wall": {"sides": ["back", "left", "right"]}}),
-    "тумбочка":       (([350,   350, 400], [600,  500, 700]),  {"mount_type": "floor"}),
-    "комод":          (([800,   400, 700], [1800, 600, 1200]), {"mount_type": "floor"}),
-    "диван":          (([1700,  800, 700], [2600, 1000, 950]), {"touch_wall": {"sides": ["back"]}}),
-    "кресло":         (([700,   700, 700], [1100, 900, 1100]), {"mount_type": "floor"}),
-    "стол":           (([800,   500, 720], [2000, 900, 780]),  {"mount_type": "floor"}),
-    "стул":           (([350,   350, 450], [500,  500, 1000]), {"mount_type": "floor"}),
-    "шкаф":           (([800,   500, 2000],[2400, 800, 2700]), {"touch_wall": {"sides": ["back"]}}),
-    "полка":          (([400,    200, 30], [1600, 400, 60]),   {"mount_type": "wall", "mount_height_m": 1.5, "mount_anchor": "center"}),
-    "люстра":         (([300,   300, 200], [1200, 1200, 800]), {"mount_type": "ceiling"}),
-    "лампа":          (([200,   200, 200], [800,  800, 1800]), {"mount_type": "floor"}),
+    # beds
+    "двуспальная":    (([2000, 1600, 400], [2300, 2000, 1100]), {"touch_wall": {"sides": ["back", "left", "right"]}}),
+    "односпальная":   (([1900,  900, 400], [2200, 1200, 1100]), {"touch_wall": {"sides": ["back", "left", "right"]}}),
+    "кровать":        (([1900, 1400, 400], [2300, 2000, 1100]), {"touch_wall": {"sides": ["back", "left", "right"]}}),
+
+    # storage
+    "тумбочка":       (([350,  350, 400], [650,  650, 750]),  {"mount_type": "floor"}),
+    "комод":          (([600,  350, 700], [1800, 650, 1500]), {"mount_type": "floor"}),
+    "тв":             (([800,  350, 350], [2400, 600, 850]),  {"touch_wall": {"sides": ["back"]}}),
+    "шкаф":           (([800,  500, 1800], [2600, 800, 2800]), {"touch_wall": {"sides": ["back"]}}),
+    "полка":          (([600,  200, 20],  [2000, 450, 80]),   {"mount_type": "wall", "mount_height_m": 1.5, "mount_anchor": "center"}),
+
+    # seating
+    "диван":          (([1800, 800, 700], [2800, 1100, 1050]), {"touch_wall": {"sides": ["back"]}}),
+    "кресло":         (([700,  700, 700], [1200, 1200, 1100]), {"mount_type": "floor"}),
+    "стул":           (([400,  400, 800], [550,  550, 1050]), {"mount_type": "floor"}),
+
+    # tables
+    "стол":           (([900,  450, 700], [2000, 850, 800]),  {"mount_type": "floor"}),
+    "журнальный":     (([700,  400, 300], [1500, 800, 550]),  {"mount_type": "floor"}),
+
+    # lighting
+    "люстра":         (([300,  300, 150], [1300, 1300, 450]), {"mount_type": "ceiling"}),
+    "лампа":          (([250,  250, 1200],[650,  650, 2200]), {"mount_type": "floor"}),
+    "бра":            (([150,  100, 150], [450,  300, 600]),  {"mount_type": "wall", "mount_height_m": 1.6, "mount_anchor": "center"}),
 }
 
 
@@ -456,14 +673,17 @@ def generate_objects_json(
     future_style: Optional[str],
     future_material: Optional[str],
     future_theme: Optional[str],
+    future_categories_py: str = FUTURE_CATEGORIES_PY_DEFAULT,
 ) -> None:
     """
-    Логика:
-      - габариты берём из furniture_types.json (если нашли) иначе fallback пресеты
-      - mesh_path выбираем из источника:
-          imodern: скан ФС + ключи по типам
-          3dfuture: model_info + super-category/category фильтры
-      - seed кладём в objects.json (CubePlacement использует его как RNG seed расстановки)
+    Ключевая правка по запросу:
+      - Для 3D-FUTURE габариты нормируются по реальным диапазонам КОНКРЕТНОЙ category
+        (категории — из categories.py и model_info.json).
+      - Это устраняет ситуации типа:
+          * King-size Bed «сжимается» до Single bed
+          * Nightstand «раздувается» до Wardrobe
+      - База furniture_types.json остаётся источником «кастомных» размеров, но жёстко
+        ограничивается диапазоном категории (или super-category как запасной вариант).
     """
     db = load_furniture_db()
     rng = random.Random(int(seed)) if seed is not None else random.Random()
@@ -505,16 +725,37 @@ def generate_objects_json(
         else:
             raise ValueError(f"Unknown asset_source: {asset_source}")
 
+        # --- Габариты и constraints ---
+        base_min = list(picked.get("min_size_mm", [600, 400, 600]))
+        base_max = list(picked.get("max_size_mm", [1200, 800, 1000]))
+        base_constraints = dict(picked.get("constraints", {}))
+
+        if asset_source == "3dfuture":
+            cat_pack, cat_constraints = _category_size_and_constraints_from_meta(
+                meta=src_meta,
+                categories_py_path=future_categories_py,
+            )
+            if cat_pack is not None:
+                cat_min, cat_max = cat_pack
+                base_min, base_max = _clamp_ranges_mm(base_min, base_max, cat_min, cat_max)
+
+            # constraints по категории должны доминировать (например, Shelf=wall, Wardrobe=touch_wall)
+            # но пользовательские можно сохранить, если они не конфликтуют.
+            if cat_constraints:
+                merged = dict(base_constraints)
+                merged.update(cat_constraints)
+                base_constraints = merged
+
         mesh_texture_dirs = (
             _texture_dirs_for_3dfuture(src_meta) if asset_source == "3dfuture" else _texture_dirs_for_mesh(mesh_path)
         )
 
         item = {
-            "name": picked["name"],
-            "min_size_mm": picked["min_size_mm"],
-            "max_size_mm": picked["max_size_mm"],
+            "name": picked.get("name", raw_name),
+            "min_size_mm": base_min,
+            "max_size_mm": base_max,
             "color": picked.get("color", [0.7, 0.7, 0.7]),
-            "constraints": picked.get("constraints", {}),
+            "constraints": base_constraints,
             "mesh_path": mesh_path,
             "mesh_fit_mode": "uniform",
             "mesh_texture_dirs": mesh_texture_dirs,
@@ -599,6 +840,7 @@ def run_pipeline_for_mode(room_path: str, mode: str, vis_opts: argparse.Namespac
                     future_style=vis_opts.future_style,
                     future_material=vis_opts.future_material,
                     future_theme=vis_opts.future_theme,
+                    future_categories_py=vis_opts.future_categories_py,
                 )
             else:
                 if mode == "random":
@@ -677,6 +919,7 @@ def build_cli():
 
     p.add_argument("--future-root", default=FUTURE_ROOT_DEFAULT)
     p.add_argument("--future-info", default=FUTURE_INFO_DEFAULT)
+    p.add_argument("--future-categories-py", default=FUTURE_CATEGORIES_PY_DEFAULT)
 
     p.add_argument("--future-style", default=None)     # например "Modern"
     p.add_argument("--future-material", default=None)  # например "Wood"
@@ -712,6 +955,7 @@ def main():
             future_style=args.future_style,
             future_material=args.future_material,
             future_theme=args.future_theme,
+            future_categories_py=args.future_categories_py,
         )
 
     run_pipeline_for_mode(room_path, mode="random",  vis_opts=args, requested_items=requested_items)
