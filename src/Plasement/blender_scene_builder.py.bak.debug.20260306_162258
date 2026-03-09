@@ -2459,19 +2459,12 @@ def build_scene(
         placed_ok = False
 
         if mesh_path and os.path.isfile(mesh_path):
-            print(f"[DBG] placement name={name}")
-            print(f"[DBG] mesh_path={mesh_path}")
             ext = os.path.splitext(mesh_path)[1].lower()
             if ext != ".obj":
                 print(f"⚠️ {name}: mesh_path не OBJ ({ext}). Сейчас поддерживается только .obj: {mesh_path}")
             else:
                 try:
-                    before_names = set(o.name for o in bpy.data.objects)
                     objs = import_obj(mesh_path)
-                    after_names = set(o.name for o in bpy.data.objects)
-                    created_names = sorted(after_names - before_names)
-                    print(f"[DBG] import_obj returned {0 if objs is None else len(objs)} objects for {name}")
-                    print(f"[DBG] bpy created {len(created_names)} objects for {name}: {created_names[:20]}")
                 except Exception as e:
                     print(f"⚠️ {name}: import OBJ failed: {e}")
                     objs = []

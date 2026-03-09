@@ -1,0 +1,205 @@
+#!/usr/bin/env python3
+# src/Plasement/run_diffuscene_remote.py
+# -*- coding: utf-8 -*-
+
+
+import argparse
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+from typing import Any, Dict, List
+
+
+def load_json(path: Path) -> Any:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def save_json(path: Path, data: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def run(cmd: List[str], **kwargs) -> None:
+    print("▶", " ".join(cmd))
+    subprocess.run(cmd, check=True, **kwargs)
+
+
+def extract_class_name(obj: Dict[str, Any]) -> str:
+    for key in ["class_name", "category", "type", "semantic_class"]:
+        v = obj.get(key)
+        if isinstance(v, str) and v.strip():
+            return v.strip()
+    raise ValueError(f"Не удалось определить class_name для объекта: {obj}")
+
+
+def extract_jid(obj: Dict[str, Any]) -> str:
+    for key in ["jid", "model_jid", "future_jid"]:
+        v = obj.get(key)
+        if isinstance(v, str) and v.strip():
+            return v.strip()
+    return ""
+
+
+def extract_size_m(obj: Dict[str, Any]) -> List[float]:
+    for key in ["size_m", "bbox_size_m", "size"]:
+        v = obj.get(key)
+        if isinstance(v, list) and len(v) == 3:
+            return [float(v[0]), float(v[1]), float(v[2])]
+    raise ValueError(f"Не удалось определить size_m для объекта: {obj}")
+
+
+def extract_translation_m(obj: Dict[str, Any]) -> List[float]:
+    for key in ["translation_m", "position_m", "position"]:
+        v = obj.get(key)
+        if isinstance(v, list) and len(v) == 3:
+            return [float(v[0]), float(v[1]), float(v[2])]
+    return [0.0, 0.0, 0.0]
+
+
+def extract_yaw_rad(obj: Dict[str, Any]) -> float:
+    for key in ["yaw_rad", "rotation_yaw_rad", "angle_rad"]:
+        v = obj.get(key)
+        if isinstance(v, (int, float)):
+            return float(v)
+    return 0.0
+
+
+def convert_local_objects_to_server_input(src_objects: Dict[str, Any]) -> Dict[str, Any]:
+    src_items = src_objects.get("objects") or src_objects.get("items") or src_objects.get("placements") or []
+    if not isinstance(src_items, list):
+        raise ValueError("objects.json: поле objects/items/placements должно быть списком")
+
+    out_items = []
+    for obj in src_items:
+        class_name = extract_class_name(obj)
+        jid = extract_jid(obj)
+        size_m = extract_size_m(obj)
+        translation_m = extract_translation_m(obj)
+        yaw_rad = extract_yaw_rad(obj)
+
+        item = {
+            "class_name": class_name,
+            "size_m": size_m,
+            "yaw_rad": yaw_rad,
+            "translation_m": translation_m,
+        }
+        if jid:
+            item["jid"] = jid
+
+        out_items.append(item)
+
+    return {
+        "version": "1.0",
+        "domain": "bedroom",
+        "objects": out_items,
+    }
+
+
+def build_local_placement_from_server_result(
+    local_objects: Dict[str, Any],
+    server_placements: Dict[str, Any],
+) -> Dict[str, Any]:
+    src_items = local_objects.get("objects") or local_objects.get("items") or local_objects.get("placements") or []
+    result_items = server_placements.get("items") or server_placements.get("placements") or []
+
+    if len(result_items) != len(src_items):
+        raise ValueError(
+            f"Количество объектов не совпадает: local={len(src_items)}, server={len(result_items)}"
+        )
+
+    placements = []
+    for i, (src_obj, pred) in enumerate(zip(src_items, result_items)):
+        pos_xy = pred["position_room_xy_m"]
+        size_m = pred["size_m"]
+        yaw_rad = float(pred["yaw_rad"])
+
+        item = dict(src_obj)
+        item["placement_source"] = "diffuscene_remote"
+        item["position_room_xy_m"] = [float(pos_xy[0]), float(pos_xy[1])]
+        item["z_floor_m"] = float(pred.get("z_floor_m", 0.0))
+        item["size_m"] = [float(size_m[0]), float(size_m[1]), float(size_m[2])]
+        item["yaw_rad"] = yaw_rad
+        item["yaw_deg"] = yaw_rad * 180.0 / 3.141592653589793
+        item["server_class_name"] = pred.get("class_name")
+        item["server_index"] = pred.get("i", i)
+
+        placements.append(item)
+
+    return {
+        "placer": "diffuscene_remote",
+        "placements": placements,
+        "server_raw": server_placements,
+    }
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--room", required=True, help="Локальный room.json")
+    ap.add_argument("--objects", required=True, help="Локальный objects.json")
+    ap.add_argument("--out", required=True, help="Выходной placement json")
+    ap.add_argument("--server-key", default=str(Path.home() / ".ssh" / "id_ed25519"))
+    ap.add_argument("--server-user", default="root")
+    ap.add_argument("--server-host", default="207.102.87.207")
+    ap.add_argument("--server-port", default="40527")
+    ap.add_argument("--remote-runner", default="run_room_layout_remote.sh")
+    ap.add_argument("--run-name", default="")
+    args = ap.parse_args()
+
+    room_path = Path(args.room).expanduser().resolve()
+    objects_path = Path(args.objects).expanduser().resolve()
+    out_path = Path(args.out).expanduser().resolve()
+
+    if not room_path.is_file():
+        raise FileNotFoundError(room_path)
+    if not objects_path.is_file():
+        raise FileNotFoundError(objects_path)
+
+    local_objects = load_json(objects_path)
+    server_input = convert_local_objects_to_server_input(local_objects)
+
+    with tempfile.TemporaryDirectory(prefix="diffuscene_remote_") as td:
+        td_path = Path(td)
+        server_objects_path = td_path / "objects_for_server.json"
+        save_json(server_objects_path, server_input)
+
+        run_name = args.run_name.strip()
+        cmd = [
+            args.remote_runner,
+            str(room_path),
+            str(server_objects_path),
+        ]
+        if run_name:
+            cmd.append(run_name)
+
+        run(cmd)
+
+        local_result_dir = Path.cwd() / (run_name if run_name else sorted(
+            [p.name for p in Path.cwd().iterdir() if p.is_dir()],
+            key=lambda x: x
+        )[-1])
+
+        placements_path = local_result_dir / "placements_room.json"
+        if not placements_path.is_file():
+            raise FileNotFoundError(f"Не найден placements_room.json в {local_result_dir}")
+
+        server_placements = load_json(placements_path)
+        placement_result = build_local_placement_from_server_result(local_objects, server_placements)
+        save_json(out_path, placement_result)
+
+        check_path = local_result_dir / "placements_room_check.json"
+        if check_path.is_file():
+            shutil.copy2(check_path, out_path.with_name(out_path.stem + "_check.json"))
+
+        pred_path = local_result_dir / "pred_bbox.json"
+        if pred_path.is_file():
+            shutil.copy2(pred_path, out_path.with_name(out_path.stem + "_pred_bbox.json"))
+
+        print(f"OK: saved placement -> {out_path}")
+
+
+if __name__ == "__main__":
+    main()

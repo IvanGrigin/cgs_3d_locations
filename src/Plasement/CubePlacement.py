@@ -201,6 +201,332 @@ def _norm_deg90(rot: float) -> int:
     r = int(round(rot)) % 360
     return min(ALLOWED_ROTATIONS, key=lambda x: abs(x - r))
 
+def _item_sort_key(item: Item) -> Tuple[int, float, float, float]:
+    """
+    Сначала ставим самые важные и самые большие предметы.
+    Приоритет:
+      0 -> wardrobe / bed
+      1 -> sofa / table / dresser
+      2 -> nightstand / chair / armchair
+      3 -> lighting / прочее
+
+    Затем сортировка по площади основания, объёму, максимальному габариту.
+    """
+    kind = _detect_kind(item.name)
+
+    if kind in {"wardrobe", "bed"}:
+        priority = 0
+    elif kind in {"sofa", "table", "dresser"}:
+        priority = 1
+    elif kind in {"nightstand", "armchair"}:
+        priority = 2
+    else:
+        priority = 3
+
+    footprint = item.sx * item.sy
+    volume = item.sx * item.sy * item.sz
+    max_dim = max(item.sx, item.sy, item.sz)
+
+    return (priority, -footprint, -volume, -max_dim)
+
+
+def _candidate_wall_sides_for_item(item: Item, extra: Dict[str, Any]) -> List[str]:
+    """
+    Порядок перебора сторон стены.
+    Для больших предметов задаём разумный приоритет.
+    """
+    kind = _detect_kind(item.name)
+
+    tw = (extra or {}).get("touch_wall")
+    if isinstance(tw, dict):
+        if tw.get("side"):
+            return [str(tw["side"]).lower().strip()]
+        if isinstance(tw.get("sides"), list) and tw["sides"]:
+            return [str(x).lower().strip() for x in tw["sides"] if str(x).strip()]
+
+    sides = (extra or {}).get("touch_wall_sides")
+    if isinstance(sides, list) and sides:
+        return [str(x).lower().strip() for x in sides if str(x).strip()]
+
+    if kind == "wardrobe":
+        return ["back", "left", "right", "front"]
+    if kind == "bed":
+        # кровать чаще всего к дальней или боковой стене
+        return ["back", "left", "right", "front"]
+
+    return ["back", "left", "right", "front"]
+
+
+def _bed_rotations_for_wall_side(wall_side: str, forward_axis: str = "+Y") -> List[Tuple[int, str]]:
+    """
+    Для кровати разрешаем два типа постановки:
+    1) изголовьем/спинкой к стене
+    2) боком к стене
+
+    Возвращаем список пар:
+      (rotation, local_back_side)
+
+    local_back_side — какая ЛОКАЛЬНАЯ сторона предмета считается "спинкой",
+    которая должна касаться стены после данного rotation.
+    """
+    out: List[Tuple[int, str]] = []
+
+    # Основной сценарий: локальная back прижата к выбранной стене
+    main_rot = rotation_for_back_to_wall(wall_side, forward_axis=forward_axis)
+    out.append((main_rot, "back"))
+
+    # Дополнительный сценарий: кровать боком к стене
+    # Если кровать стоит боком, то к стене может смотреть либо левый, либо правый бок.
+    if wall_side in ("front", "back"):
+        side_rots = [
+            (_norm_deg90((90 + _axis_to_rot_offset(forward_axis)) % 360), "left"),
+            (_norm_deg90((270 + _axis_to_rot_offset(forward_axis)) % 360), "right"),
+        ]
+    else:
+        side_rots = [
+            (_norm_deg90((0 + _axis_to_rot_offset(forward_axis)) % 360), "left"),
+            (_norm_deg90((180 + _axis_to_rot_offset(forward_axis)) % 360), "right"),
+        ]
+
+    for rot, local_back_side in side_rots:
+        if (rot, local_back_side) not in out:
+            out.append((rot, local_back_side))
+
+    return out
+
+
+def _candidate_rotations_for_item(
+    item: Item,
+    wall_side: Optional[str],
+    extra: Dict[str, Any],
+) -> List[Tuple[int, str]]:
+    """
+    Возвращает список кандидатов в формате:
+      (rotation, local_back_side)
+
+    local_back_side:
+      - какая локальная сторона предмета считается той самой "спинкой",
+        которую мы хотим прижать к wall_side
+      - для обычного случая это "back"
+      - для кровати боком это может быть "left" или "right"
+    """
+    forward_axis = str((extra or {}).get("forward_axis", "+Y"))
+    kind = _detect_kind(item.name)
+
+    if wall_side is not None:
+        if kind == "bed":
+            return _bed_rotations_for_wall_side(wall_side, forward_axis=forward_axis)
+        return [(rotation_for_back_to_wall(wall_side, forward_axis=forward_axis), "back")]
+
+    return [(rot, "back") for rot in ALLOWED_ROTATIONS]
+
+
+def _try_place_candidate(
+    room: Room,
+    item: Item,
+    placed: List[PlacedItem],
+    wall_side: Optional[str],
+    rotation: int,
+    base_cx: float,
+    base_cy: float,
+) -> Optional[PlacedItem]:
+    """
+    Единая попытка поставить один предмет.
+
+    Важно:
+    - для потолочных светильников позиция выбирается специальным образом:
+      максимально ровно по потолку, подальше от стен и других ламп;
+    - для остальной мебели логика прежняя.
+    """
+    rx, ry = rotated_size(item.sx, item.sy, rotation)
+    cz = resolve_vertical_center(room, item)
+
+    # ------------------------------------------------------------
+    # Спец-логика для потолочных светильников
+    # ------------------------------------------------------------
+    if _is_ceiling_light(item):
+        best_pos = _best_ceiling_position(
+            room=room,
+            item=item,
+            placed=placed,
+            rotation=rotation,
+        )
+        if best_pos is None:
+            return None
+
+        cx, cy = best_pos
+        candidate = PlacedItem(item, (cx, cy, cz), rotation, None)
+        box = candidate.aabb()
+
+        if not inside_room(box, room):
+            return None
+
+        if any(aabb_intersect(box, other.aabb()) for other in placed):
+            return None
+
+        if not validate_clearance(candidate, room, placed):
+            return None
+
+        if item.extra.get("mount_type") == "ceiling" or item.extra.get("under_ceiling"):
+            if abs(box["z_max"] - room.z_max) > 2 * EPS_Z:
+                return None
+
+        return candidate
+
+    # ------------------------------------------------------------
+    # Обычная логика для мебели
+    # ------------------------------------------------------------
+    cx, cy = clamp_inside_room_xy(room, base_cx, base_cy, rx, ry)
+
+    if wall_side is not None:
+        if getattr(room, "poly_source", "") == "roomspec" and getattr(room, "floor_polygon", None):
+            pos = _sample_touch_wall_position_poly(
+                room, rx, ry, cz, item.sz, rotation, wall_side, wall_margin=WALL_MARGIN
+            )
+            if pos is None:
+                return None
+            cx, cy = pos
+        else:
+            cx, cy = _apply_touch_wall_lock(room, cx, cy, rx, ry, wall_side, wall_margin=WALL_MARGIN)
+
+    cx, cy = clamp_inside_room_xy(room, cx, cy, rx, ry)
+
+    candidate = PlacedItem(item, (cx, cy, cz), rotation, wall_side)
+    box = candidate.aabb()
+
+    if not inside_room(box, room):
+        return None
+
+    if any(aabb_intersect(box, other.aabb()) for other in placed):
+        return None
+
+    if not validate_clearance(candidate, room, placed):
+        return None
+
+    extra = item.extra or {}
+    if wall_side is not None and getattr(room, "poly_source", "") != "roomspec":
+        if extra.get("touch_wall") and not is_side_touching_wall(box, wall_side, room):
+            return None
+
+    if (
+        extra.get("mount_type") == "floor"
+        or (isinstance(extra.get("touch_floor"), dict) and extra["touch_floor"].get("side") == "bottom")
+    ):
+        if abs(box["z_min"] - room.z_min) > 2 * EPS_Z:
+            return None
+
+    return candidate
+
+def _distance_point_to_segment(px: float, py: float, a: Tuple[float, float], b: Tuple[float, float]) -> float:
+    qx, qy = _closest_point_on_segment(px, py, a, b)
+    return math.hypot(px - qx, py - qy)
+
+
+def _nearest_wall_side_bbox(room: Room, cx: float, cy: float) -> str:
+    """
+    Для bbox-комнаты возвращает ближайшую стену:
+      front -> y_min
+      back  -> y_max
+      left  -> x_min
+      right -> x_max
+    """
+    dists = {
+        "front": abs(cy - room.y_min),
+        "back": abs(room.y_max - cy),
+        "left": abs(cx - room.x_min),
+        "right": abs(room.x_max - cx),
+    }
+    return min(dists, key=dists.get)
+
+
+def _nearest_wall_side_poly(room: Room, cx: float, cy: float) -> str:
+    """
+    Для roomspec-полигона:
+    1) находим ближайшее ребро полигона,
+    2) классифицируем его как front/back/left/right по направлению inward normal.
+    """
+    poly = getattr(room, "floor_polygon", None)
+    if not poly:
+        return _nearest_wall_side_bbox(room, cx, cy)
+
+    best_edge = None
+    best_dist = float("inf")
+
+    for a, b in _poly_edges(poly):
+        d = _distance_point_to_segment(cx, cy, a, b)
+        if d < best_dist:
+            best_dist = d
+            best_edge = (a, b)
+
+    if best_edge is None:
+        return _nearest_wall_side_bbox(room, cx, cy)
+
+    a, b = best_edge
+    nx, ny = _edge_inward_normal(poly, a, b)
+
+    # inward normal показывает, куда должен смотреть "перед" предмета
+    # классифицируем по доминирующей компоненте
+    if abs(nx) >= abs(ny):
+        return "left" if nx > 0 else "right"
+    else:
+        return "front" if ny > 0 else "back"
+
+
+def choose_nearest_wall_side(room: Room, cx: float, cy: float) -> str:
+    """
+    Единая функция выбора ближайшей стены комнаты.
+    Потом её легко править отдельно.
+    """
+    if getattr(room, "poly_source", "") == "roomspec" and getattr(room, "floor_polygon", None):
+        return _nearest_wall_side_poly(room, cx, cy)
+    return _nearest_wall_side_bbox(room, cx, cy)
+
+
+def choose_rotation_opposite_to_nearest_wall(
+    room: Room,
+    cx: float,
+    cy: float,
+    forward_axis: str = "+Y",
+) -> int:
+    """
+    Передняя часть предмета направляется ПРОТИВОПОЛОЖНО ближайшей стене,
+    то есть внутрь комнаты.
+
+    Если ближайшая стена:
+      front -> forward +Y -> rot 0
+      back  -> forward -Y -> rot 180
+      left  -> forward +X -> rot 90
+      right -> forward -X -> rot 270
+    """
+    nearest_side = choose_nearest_wall_side(room, cx, cy)
+    return rotation_for_back_to_wall(nearest_side, forward_axis=forward_axis)
+
+
+def choose_wall_contact_side(extra: Dict[str, Any]) -> Optional[str]:
+    """
+    Отдельная функция выбора стороны для touch_wall.
+    Сейчас логика простая:
+      - если задан side -> берём его
+      - если задан список sides -> берём первый
+      - иначе берём первый из touch_wall_sides
+    Сделано детерминированно, без random, чтобы потом было проще подправлять.
+    """
+    tw = (extra or {}).get("touch_wall")
+    if not tw:
+        return None
+
+    if isinstance(tw, dict):
+        if tw.get("side"):
+            return str(tw["side"]).lower().strip()
+
+        if isinstance(tw.get("sides"), list) and tw["sides"]:
+            return str(tw["sides"][0]).lower().strip()
+
+    sides = (extra or {}).get("touch_wall_sides", ["front", "back", "left", "right"])
+    if isinstance(sides, list) and sides:
+        return str(sides[0]).lower().strip()
+
+    return None
 
 # ============================================================
 # ПОЛИГОН-СТЕНЫ (для roomspec floor_polygon)
@@ -280,6 +606,19 @@ def _closest_point_on_segment(px: float, py: float, a: Tuple[float, float], b: T
     t = _clamp(t, 0.0, 1.0)
     return ax + t * vx, ay + t * vy
 
+def _support_distance_along_normal(nx: float, ny: float, rx: float, ry: float) -> float:
+    """
+    Полуразмер AABB вдоль направления нормали (nx, ny).
+
+    Для осевых нормалей:
+      - вертикальная стена -> ry / 2
+      - горизонтальная стена -> rx / 2
+
+    В общем случае для AABB:
+      extent = 0.5 * (|nx| * rx + |ny| * ry)
+    """
+    return 0.5 * (abs(nx) * rx + abs(ny) * ry)
+
 
 def _project_to_wall_poly(
     room: Room,
@@ -291,8 +630,14 @@ def _project_to_wall_poly(
     wall_margin: float = WALL_MARGIN,
 ) -> Tuple[float, float]:
     """
-    Проекция точки (cx,cy) на выбранное ребро "стены" и сдвиг внутрь.
-    Используется в relax_layout, чтобы предмет не отлипал от стены в roomspec.
+    Проекция точки (cx, cy) на выбранное ребро "стены" и сдвиг внутрь.
+
+    Важно:
+    раньше offset считался как 0.5 * max(rx, ry), что неверно для длинных предметов,
+    если стена касается короткой стороны AABB. Из-за этого шкафы могли оставаться
+    далеко от стены.
+
+    Теперь берём точный полуразмер AABB вдоль inward-normal стены.
     """
     poly = getattr(room, "floor_polygon", None)
     if not poly:
@@ -305,15 +650,41 @@ def _project_to_wall_poly(
 
     qx, qy = _closest_point_on_segment(cx, cy, a, b)
 
-    # Сдвигаем внутрь примерно на пол-диагонали AABB по XY, чтобы AABB не пересекал границу.
-    # Это эвристика; финальный контроль — inside_room().
-    offset = 0.5 * max(rx, ry) + wall_margin
+    offset = _support_distance_along_normal(nx, ny, rx, ry) + wall_margin
     ncx = qx + nx * offset
     ncy = qy + ny * offset
 
     ncx, ncy = clamp_inside_room_xy(room, ncx, ncy, rx, ry)
     return ncx, ncy
 
+def _poly_wall_contact_gap(
+    room: Room,
+    cx: float,
+    cy: float,
+    rx: float,
+    ry: float,
+    wall_side: str,
+) -> Optional[float]:
+    """
+    Возвращает зазор между AABB предмета и выбранной polygon-стеной.
+    Чем ближе к 0, тем лучше контакт.
+
+    Если полигон недоступен, возвращает None.
+    """
+    poly = getattr(room, "floor_polygon", None)
+    if not poly:
+        return None
+
+    a, b = _pick_wall_edge(poly, wall_side)
+    nx, ny = _edge_inward_normal(poly, a, b)
+    if abs(nx) < 1e-12 and abs(ny) < 1e-12:
+        return None
+
+    qx, qy = _closest_point_on_segment(cx, cy, a, b)
+    center_dist = math.hypot(cx - qx, cy - qy)
+    support = _support_distance_along_normal(nx, ny, rx, ry)
+    gap = center_dist - support
+    return gap
 
 def _sample_touch_wall_position_poly(
     room: Room,
@@ -328,6 +699,10 @@ def _sample_touch_wall_position_poly(
 ) -> Optional[Tuple[float, float]]:
     """
     Семплим позицию прижатия к "стене" (ребро полигона) и проверяем inside_room(AABB).
+
+    Важно:
+    смещение внутрь берём по реальному полуразмеру AABB вдоль нормали стены,
+    а не по max(rx, ry), иначе длинные предметы получают искусственный зазор.
     """
     poly = getattr(room, "floor_polygon", None)
     if not poly:
@@ -338,12 +713,13 @@ def _sample_touch_wall_position_poly(
     if abs(nx) < 1e-12 and abs(ny) < 1e-12:
         return None
 
+    offset = _support_distance_along_normal(nx, ny, rx, ry) + wall_margin
+
     for _ in range(tries):
         t = random.random()
-        px = a[0] * (1 - t) + b[0] * t
-        py = a[1] * (1 - t) + b[1] * t
+        px = a[0] * (1.0 - t) + b[0] * t
+        py = a[1] * (1.0 - t) + b[1] * t
 
-        offset = 0.5 * max(rx, ry) + wall_margin
         cx = px + nx * offset
         cy = py + ny * offset
 
@@ -354,7 +730,6 @@ def _sample_touch_wall_position_poly(
             return cx, cy
 
     return None
-
 
 # ============================================================
 # ОРИЕНТАЦИЯ "СПИНКОЙ К СТЕНЕ" (+ поддержка forward_axis)
@@ -405,7 +780,7 @@ def rotation_for_back_to_wall(wall_side: str, forward_axis: str = "+Y") -> int:
         raise ValueError(f"Unknown wall side: {wall_side}")
 
     rot = mapping[side]
-    rot = (rot + _axis_to_rot_offset(forward_axis)) % 360
+    rot = (180 + rot + _axis_to_rot_offset(forward_axis)) % 360 # +180 позволяет правильно риентировать предметы, там они стоят верно - спиной к стене
     return _norm_deg90(rot)
 
 
@@ -419,52 +794,245 @@ def random_center_xy(room: Room, rx: float, ry: float) -> Tuple[float, float]:
         random.uniform(room.y_min + ry / 2, room.y_max - ry / 2),
     )
 
+def _is_ceiling_light(item: Item) -> bool:
+    extra = item.extra or {}
+    kind = _detect_kind(item.name)
 
-def _touch_wall_side_from_constraints(extra: Dict[str, Any]) -> Optional[str]:
+    return (
+        extra.get("mount_type") == "ceiling"
+        or extra.get("under_ceiling")
+        or kind == "lighting"
+    )
+
+
+def _distance_to_bbox_walls(room: Room, cx: float, cy: float, rx: float, ry: float) -> float:
+    return min(
+        cx - (room.x_min + rx / 2.0),
+        (room.x_max - rx / 2.0) - cx,
+        cy - (room.y_min + ry / 2.0),
+        (room.y_max - ry / 2.0) - cy,
+    )
+
+
+def _distance_to_poly_boundary(room: Room, cx: float, cy: float) -> float:
+    poly = getattr(room, "floor_polygon", None)
+    if not poly:
+        return float("inf")
+
+    best = float("inf")
+    for a, b in _poly_edges(poly):
+        d = _distance_point_to_segment(cx, cy, a, b)
+        if d < best:
+            best = d
+    return best
+
+
+def _distance_to_room_walls(room: Room, cx: float, cy: float, rx: float, ry: float) -> float:
     """
-    Читаем constraints.touch_wall:
-      - {"side": "back"}
-      - {"sides": ["back","left"]}
+    Минимальное расстояние от AABB предмета до стен комнаты.
+    Для roomspec используем floor_polygon, иначе bbox.
     """
-    tw = (extra or {}).get("touch_wall")
-    if not tw:
+    if getattr(room, "poly_source", "") == "roomspec" and getattr(room, "floor_polygon", None):
+        d_center = _distance_to_poly_boundary(room, cx, cy)
+        return d_center - 0.5 * math.hypot(rx, ry)
+
+    return _distance_to_bbox_walls(room, cx, cy, rx, ry)
+
+
+def _placed_ceiling_items(placed: List[PlacedItem]) -> List[PlacedItem]:
+    return [p for p in placed if _is_ceiling_light(p.item)]
+
+
+def _candidate_ceiling_positions(
+    room: Room,
+    rx: float,
+    ry: float,
+    cz: float,
+    sz: float,
+    placed: List[PlacedItem],
+    grid_nx: int = 11,
+    grid_ny: int = 9,
+) -> List[Tuple[float, float]]:
+    """
+    Генерирует разумные кандидатные точки для потолочного светильника.
+    Мы не хотим углы — поэтому берём внутреннюю сетку, исключая крайние точки.
+    """
+    x_lo = room.x_min + rx / 2.0
+    x_hi = room.x_max - rx / 2.0
+    y_lo = room.y_min + ry / 2.0
+    y_hi = room.y_max - ry / 2.0
+
+    if x_hi < x_lo or y_hi < y_lo:
+        return []
+
+    xs: List[float] = []
+    ys: List[float] = []
+
+    if grid_nx <= 1:
+        xs = [(x_lo + x_hi) * 0.5]
+    else:
+        for i in range(grid_nx):
+            t = (i + 1) / (grid_nx + 1)   # без крайних точек
+            xs.append(x_lo * (1.0 - t) + x_hi * t)
+
+    if grid_ny <= 1:
+        ys = [(y_lo + y_hi) * 0.5]
+    else:
+        for i in range(grid_ny):
+            t = (i + 1) / (grid_ny + 1)
+            ys.append(y_lo * (1.0 - t) + y_hi * t)
+
+    out: List[Tuple[float, float]] = []
+    seen = set()
+
+    # Сначала центр — для одного светильника это почти всегда лучший ответ
+    cx0 = 0.5 * (x_lo + x_hi)
+    cy0 = 0.5 * (y_lo + y_hi)
+    center_key = (round(cx0, 6), round(cy0, 6))
+    seen.add(center_key)
+    out.append((cx0, cy0))
+
+    for cx in xs:
+        for cy in ys:
+            key = (round(cx, 6), round(cy, 6))
+            if key in seen:
+                continue
+
+            box = _aabb_from_center(cx, cy, cz, rx, ry, sz)
+            if not inside_room(box, room):
+                continue
+
+            out.append((cx, cy))
+            seen.add(key)
+
+    return out
+
+
+def _score_ceiling_position(
+    room: Room,
+    cx: float,
+    cy: float,
+    rx: float,
+    ry: float,
+    ceiling_items: List[PlacedItem],
+) -> float:
+    """
+    Чем больше score, тем лучше позиция.
+
+    Идея:
+    1) хотим быть далеко от стен;
+    2) хотим быть далеко от уже поставленных ламп;
+    3) при равенстве слегка предпочитаем более центральные точки.
+    """
+    dist_walls = _distance_to_room_walls(room, cx, cy, rx, ry)
+
+    if ceiling_items:
+        dist_lamps = min(math.hypot(cx - p.cx, cy - p.cy) for p in ceiling_items)
+    else:
+        dist_lamps = float("inf")
+
+    cx_room = 0.5 * (room.x_min + room.x_max)
+    cy_room = 0.5 * (room.y_min + room.y_max)
+    dist_center = math.hypot(cx - cx_room, cy - cy_room)
+
+    # maximin: главным делаем минимум из "до стен" и "до других ламп"
+    primary = min(dist_walls, dist_lamps)
+
+    # маленький бонус за центральность, чтобы первая лампа не уезжала к краям
+    return primary - 0.08 * dist_center
+
+
+def _best_ceiling_position(
+    room: Room,
+    item: Item,
+    placed: List[PlacedItem],
+    rotation: int,
+) -> Optional[Tuple[float, float]]:
+    rx, ry = rotated_size(item.sx, item.sy, rotation)
+    cz = resolve_vertical_center(room, item)
+
+    candidates = _candidate_ceiling_positions(
+        room=room,
+        rx=rx,
+        ry=ry,
+        cz=cz,
+        sz=item.sz,
+        placed=placed,
+    )
+    if not candidates:
         return None
 
-    if isinstance(tw, dict):
-        if tw.get("side"):
-            return str(tw["side"]).lower()
-        if isinstance(tw.get("sides"), list) and tw["sides"]:
-            return str(random.choice(tw["sides"])).lower()
+    ceiling_items = _placed_ceiling_items(placed)
 
-    sides = (extra or {}).get("touch_wall_sides", ["front", "back", "left", "right"])
-    return str(random.choice(sides)).lower() if sides else None
+    best_pos: Optional[Tuple[float, float]] = None
+    best_score = -1e18
 
+    for cx, cy in candidates:
+        box = _aabb_from_center(cx, cy, cz, rx, ry, item.sz)
+
+        if not inside_room(box, room):
+            continue
+
+        if any(aabb_intersect(box, other.aabb()) for other in placed):
+            continue
+
+        candidate = PlacedItem(item, (cx, cy, cz), rotation, None)
+        if not validate_clearance(candidate, room, placed):
+            continue
+
+        score = _score_ceiling_position(room, cx, cy, rx, ry, ceiling_items)
+        if score > best_score:
+            best_score = score
+            best_pos = (cx, cy)
+
+    return best_pos
 
 def resolve_vertical_center(room: Room, item: Item) -> float:
     """
-    Правило по умолчанию: предмет стоит на полу.
+    Вычисляет вертикальный центр предмета.
+
+    Правила:
+    - floor/mount_type=floor -> стоит на полу
+    - ceiling/mount_type=ceiling -> верх AABB касается потолка
+    - для подвесных ламп можно задать drop_from_ceiling_m
+    - mount_height_m остаётся как override
     """
     extra = item.extra or {}
+    kind = _detect_kind(item.name)
+
     tf = extra.get("touch_floor")
+    if (
+        (isinstance(tf, dict) and tf.get("side") == "bottom")
+        or extra.get("mount_type") == "floor"
+    ):
+        return room.z_min + item.sz / 2.0
 
-    if (isinstance(tf, dict) and tf.get("side") == "bottom") or extra.get("mount_type") == "floor":
-        return room.z_min + item.sz / 2
+    is_ceiling = (
+        extra.get("mount_type") == "ceiling"
+        or extra.get("under_ceiling")
+        or kind == "lighting"
+        or "lamp" in (item.name or "").lower()
+        or "light" in (item.name or "").lower()
+    )
 
-    if extra.get("mount_type") == "ceiling" or extra.get("under_ceiling"):
-        return room.z_max - item.sz / 2
+    if is_ceiling:
+        drop = float(extra.get("drop_from_ceiling_m", 0.0) or 0.0)
+        cz = room.z_max - item.sz / 2.0 - drop
+        cz = max(room.z_min + item.sz / 2.0, min(room.z_max - item.sz / 2.0, cz))
+        return cz
 
     if "mount_height_m" in extra and extra["mount_height_m"] is not None:
         h = float(extra["mount_height_m"])
         anchor = str(extra.get("mount_anchor", "center"))
         if anchor == "bottom":
-            cz = room.z_min + h + item.sz / 2
+            cz = room.z_min + h + item.sz / 2.0
         elif anchor == "top":
-            cz = room.z_min + h - item.sz / 2
+            cz = room.z_min + h - item.sz / 2.0
         else:
             cz = room.z_min + h
-        return max(room.z_min + item.sz / 2, min(room.z_max - item.sz / 2, cz))
+        return max(room.z_min + item.sz / 2.0, min(room.z_max - item.sz / 2.0, cz))
 
-    return room.z_min + item.sz / 2
+    return room.z_min + item.sz / 2.0
 
 
 def enforce_vertical_constraints(pi: PlacedItem, room: Room) -> None:
@@ -511,6 +1079,7 @@ def _apply_touch_wall_lock(
 
 def _detect_kind(name: str) -> str:
     n = (name or "").strip().lower()
+
     if "кровать" in n:
         return "bed"
     if "шкаф" in n or "гардероб" in n or "купе" in n:
@@ -525,6 +1094,17 @@ def _detect_kind(name: str) -> str:
         return "armchair"
     if "стол" in n:
         return "table"
+    if (
+        "lamp" in n
+        or "light" in n
+        or "люстр" in n
+        or "светиль" in n
+        or "ламп" in n
+        or "бра" in n
+        or "plafon" in n
+    ):
+        return "lighting"
+
     return "generic"
 
 
@@ -677,72 +1257,57 @@ def validate_clearance(candidate: PlacedItem, room: Room, others: List[PlacedIte
 
 def place_all_random(room: Room, items: List[Item]) -> List[PlacedItem]:
     MAX_GLOBAL_TRIES = 60
-    MAX_ITEM_TRIES = 1600
+    MAX_ITEM_TRIES = 400
+
+    items_sorted = sorted(items, key=_item_sort_key)
+
+    cx_room = (room.x_min + room.x_max) / 2.0
+    cy_room = (room.y_min + room.y_max) / 2.0
 
     for global_try in range(MAX_GLOBAL_TRIES):
         placed: List[PlacedItem] = []
         failed = False
 
-        for item in items:
-            success = False
+        for item in items_sorted:
             extra = item.extra or {}
+            success = False
+            reasons = {"inside": 0, "collide": 0, "clearance": 0, "touchwall": 0, "floor": 0, "all": 0}
 
-            reasons = {"inside": 0, "collide": 0, "clearance": 0, "touchwall": 0, "floor": 0}
+            wall_side_candidates = _candidate_wall_sides_for_item(item, extra) if extra.get("touch_wall") else [None]
 
-            for _ in range(MAX_ITEM_TRIES):
-                wall_side = _touch_wall_side_from_constraints(extra)
+            for wall_side in wall_side_candidates:
+                rotations = _candidate_rotations_for_item(item, wall_side, extra)
 
-                forward_axis = str(extra.get("forward_axis", "+Y"))
-                rotation = rotation_for_back_to_wall(wall_side, forward_axis=forward_axis) if wall_side else random.choice(ALLOWED_ROTATIONS)
+                for rotation, _local_back_side in rotations:
+                    for _ in range(MAX_ITEM_TRIES):
+                        if wall_side is not None:
+                            base_cx = cx_room + random.uniform(-0.4, 0.4)
+                            base_cy = cy_room + random.uniform(-0.4, 0.4)
+                        else:
+                            tmp_rx, tmp_ry = rotated_size(item.sx, item.sy, rotation)
+                            base_cx, base_cy = random_center_xy(room, tmp_rx, tmp_ry)
 
-                rx, ry = rotated_size(item.sx, item.sy, rotation)
-                cz = resolve_vertical_center(room, item)
+                        candidate = _try_place_candidate(
+                            room=room,
+                            item=item,
+                            placed=placed,
+                            wall_side=wall_side,
+                            rotation=rotation,
+                            base_cx=base_cx,
+                            base_cy=base_cy,
+                        )
 
-                if wall_side and getattr(room, "poly_source", "") == "roomspec" and getattr(room, "floor_polygon", None):
-                    pos = _sample_touch_wall_position_poly(room, rx, ry, cz, item.sz, rotation, wall_side, wall_margin=WALL_MARGIN)
-                    if pos is None:
-                        reasons["inside"] += 1
-                        continue
-                    cx, cy = pos
-                else:
-                    cx, cy = random_center_xy(room, rx, ry)
-                    if wall_side:
-                        cx, cy = _apply_touch_wall_lock(room, cx, cy, rx, ry, wall_side, wall_margin=WALL_MARGIN)
+                        if candidate is not None:
+                            placed.append(candidate)
+                            success = True
+                            break
 
-                cx, cy = clamp_inside_room_xy(room, cx, cy, rx, ry)
+                        reasons["all"] += 1
 
-                candidate = PlacedItem(item, (cx, cy, cz), rotation, wall_side)
-                box = candidate.aabb()
-
-                if not inside_room(box, room):
-                    reasons["inside"] += 1
-                    continue
-
-                if any(aabb_intersect(box, other.aabb()) for other in placed):
-                    reasons["collide"] += 1
-                    continue
-
-                if not validate_clearance(candidate, room, placed):
-                    reasons["clearance"] += 1
-                    continue
-
-                # touchwall строгий только для bbox-стен (is_side_touching_wall про bbox)
-                if wall_side and not (getattr(room, "poly_source", "") == "roomspec"):
-                    if not is_side_touching_wall(box, wall_side, room):
-                        reasons["touchwall"] += 1
-                        continue
-
-                if (
-                    extra.get("mount_type") == "floor"
-                    or (isinstance(extra.get("touch_floor"), dict) and extra["touch_floor"].get("side") == "bottom")
-                ):
-                    if abs(box["z_min"] - room.z_min) > 2 * EPS_Z:
-                        reasons["floor"] += 1
-                        continue
-
-                placed.append(candidate)
-                success = True
-                break
+                    if success:
+                        break
+                if success:
+                    break
 
             if not success:
                 print(f"⚠️ random: не влез: {item.name} reasons={reasons}")
@@ -778,7 +1343,7 @@ def relax_layout(
         n = len(placed)
         displacements = [(0.0, 0.0) for _ in range(n)]
 
-        # 1) раздвигаем пересечения AABB предметов
+        # 1) Раздвигаем пересечения AABB
         for i in range(n):
             a = placed[i].aabb()
             for j in range(i + 1, n):
@@ -810,7 +1375,7 @@ def relax_layout(
                     displacements[i] = (dix, diy + dy_i)
                     displacements[j] = (djx, djy + dy_j)
 
-        # 2) лёгкое отталкивание от центра
+        # 2) Лёгкое отталкивание от центра
         k_out = 0.05
         for i, pi in enumerate(placed):
             dix, diy = displacements[i]
@@ -822,7 +1387,7 @@ def relax_layout(
                 diy += k_out * vy / dist
             displacements[i] = (dix, diy)
 
-        # 3) применяем сдвиги с backtracking по inside_room()
+        # 3) Применяем сдвиги с backtracking
         for i, pi in enumerate(placed):
             mx, my = displacements[i]
             step_len = math.hypot(mx, my)
@@ -843,9 +1408,17 @@ def relax_layout(
                 new_cy = old_cy + my_try
                 new_cx, new_cy = clamp_inside_room_xy(room, new_cx, new_cy, pi.rx, pi.ry)
 
-                # если нужен контакт со стеной — фиксируем (bbox или poly)
+                # Жёстко возвращаем wall-contact предмет обратно к стене
                 if extra.get("touch_wall") and side is not None:
-                    new_cx, new_cy = _apply_touch_wall_lock(room, new_cx, new_cy, pi.rx, pi.ry, side, wall_margin=wall_margin)
+                    new_cx, new_cy = _apply_touch_wall_lock(
+                        room,
+                        new_cx,
+                        new_cy,
+                        pi.rx,
+                        pi.ry,
+                        side,
+                        wall_margin=wall_margin,
+                    )
 
                 tmp_box = _aabb_from_center(new_cx, new_cy, pi.cz, pi.rx, pi.ry, pi.item.sz)
 
@@ -860,7 +1433,32 @@ def relax_layout(
 
             if not moved:
                 pi.cx, pi.cy = old_cx, old_cy
+                if extra.get("touch_wall") and side is not None:
+                    pi.cx, pi.cy = _apply_touch_wall_lock(
+                        room,
+                        pi.cx,
+                        pi.cy,
+                        pi.rx,
+                        pi.ry,
+                        side,
+                        wall_margin=wall_margin,
+                    )
                 enforce_vertical_constraints(pi, room)
+
+    # 4) Финальный жёсткий repin всех wall-contact предметов
+    for pi in placed:
+        extra = pi.item.extra or {}
+        if extra.get("touch_wall") and pi.wall_contact_side is not None:
+            pi.cx, pi.cy = _apply_touch_wall_lock(
+                room,
+                pi.cx,
+                pi.cy,
+                pi.rx,
+                pi.ry,
+                pi.wall_contact_side,
+                wall_margin=wall_margin,
+            )
+            enforce_vertical_constraints(pi, room)
 
 
 def place_all_relaxed(room: Room, items: List[Item]) -> List[PlacedItem]:
@@ -868,54 +1466,76 @@ def place_all_relaxed(room: Room, items: List[Item]) -> List[PlacedItem]:
     cy_room = (room.y_min + room.y_max) / 2.0
 
     MAX_GLOBAL_TRIES = 55
+    items_sorted = sorted(items, key=_item_sort_key)
+
     for global_try in range(MAX_GLOBAL_TRIES):
         placed: List[PlacedItem] = []
         failed_init = False
 
-        # 1) инициализация около центра
-        for item in items:
+        # 1) Инициализация: сначала крупные предметы
+        for item in items_sorted:
             extra = item.extra or {}
-            wall_side = _touch_wall_side_from_constraints(extra)
+            success = False
 
-            forward_axis = str(extra.get("forward_axis", "+Y"))
-            rotation = rotation_for_back_to_wall(wall_side, forward_axis=forward_axis) if wall_side else random.choice(ALLOWED_ROTATIONS)
-            rx, ry = rotated_size(item.sx, item.sy, rotation)
-            cz = resolve_vertical_center(room, item)
+            wall_side_candidates = _candidate_wall_sides_for_item(item, extra) if extra.get("touch_wall") else [None]
 
-            jitter = 0.05
-            cx = cx_room + random.uniform(-jitter, jitter)
-            cy = cy_room + random.uniform(-jitter, jitter)
-            cx, cy = clamp_inside_room_xy(room, cx, cy, rx, ry)
+            for wall_side in wall_side_candidates:
+                rotations = _candidate_rotations_for_item(item, wall_side, extra)
 
-            if wall_side is not None:
-                # roomspec: семплим вдоль ребра полигона до inside_room()
-                if getattr(room, "poly_source", "") == "roomspec" and getattr(room, "floor_polygon", None):
-                    pos = _sample_touch_wall_position_poly(room, rx, ry, cz, item.sz, rotation, wall_side, wall_margin=WALL_MARGIN)
-                    if pos is None:
-                        print(f"⚠️ init: не помещается в комнате: {item.name} (touch_wall={wall_side})")
-                        failed_init = True
+                for rotation, _local_back_side in rotations:
+                    for _attempt in range(160):
+                        if wall_side is not None:
+                            base_cx = cx_room + random.uniform(-0.35, 0.35)
+                            base_cy = cy_room + random.uniform(-0.35, 0.35)
+                        else:
+                            tmp_rx, tmp_ry = rotated_size(item.sx, item.sy, rotation)
+                            base_cx, base_cy = random_center_xy(room, tmp_rx, tmp_ry)
+
+                        candidate = _try_place_candidate(
+                            room=room,
+                            item=item,
+                            placed=placed,
+                            wall_side=wall_side,
+                            rotation=rotation,
+                            base_cx=base_cx,
+                            base_cy=base_cy,
+                        )
+                        if candidate is not None:
+                            placed.append(candidate)
+                            success = True
+                            break
+
+                    if success:
                         break
-                    cx, cy = pos
-                else:
-                    cx, cy = _apply_touch_wall_lock(room, cx, cy, rx, ry, wall_side, wall_margin=WALL_MARGIN)
+                if success:
+                    break
 
-            cx, cy = clamp_inside_room_xy(room, cx, cy, rx, ry)
-
-            candidate = PlacedItem(item, (cx, cy, cz), rotation, wall_side)
-            if not inside_room(candidate.aabb(), room):
-                print(f"⚠️ init: не помещается в комнате: {item.name} (touch_wall={wall_side})")
+            if not success:
+                print(f"⚠️ init: не удалось стартово поставить предмет: {item.name}")
                 failed_init = True
                 break
-
-            placed.append(candidate)
 
         if failed_init:
             continue
 
-        # 2) релаксация
+        # 2) Релаксация
         relax_layout(room, placed)
 
-        # 3) валидация
+        # 3) Свободные предметы можно довернуть в комнату
+        for pi in placed:
+            if pi.wall_contact_side is not None:
+                continue
+
+            forward_axis = str((pi.item.extra or {}).get("forward_axis", "+Y"))
+            new_rotation = choose_rotation_opposite_to_nearest_wall(
+                room, pi.cx, pi.cy, forward_axis=forward_axis
+            )
+            pi.rotation = new_rotation
+            pi.rx, pi.ry = rotated_size(pi.item.sx, pi.item.sy, pi.rotation)
+            pi.cx, pi.cy = clamp_inside_room_xy(room, pi.cx, pi.cy, pi.rx, pi.ry)
+            enforce_vertical_constraints(pi, room)
+
+        # 4) Валидация
         valid = True
         reasons = {"inside": 0, "collide": 0, "clearance": 0, "touchwall": 0, "floor": 0}
 
@@ -936,9 +1556,14 @@ def place_all_relaxed(room: Room, items: List[Item]) -> List[PlacedItem]:
             if not valid:
                 break
 
-            # touchwall строгий только для bbox-стен (is_side_touching_wall про bbox)
             if pi.item.extra.get("touch_wall") and pi.wall_contact_side is not None:
-                if getattr(room, "poly_source", "") != "roomspec":
+                if getattr(room, "poly_source", "") == "roomspec":
+                    gap = _poly_wall_contact_gap(room, pi.cx, pi.cy, pi.rx, pi.ry, pi.wall_contact_side)
+                    if gap is None or gap > (WALL_MARGIN + 0.02):
+                        reasons["touchwall"] += 1
+                        valid = False
+                        break
+                else:
                     if not is_side_touching_wall(box_i, pi.wall_contact_side, room):
                         reasons["touchwall"] += 1
                         valid = False
@@ -969,7 +1594,6 @@ def place_all_relaxed(room: Room, items: List[Item]) -> List[PlacedItem]:
             print(f"⚠️ relaxed: попытка {global_try+1}/{MAX_GLOBAL_TRIES} провал, reasons={reasons}")
 
     raise RuntimeError("❌ Не удалось расставить предметы (relaxed)")
-
 
 # ============================================================
 # ВЫБОР РЕЖИМА
