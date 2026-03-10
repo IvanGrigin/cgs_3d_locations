@@ -13,11 +13,13 @@ SSH_KEY="${HOME}/.ssh/id_ed25519"
 REMOTE_BASE="/workspace/projects/DiffuScene/room_inbox_remote"
 REMOTE_RUN_DIR="${REMOTE_BASE}/${RUN_NAME}"
 
-LOCAL_OUT_DIR="$(pwd)/${RUN_NAME}"
+# Локальные результаты кладём не в $(pwd), а в ту же папку, где лежит ROOM_JSON,
+# то есть в текущий run_dir пайплайна.
+LOCAL_OUT_DIR="$(cd "$(dirname "${ROOM_JSON}")" && pwd)"
 mkdir -p "${LOCAL_OUT_DIR}"
 
 echo "==> create remote dir"
-ssh -i "${SSH_KEY}" -p "${SERVER_PORT}" "${SERVER_USER}@${SERVER_HOST}" \
+ssh -T -i "${SSH_KEY}" -p "${SERVER_PORT}" "${SERVER_USER}@${SERVER_HOST}" \
   "mkdir -p '${REMOTE_RUN_DIR}'"
 
 echo "==> upload inputs"
@@ -27,7 +29,7 @@ scp -i "${SSH_KEY}" -P "${SERVER_PORT}" \
   "${SERVER_USER}@${SERVER_HOST}:${REMOTE_RUN_DIR}/"
 
 echo "==> run server pipeline"
-ssh -i "${SSH_KEY}" -p "${SERVER_PORT}" "${SERVER_USER}@${SERVER_HOST}" <<EOF
+ssh -T -i "${SSH_KEY}" -p "${SERVER_PORT}" "${SERVER_USER}@${SERVER_HOST}" <<EOF
 set -euo pipefail
 cd /workspace/projects/DiffuScene
 source /opt/miniforge3/etc/profile.d/conda.sh || true
@@ -57,7 +59,7 @@ room_meta = json.loads((run_dir / "room_meta.json").read_text(encoding="utf-8"))
 room = json.loads(Path(room_meta["room_json"]).read_text(encoding="utf-8"))
 
 CENTROIDS_MIN = [-2.7625005, 0.045, -2.75275]
-CENTROIDS_MAX = [ 2.77844175, 3.6248396, 2.81854277]
+CENTROIDS_MAX = [2.77844175, 3.6248396, 2.81854277]
 SIZES_MIN = [0.03998288, 0.02000002, 0.012772]
 SIZES_MAX = [2.8682, 1.770065, 1.698315]
 
@@ -79,8 +81,8 @@ room_ys = [float(p["y"]) for p in poly]
 room_xmin, room_xmax = min(room_xs), max(room_xs)
 room_ymin, room_ymax = min(room_ys), max(room_ys)
 
-MODEL_X_MIN, MODEL_X_MAX = -2.7625005,  2.77844175
-MODEL_Z_MIN, MODEL_Z_MAX = -2.75275,    2.81854277
+MODEL_X_MIN, MODEL_X_MAX = -2.7625005, 2.77844175
+MODEL_Z_MIN, MODEL_Z_MAX = -2.75275, 2.81854277
 
 items = []
 for it in pred["items"]:

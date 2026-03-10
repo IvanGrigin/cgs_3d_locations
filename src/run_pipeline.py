@@ -9,6 +9,7 @@ import secrets
 import shutil
 import subprocess
 import sys
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -74,14 +75,23 @@ def merge_room_spec_and_placements(room_json_path: str, placement_json_path: str
     out_p.write_text(json.dumps(scene, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def make_run_dir(run_dir_arg: Optional[str]) -> tuple[Path, bool]:
+def now_stamp() -> str:
+    return datetime.now().strftime("%Y%m%d_%H%M%S")
+
+
+def make_mode_run_dir(mode: str, run_dir_arg: Optional[str]) -> tuple[Path, bool]:
+    """
+    Если run_dir задан явно — используем его как есть.
+    Если нет — создаём уникальную папку формата:
+      out/tmp/<mode>_<YYYYMMDD>_<HHMMSS>_<hash>
+    """
     if run_dir_arg:
         p = Path(run_dir_arg).expanduser().resolve()
         p.mkdir(parents=True, exist_ok=True)
         return p, True
 
-    run_hash = secrets.token_hex(6)
-    p = Path(TMP_ROOT).resolve() / f"run_{run_hash}"
+    run_hash = secrets.token_urlsafe(7).replace("-", "").replace("_", "").lower()
+    p = Path(TMP_ROOT).resolve() / f"{mode}_{now_stamp()}_{run_hash}"
     p.mkdir(parents=True, exist_ok=True)
     return p, False
 
@@ -231,9 +241,10 @@ def run_diffuscene_remote_placer(
     out_path: Path,
     run_dir: Path,
 ) -> None:
-    del seed  # внешний seed здесь не используется
+    del seed
+    del mode
 
-    remote_run_name = f"{run_dir.name}_{mode}"
+    remote_run_name = run_dir.name
     remote_artifacts_dir = Path(TMP_ROOT).resolve() / remote_run_name
 
     cmd = [
@@ -251,10 +262,10 @@ def run_diffuscene_remote_placer(
     if not out_path.is_file():
         raise RuntimeError(f"DiffuScene remote не создал итоговый placement: {out_path}")
 
-    local_mode_artifacts = run_dir / f"diffuscene_{mode}"
+    local_mode_artifacts = run_dir / "diffuscene_remote_artifacts"
     if remote_artifacts_dir.is_dir():
         copy_tree_contents(remote_artifacts_dir, local_mode_artifacts)
-        print(f"📥 Артефакты DiffuScene ({mode}) -> {local_mode_artifacts}")
+        print(f"📥 Артефакты DiffuScene -> {local_mode_artifacts}")
     else:
         print(f"⚠️ Папка remote-артефактов не найдена: {remote_artifacts_dir}")
 
@@ -387,9 +398,29 @@ def run_pipeline_for_mode(
     room_path: str,
     run_dir: Path,
     mode: str,
-    objects_path: Path,
+    prompt_text: str,
 ) -> None:
     print(f"\n====== РЕЖИМ {mode.upper()} ======")
+    print(f"📁 mode_run_dir: {run_dir}")
+
+    chooser_seed = int.from_bytes(secrets.token_bytes(8), "big")
+    objects_path = run_choose_stage(
+        args=args,
+        room_path=room_path,
+        prompt_text=prompt_text,
+        run_dir=run_dir,
+        seed=chooser_seed,
+    )
+
+    run_manifest = {
+        "room": room_path,
+        "prompt": prompt_text,
+        "chooser_seed": chooser_seed,
+        "placer": args.placer,
+        "mode": mode,
+        "run_dir": str(run_dir),
+    }
+    write_json(run_dir / "run_manifest.json", run_manifest)
 
     placement_out = run_dir / f"placement_{mode}.json"
 
@@ -397,6 +428,16 @@ def run_pipeline_for_mode(
         print(f"\n---------- ПОПЫТКА {attempt} ({mode}) ----------")
         try:
             attempt_seed = int.from_bytes(secrets.token_bytes(8), "big")
+
+            attempt_info = {
+                "attempt": attempt,
+                "attempt_seed": attempt_seed,
+                "chooser_seed": chooser_seed,
+                "mode": mode,
+                "placer": args.placer,
+                "objects_path": str(objects_path),
+            }
+            write_json(run_dir / f"attempt_{attempt:02d}.json", attempt_info)
 
             if args.placer == "cube":
                 run_cube_placer(
@@ -505,63 +546,50 @@ def main() -> None:
     args = parser.parse_args()
 
     room_path = os.path.abspath((args.room or DEFAULT_ROOM_JSON).strip())
-    run_dir, run_dir_explicit = make_run_dir(args.run_dir)
     modes = parse_modes(args)
 
-    print(f"📁 run_dir: {run_dir}")
     print(f"📦 modes: {', '.join(modes)}")
 
+    explicit_run_dir = None
+    if args.run_dir:
+        explicit_run_dir = Path(args.run_dir).expanduser().resolve()
+        explicit_run_dir.mkdir(parents=True, exist_ok=True)
+        print(f"📁 explicit run_dir: {explicit_run_dir}")
+
+    prompt_text = read_prompt_from_args(args)
+    created_run_dirs: list[Path] = []
+
     try:
-        if run_dir_explicit and visualize_existing_run(args, room_path, run_dir, modes):
+        if explicit_run_dir and visualize_existing_run(args, room_path, explicit_run_dir, modes):
             print("\n✅ Сцены построены из существующего run_dir")
             return
 
-        objects_path = run_dir / "objects.json"
-
-        if objects_path.is_file():
-            print(f"♻️ Используем существующий objects.json: {objects_path}")
-        else:
-            prompt_text = read_prompt_from_args(args)
-            seed0 = int.from_bytes(secrets.token_bytes(8), "big")
-
-            (run_dir / "run_manifest.json").write_text(
-                json.dumps(
-                    {
-                        "room": room_path,
-                        "prompt": prompt_text,
-                        "seed": seed0,
-                        "placer": args.placer,
-                        "modes": modes,
-                    },
-                    ensure_ascii=False,
-                    indent=2,
-                ),
-                encoding="utf-8",
-            )
-
-            objects_path = run_choose_stage(
-                args=args,
-                room_path=room_path,
-                prompt_text=prompt_text,
-                run_dir=run_dir,
-                seed=seed0,
-            )
-
         for mode in modes:
+            if explicit_run_dir:
+                mode_run_dir = explicit_run_dir
+                run_dir_explicit = True
+            else:
+                mode_run_dir, run_dir_explicit = make_mode_run_dir(mode, None)
+
+            del run_dir_explicit
+            created_run_dirs.append(mode_run_dir)
+
             run_pipeline_for_mode(
                 args=args,
                 room_path=room_path,
-                run_dir=run_dir,
+                run_dir=mode_run_dir,
                 mode=mode,
-                objects_path=objects_path,
+                prompt_text=prompt_text,
             )
 
         print("\n✅ ВСЕ РЕЖИМЫ ОТРАБОТАЛИ УСПЕШНО")
 
     finally:
-        if not args.keep_tmp and run_dir.is_dir():
-            shutil.rmtree(run_dir, ignore_errors=True)
-            print(f"🗑 Удалён run_dir: {run_dir}")
+        if not args.keep_tmp and not explicit_run_dir:
+            for p in created_run_dirs:
+                if p.is_dir():
+                    shutil.rmtree(p, ignore_errors=True)
+                    print(f"🗑 Удалён run_dir: {p}")
 
 
 if __name__ == "__main__":

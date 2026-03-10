@@ -72,9 +72,9 @@ def save_json(path: Path, data: Any) -> None:
     )
 
 
-def run_capture(cmd: List[str], **kwargs) -> subprocess.CompletedProcess:
+def run_live(cmd: List[str], **kwargs) -> subprocess.CompletedProcess:
     print("▶", " ".join(cmd))
-    return subprocess.run(cmd, check=True, text=True, capture_output=True, **kwargs)
+    return subprocess.run(cmd, check=True, text=True, **kwargs)
 
 
 def make_run_dir(run_dir_arg: Optional[str], run_name: str) -> Tuple[Path, bool]:
@@ -198,6 +198,7 @@ def convert_local_objects_to_server_input(src_objects: Dict[str, Any]) -> Dict[s
         "objects": out_items,
     }
 
+
 def quantize_rot_0_90_180_270(deg: float) -> float:
     a = float(deg or 0.0) % 360.0
     allowed = (0.0, 90.0, 180.0, 270.0)
@@ -235,6 +236,7 @@ def make_aabb_from_room_pos_and_size(
         "z_max": z0 + sz,
     }, rot_deg, yaw_deg
 
+
 def build_local_placement_from_server_result(
     local_objects: Dict[str, Any],
     server_placements: Dict[str, Any],
@@ -263,19 +265,14 @@ def build_local_placement_from_server_result(
 
         item = dict(src_obj)
         item["placement_source"] = "diffuscene_remote"
-
-        # Новый совместимый со старыми сборками формат
         item["aabb"] = aabb
         item["bbox"] = dict(aabb)
         item["rotation"] = rot_deg
-
-        # Оставляем и новые поля тоже, они полезны для отладки
         item["position_room_xy_m"] = [float(pos_xy[0]), float(pos_xy[1])]
         item["z_floor_m"] = z_floor_m
         item["size_m"] = [float(size_m[0]), float(size_m[1]), float(size_m[2])]
         item["yaw_rad"] = yaw_rad
         item["yaw_deg"] = yaw_deg
-
         item["server_class_name"] = pred.get("class_name")
         item["server_index"] = pred.get("i", i)
 
@@ -286,6 +283,7 @@ def build_local_placement_from_server_result(
         "placements": placements,
         "server_raw": server_placements,
     }
+
 
 def detect_download_dir_from_output(output_text: str) -> Optional[Path]:
     m = re.search(r"Done\.\s*Results in:\s*(.+)", output_text)
@@ -334,8 +332,26 @@ def copy_results_into_run_dir(src_dir: Path, run_dir: Path) -> None:
         "pred_bbox_metric.json",
     ):
         src = src_dir / name
-        if src.is_file():
-            shutil.copy2(src, run_dir / name)
+        dst = run_dir / name
+        if not src.is_file():
+            continue
+        if src.resolve() == dst.resolve():
+            continue
+        shutil.copy2(src, dst)
+
+
+def safe_copy_if_needed(src: Path, dst: Path) -> None:
+    if not src.is_file():
+        return
+    dst.parent.mkdir(parents=True, exist_ok=True)
+
+    try:
+        if src.resolve() == dst.resolve():
+            return
+    except FileNotFoundError:
+        pass
+
+    shutil.copy2(src, dst)
 
 
 def main() -> None:
@@ -383,12 +399,12 @@ def main() -> None:
     runner = Path(args.remote_runner).expanduser()
     runner_cmd = str(runner.resolve()) if runner.exists() else args.remote_runner
 
-    proc = run_capture([
+    proc = run_live([
         runner_cmd,
         str(local_room_copy),
         str(local_server_objects),
         run_name,
-    ])
+    ], capture_output=True)
 
     if proc.stdout:
         print(proc.stdout, end="" if proc.stdout.endswith("\n") else "\n")
@@ -418,8 +434,7 @@ def main() -> None:
     }
     for src_name, dst_path in extra_map.items():
         src = run_dir / src_name
-        if src.is_file():
-            shutil.copy2(src, dst_path)
+        safe_copy_if_needed(src, dst_path)
 
     print(f"OK: saved placement -> {out_path}")
     print(f"OK: run artifacts -> {run_dir}")

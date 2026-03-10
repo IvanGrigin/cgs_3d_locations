@@ -4,7 +4,6 @@
 
 import argparse
 import json
-import math
 import random
 import re
 from collections import defaultdict
@@ -420,32 +419,7 @@ def infer_room_type(prompt_text: str) -> Optional[str]:
     return None
 
 
-def _find_number_before_alias(prompt_n: str, alias_n: str) -> Optional[int]:
-    idx = prompt_n.find(alias_n)
-    if idx == -1:
-        return None
-
-    left = prompt_n[:idx].strip()
-    if not left:
-        return None
-
-    tokens = left.split()
-    tail = tokens[-4:] if len(tokens) >= 4 else tokens
-
-    for t in reversed(tail):
-        if t.isdigit():
-            return max(1, int(t))
-        if t in NUMBER_WORDS:
-            return NUMBER_WORDS[t]
-
-    return None
-
-
 def _contains_alias(prompt_n: str, alias_n: str) -> bool:
-    """
-    Для коротких английских фраз ищем обычное вхождение.
-    Для русских стемов тоже достаточно substring matching.
-    """
     return alias_n in prompt_n
 
 
@@ -471,10 +445,6 @@ def _find_number_near_alias(prompt_n: str, alias_n: str) -> Optional[int]:
 
 
 def _default_count_for_category(category: str, prompt_n: str) -> int:
-    """
-    Эвристика по умолчанию, если количество явно не найдено.
-    Для спальни обычно 2 тумбочки.
-    """
     if category == "Nightstand":
         if "двуспаль" in prompt_n or "king" in prompt_n or "double bed" in prompt_n:
             return 2
@@ -483,9 +453,6 @@ def _default_count_for_category(category: str, prompt_n: str) -> int:
 
 
 def _map_requested_category_to_available(requested_category: str, available_categories: list[str]) -> Optional[str]:
-    """
-    Если точной категории нет, ищем ближайшую из available.
-    """
     if requested_category in available_categories:
         return requested_category
 
@@ -503,10 +470,6 @@ def _map_requested_category_to_available(requested_category: str, available_cate
 
 
 def _match_category_from_prompt(prompt_text: str, available_categories: list[str]) -> dict[str, int]:
-    """
-    Извлекает категории и количества из русского/английского/смешанного prompt.
-    Работает по стемам и не требует точных словоформ.
-    """
     prompt_n = norm(prompt_text)
     result: dict[str, int] = defaultdict(int)
 
@@ -533,9 +496,6 @@ def _match_category_from_prompt(prompt_text: str, available_categories: list[str
         if matched:
             result[mapped_category] = max(result[mapped_category], best_count or 1)
 
-    # Отдельная логика для света:
-    # если есть общее упоминание света, но конкретная лампа не вытащилась,
-    # выбираем первую доступную категорию освещения.
     if not any(k in result for k in LIGHT_PRIORITY):
         if any(x in prompt_n for x in ["светиль", "люстр", "lamp", "light", "lighting"]):
             for k in LIGHT_PRIORITY:
@@ -544,7 +504,6 @@ def _match_category_from_prompt(prompt_text: str, available_categories: list[str
                     result[mapped] = max(result[mapped], 1)
                     break
 
-    # Fuzzy fallback только если вообще ничего не нашли
     if not result:
         scored = []
         for cat in available_categories:
@@ -564,22 +523,17 @@ def _match_category_from_prompt(prompt_text: str, available_categories: list[str
 
         scored.sort(reverse=True)
 
-        # не больше 5 категорий из fallback
         for _, cat in scored[:5]:
             result[cat] += 1
 
     return dict(result)
+
 
 def heuristic_layout_request(
     prompt_text: str,
     room_metrics: dict[str, Any],
     available_categories: list[str],
 ) -> dict[str, Any]:
-    """
-    1) Сначала пытаемся явно извлечь предметы из prompt.
-    2) Если не получилось — fallback по типу комнаты.
-    3) Категории из priors тоже прогоняем через fuzzy map к available.
-    """
     area = float(room_metrics["area_m2"])
 
     explicit = _match_category_from_prompt(prompt_text, available_categories)
@@ -618,6 +572,7 @@ def heuristic_layout_request(
 
     return {"items": out}
 
+
 def build_layout_request(
     prompt_text: str,
     room_metrics: dict[str, Any],
@@ -653,6 +608,24 @@ def category_score(prompt_text: str, entry: dict[str, Any], target_category: str
     score += 2.5 * fuzzy_score(prompt_text, text)
     score += 1.0 * fuzzy_score(target_category, str(entry.get("category") or ""))
     return score
+
+
+def weighted_pick(scored_pool: list[tuple[float, dict[str, Any]]], rng: random.Random) -> dict[str, Any]:
+    if not scored_pool:
+        raise RuntimeError("weighted_pick: empty pool")
+
+    weights = [max(1e-6, score) for score, _ in scored_pool]
+    total = sum(weights)
+    r = rng.random() * total
+
+    acc = 0.0
+    for w, (_, rec) in zip(weights, scored_pool):
+        acc += w
+        if r <= acc:
+            return rec
+
+    return scored_pool[-1][1]
+
 
 def select_best_models(
     prepared: list[dict[str, Any]],
@@ -691,7 +664,6 @@ def select_best_models(
             })
             continue
 
-        # 1) Сразу отфильтровываем только те модели, для которых реально есть OBJ
         existing_pool: list[dict[str, Any]] = []
         for rec in initial_pool:
             model_id = str(rec.get("model_id") or "")
@@ -710,35 +682,32 @@ def select_best_models(
             })
             continue
 
-        # 2) Считаем score только для реально существующих моделей
         scored: list[tuple[float, dict[str, Any]]] = []
         for rec in existing_pool:
             s = category_score(prompt_text, rec, category)
             scored.append((s, rec))
         scored.sort(key=lambda x: x[0], reverse=True)
 
-        # 3) Берём top-K, но не случайно из мусора, а из реально хороших
         top_k = min(10, len(scored))
-        ranked_pool = [x[1] for x in scored[:top_k]]
+        top_scored = scored[:top_k]
 
         added_for_category = 0
         used_model_ids: set[str] = set()
 
-        # сначала пытаемся брать разные модели
-        for rec in ranked_pool:
-            if added_for_category >= count:
+        # Сначала стараемся брать разные модели,
+        # но не строго top-1/top-2/..., а случайно с весами по score.
+        while added_for_category < count:
+            available_unique = [(s, rec) for s, rec in top_scored if str(rec["model_id"]) not in used_model_ids]
+            if not available_unique:
                 break
 
+            rec = weighted_pick(available_unique, rng)
             model_id = str(rec["model_id"])
-            if model_id in used_model_ids:
-                continue
-
             obj_path = model_obj_path(future_root, model_id)
             if obj_path is None:
+                used_model_ids.add(model_id)
                 continue
 
-            # ВАЖНО: sizes в 3D-FRONT boxes.npz — это half-size,
-            # поэтому в objects.json нужно писать полный размер
             sx_mm = max(1, int(round(float(rec["size_x"]) * 2.0 * 1000.0)))  # width
             sy_mm = max(1, int(round(float(rec["size_z"]) * 2.0 * 1000.0)))  # depth
             sz_mm = max(1, int(round(float(rec["size_y"]) * 2.0 * 1000.0)))  # height
@@ -773,17 +742,18 @@ def select_best_models(
             used_model_ids.add(model_id)
             added_for_category += 1
 
-        # если разных моделей не хватило, разрешаем повторы из ranked_pool
-        while added_for_category < count and ranked_pool:
-            rec = rng.choice(ranked_pool)
+        # Если уникальных не хватило — разрешаем повторы из top_scored,
+        # тоже случайно и с весами по score.
+        while added_for_category < count and top_scored:
+            rec = weighted_pick(top_scored, rng)
             model_id = str(rec["model_id"])
             obj_path = model_obj_path(future_root, model_id)
             if obj_path is None:
                 break
 
             sx_mm = max(1, int(round(float(rec["size_x"]) * 2.0 * 1000.0)))
-            sy_mm = max(1, int(round(float(rec["size_y"]) * 2.0 * 1000.0)))
-            sz_mm = max(1, int(round(float(rec["size_z"]) * 2.0 * 1000.0)))
+            sy_mm = max(1, int(round(float(rec["size_z"]) * 2.0 * 1000.0)))
+            sz_mm = max(1, int(round(float(rec["size_y"]) * 2.0 * 1000.0)))
 
             constraints = dict(
                 CATEGORY_CONSTRAINTS.get(str(rec.get("category") or ""), {"mount_type": "floor"})
@@ -826,6 +796,7 @@ def select_best_models(
     print("select_debug =", json.dumps(debug_stats, ensure_ascii=False, indent=2))
     return selected_objects, raw_selected
 
+
 # ------------------------------------------------------------
 # Main
 # ------------------------------------------------------------
@@ -866,7 +837,7 @@ def main() -> None:
 
     layout_request = build_layout_request(prompt_text, room_metrics, available_categories)
     print("layout_request =", json.dumps(layout_request, ensure_ascii=False, indent=2))
-    
+
     objects_items, selected_raw = select_best_models(
         prepared=prepared,
         layout_request=layout_request,
