@@ -1,0 +1,403 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+# src/tools/batch_generate_typical_rooms.py
+
+from __future__ import annotations
+
+import argparse
+import csv
+import json
+import subprocess
+import sys
+import time
+from dataclasses import dataclass
+from datetime import datetime
+from pathlib import Path
+from typing import Any
+
+
+DEFAULT_ROOMS_DIR = "data/input/generated_typical_rooms"
+DEFAULT_OUTPUT_ROOT = "out/batch_typical_rooms"
+DEFAULT_RUN_PIPELINE = "src/run_pipeline.py"
+DEFAULT_PLACER = "diffuscene_remote"
+DEFAULT_MODES = "diffuscene"
+DEFAULT_REPEATS = 20
+
+
+@dataclass(frozen=True)
+class PromptTemplate:
+    key: str
+    room_type: str
+    text: str
+
+
+PROMPT_TEMPLATES: list[PromptTemplate] = [
+    # bedroom
+    PromptTemplate(
+        key="bedroom_classic_cozy",
+        room_type="bedroom",
+        text="classic cozy bedroom with king-size bed, two nightstands, wardrobe and ceiling lamp",
+    ),
+    PromptTemplate(
+        key="bedroom_classic_family",
+        room_type="bedroom",
+        text="classic family bedroom with double bed, two bedside tables, wardrobe, dresser and ceiling lamp",
+    ),
+    PromptTemplate(
+        key="bedroom_classic_soft",
+        room_type="bedroom",
+        text="classic soft bedroom with bed, two nightstands, wardrobe, side cabinet and ceiling lamp",
+    ),
+    PromptTemplate(
+        key="bedroom_classic_storage",
+        room_type="bedroom",
+        text="classic bedroom with bed, two nightstands, large wardrobe, drawer chest and ceiling lamp",
+    ),
+
+    # living
+    PromptTemplate(
+        key="living_classic_guest",
+        room_type="living",
+        text="classic living room with sofa, armchair, coffee table, TV stand, sideboard and ceiling lamp",
+    ),
+    PromptTemplate(
+        key="living_classic_formal",
+        room_type="living",
+        text="classic formal living room with sofa, two armchairs, coffee table, TV stand and ceiling lamp",
+    ),
+    PromptTemplate(
+        key="living_classic_family",
+        room_type="living",
+        text="classic family living room with multi-seat sofa, armchair, coffee table, TV stand and ceiling lamp",
+    ),
+    PromptTemplate(
+        key="living_classic_storage",
+        room_type="living",
+        text="classic living room with sofa, coffee table, TV stand, sideboard, cabinet and ceiling lamp",
+    ),
+
+    # office
+    PromptTemplate(
+        key="office_classic_work",
+        room_type="office",
+        text="classic office with desk, office chair, bookcase, cabinet and ceiling lamp",
+    ),
+    PromptTemplate(
+        key="office_classic_study",
+        room_type="office",
+        text="classic study room with desk, chair, bookshelf, storage cabinet and ceiling lamp",
+    ),
+    PromptTemplate(
+        key="office_classic_library",
+        room_type="office",
+        text="classic home office with desk, office chair, bookcase, side cabinet and ceiling lamp",
+    ),
+    PromptTemplate(
+        key="office_classic_compact",
+        room_type="office",
+        text="classic compact office with desk, chair, shelf, cabinet and ceiling lamp",
+    ),
+]
+
+
+def now_stamp() -> str:
+    return datetime.now().strftime("%Y%m%d_%H%M%S")
+
+
+def load_room_type(room_json_path: Path) -> str:
+    data = json.loads(room_json_path.read_text(encoding="utf-8"))
+    room = data.get("room") or {}
+    room_type = str(room.get("room_type") or "").strip().lower()
+    if not room_type:
+        raise RuntimeError(f"В {room_json_path} нет room.room_type")
+    return room_type
+
+
+def collect_room_files(rooms_dir: Path) -> list[Path]:
+    files = sorted(p for p in rooms_dir.glob("*.json") if p.name != "summary.json")
+    if not files:
+        raise RuntimeError(f"В каталоге {rooms_dir} не найдено room json")
+    return files
+
+
+def prompts_for_room_type(room_type: str) -> list[PromptTemplate]:
+    res = [x for x in PROMPT_TEMPLATES if x.room_type == room_type]
+    if not res:
+        raise RuntimeError(f"Нет prompt-шаблонов для типа комнаты: {room_type}")
+    return res
+
+
+def ensure_csv_header(csv_path: Path) -> None:
+    csv_path.parent.mkdir(parents=True, exist_ok=True)
+    if csv_path.exists() and csv_path.stat().st_size > 0:
+        return
+
+    fieldnames = [
+        "started_at",
+        "finished_at",
+        "status",
+        "room_file",
+        "room_type",
+        "prompt_key",
+        "prompt_text",
+        "repeat_index",
+        "returncode",
+        "duration_sec",
+        "batch_run_dir",
+        "stdout_log",
+        "stderr_log",
+        "error",
+    ]
+    with csv_path.open("w", encoding="utf-8", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+
+
+def append_csv_row(csv_path: Path, row: dict[str, Any]) -> None:
+    with csv_path.open("a", encoding="utf-8", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=list(row.keys()))
+        writer.writerow(row)
+
+
+def append_jsonl(path: Path, obj: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(obj, ensure_ascii=False) + "\n")
+
+
+def make_job_run_dir(output_root: Path, room_stem: str, prompt_key: str, repeat_index: int) -> Path:
+    return output_root / room_stem / prompt_key / f"run_{repeat_index:02d}"
+
+
+def run_one_job(
+    pipeline_script: Path,
+    room_file: Path,
+    room_type: str,
+    prompt_tpl: PromptTemplate,
+    repeat_index: int,
+    output_root: Path,
+    placer: str,
+    modes: str,
+    blender: str | None,
+    headless: bool,
+    max_attempts: int,
+) -> dict[str, Any]:
+    started = datetime.now()
+    run_dir = make_job_run_dir(output_root, room_file.stem, prompt_tpl.key, repeat_index)
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    stdout_log = run_dir / "stdout.log"
+    stderr_log = run_dir / "stderr.log"
+    meta_json = run_dir / "job_meta.json"
+
+    cmd = [
+        sys.executable,
+        str(pipeline_script),
+        "--placer", placer,
+        "--room", str(room_file.resolve()),
+        "--prompt", prompt_tpl.text,
+        "--modes", modes,
+        "--run-dir", str(run_dir.resolve()),
+        "--max-attempts", str(max_attempts),
+    ]
+    if blender:
+        cmd += ["--blender", blender]
+    if headless:
+        cmd += ["--headless"]
+
+    meta = {
+        "room_file": str(room_file.resolve()),
+        "room_type": room_type,
+        "prompt_key": prompt_tpl.key,
+        "prompt_text": prompt_tpl.text,
+        "repeat_index": repeat_index,
+        "command": cmd,
+        "started_at": started.isoformat(timespec="seconds"),
+    }
+    meta_json.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    try:
+        with stdout_log.open("w", encoding="utf-8") as out, stderr_log.open("w", encoding="utf-8") as err:
+            t0 = time.perf_counter()
+            proc = subprocess.run(cmd, stdout=out, stderr=err, text=True, check=False)
+            duration_sec = round(time.perf_counter() - t0, 3)
+
+        finished = datetime.now()
+        status = "ok" if proc.returncode == 0 else "failed"
+        error = "" if proc.returncode == 0 else f"pipeline returncode={proc.returncode}"
+
+        return {
+            "started_at": started.isoformat(timespec="seconds"),
+            "finished_at": finished.isoformat(timespec="seconds"),
+            "status": status,
+            "room_file": str(room_file.resolve()),
+            "room_type": room_type,
+            "prompt_key": prompt_tpl.key,
+            "prompt_text": prompt_tpl.text,
+            "repeat_index": repeat_index,
+            "returncode": proc.returncode,
+            "duration_sec": duration_sec,
+            "batch_run_dir": str(run_dir.resolve()),
+            "stdout_log": str(stdout_log.resolve()),
+            "stderr_log": str(stderr_log.resolve()),
+            "error": error,
+        }
+    except Exception as e:
+        finished = datetime.now()
+        return {
+            "started_at": started.isoformat(timespec="seconds"),
+            "finished_at": finished.isoformat(timespec="seconds"),
+            "status": "error",
+            "room_file": str(room_file.resolve()),
+            "room_type": room_type,
+            "prompt_key": prompt_tpl.key,
+            "prompt_text": prompt_tpl.text,
+            "repeat_index": repeat_index,
+            "returncode": -1,
+            "duration_sec": -1,
+            "batch_run_dir": str(run_dir.resolve()),
+            "stdout_log": str(stdout_log.resolve()),
+            "stderr_log": str(stderr_log.resolve()),
+            "error": repr(e),
+        }
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description=(
+            "Пакетный запуск типичных комнат с типичными prompt'ами. "
+            "Скрипт не падает на отдельных ошибках: каждая задача логируется отдельно."
+        )
+    )
+    parser.add_argument("--rooms-dir", default=DEFAULT_ROOMS_DIR)
+    parser.add_argument("--output-root", default=DEFAULT_OUTPUT_ROOT)
+    parser.add_argument("--pipeline-script", default=DEFAULT_RUN_PIPELINE)
+    parser.add_argument(
+        "--placer",
+        default=DEFAULT_PLACER,
+        choices=["cube", "forest", "graph_stat", "diffusion", "diffuscene_remote"],
+    )
+    parser.add_argument("--modes", default=DEFAULT_MODES)
+    parser.add_argument("--repeats", type=int, default=DEFAULT_REPEATS)
+    parser.add_argument("--max-attempts", type=int, default=1)
+    parser.add_argument("--blender", default=None)
+    parser.add_argument(
+        "--no-headless",
+        dest="headless",
+        action="store_false",
+        help="Открывать Blender с GUI. По умолчанию batch запускается в headless-режиме.",
+    )
+    parser.set_defaults(headless=True)
+    parser.add_argument("--room-limit", type=int, default=None)
+    parser.add_argument("--prompt-limit-per-room", type=int, default=None)
+    args = parser.parse_args()
+
+    rooms_dir = Path(args.rooms_dir).expanduser().resolve()
+    output_root = Path(args.output_root).expanduser().resolve()
+    pipeline_script = Path(args.pipeline_script).expanduser().resolve()
+
+    if not pipeline_script.is_file():
+        raise RuntimeError(f"Не найден pipeline script: {pipeline_script}")
+
+    rooms = collect_room_files(rooms_dir)
+    if args.room_limit is not None:
+        rooms = rooms[: max(0, int(args.room_limit))]
+
+    batch_stamp = now_stamp()
+    batch_dir = output_root / f"batch_{batch_stamp}"
+    batch_dir.mkdir(parents=True, exist_ok=True)
+
+    csv_log = batch_dir / "batch_results.csv"
+    jsonl_log = batch_dir / "batch_results.jsonl"
+    summary_json = batch_dir / "summary.json"
+    ensure_csv_header(csv_log)
+
+    jobs_total = 0
+    ok_count = 0
+    failed_count = 0
+    error_count = 0
+
+    manifest: dict[str, Any] = {
+        "created_at": datetime.now().isoformat(timespec="seconds"),
+        "rooms_dir": str(rooms_dir),
+        "output_root": str(output_root),
+        "pipeline_script": str(pipeline_script),
+        "placer": args.placer,
+        "modes": args.modes,
+        "repeats": args.repeats,
+        "max_attempts": args.max_attempts,
+        "headless": bool(args.headless),
+        "room_limit": args.room_limit,
+        "prompt_limit_per_room": args.prompt_limit_per_room,
+        "rooms": [str(x) for x in rooms],
+    }
+    (batch_dir / "batch_manifest.json").write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+    for room_file in rooms:
+        room_type = load_room_type(room_file)
+        prompts = prompts_for_room_type(room_type)
+        if args.prompt_limit_per_room is not None:
+            prompts = prompts[: max(0, int(args.prompt_limit_per_room))]
+
+        for prompt_tpl in prompts:
+            for repeat_index in range(1, int(args.repeats) + 1):
+                jobs_total += 1
+                print(
+                    f"[{jobs_total}] room={room_file.name} "
+                    f"type={room_type} prompt={prompt_tpl.key} repeat={repeat_index}"
+                )
+
+                row = run_one_job(
+                    pipeline_script=pipeline_script,
+                    room_file=room_file,
+                    room_type=room_type,
+                    prompt_tpl=prompt_tpl,
+                    repeat_index=repeat_index,
+                    output_root=batch_dir,
+                    placer=args.placer,
+                    modes=args.modes,
+                    blender=args.blender,
+                    headless=bool(args.headless),
+                    max_attempts=int(args.max_attempts),
+                )
+
+                append_csv_row(csv_log, row)
+                append_jsonl(jsonl_log, row)
+
+                if row["status"] == "ok":
+                    ok_count += 1
+                elif row["status"] == "failed":
+                    failed_count += 1
+                else:
+                    error_count += 1
+
+                summary = {
+                    "jobs_total": jobs_total,
+                    "ok_count": ok_count,
+                    "failed_count": failed_count,
+                    "error_count": error_count,
+                    "last_job": row,
+                }
+                summary_json.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    final_summary = {
+        "finished_at": datetime.now().isoformat(timespec="seconds"),
+        "jobs_total": jobs_total,
+        "ok_count": ok_count,
+        "failed_count": failed_count,
+        "error_count": error_count,
+        "batch_dir": str(batch_dir.resolve()),
+        "csv_log": str(csv_log.resolve()),
+        "jsonl_log": str(jsonl_log.resolve()),
+    }
+    summary_json.write_text(json.dumps(final_summary, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    print("\n=== BATCH FINISHED ===")
+    print(json.dumps(final_summary, ensure_ascii=False, indent=2))
+
+
+if __name__ == "__main__":
+    main()

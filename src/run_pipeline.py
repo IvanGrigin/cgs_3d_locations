@@ -389,6 +389,92 @@ def visualize_existing_run(args: argparse.Namespace, room_path: str, run_dir: Pa
 
     return built_any
 
+def visualize_existing_run(args: argparse.Namespace, room_path: str, run_dir: Path, modes: list[str]) -> bool:
+    built_any = False
+
+    for mode in modes:
+        scene_path = run_dir / f"scene_{mode}.json"
+        placement_path = run_dir / f"placement_{mode}.json"
+
+        if scene_path.is_file():
+            if args.skip_blender:
+                print(f"⏭ Пропуск Blender для существующей сцены mode={mode}")
+                built_any = True
+                continue
+
+            blend_out, render_out = blender_outputs_for_mode(args, run_dir, mode)
+            glb_for_arg = os.path.abspath(DEFAULT_ROOM_GLB)
+
+            cmd = [
+                sys.executable, BLENDER_VIS_SCRIPT,
+                "--glb", glb_for_arg,
+                "--json", str(scene_path.resolve()),
+            ]
+
+            if args.blender:
+                cmd += ["--blender", args.blender]
+            if args.headless:
+                cmd.append("--background")
+            if args.no_import_glb or room_path.lower().endswith(".json"):
+                cmd.append("--no-import-glb")
+            if blend_out:
+                cmd += ["--save-blend", str(Path(blend_out).resolve())]
+            if render_out:
+                cmd += ["--render", str(Path(render_out).resolve())]
+
+            print(f"▶ Reuse Blender scene for mode={mode}:\n ", " ".join(cmd))
+            subprocess.run(cmd, check=True)
+            built_any = True
+            continue
+
+        if placement_path.is_file():
+            if args.skip_blender:
+                print(f"⏭ Пропуск Blender для существующей расстановки mode={mode}")
+                built_any = True
+                continue
+
+            run_blender_for_mode(args, room_path, run_dir, mode, placement_path)
+            built_any = True
+
+    if not built_any:
+        legacy_scene = run_dir / "scene_room_and_placements.json"
+        legacy_placement = run_dir / "placement_result.json"
+
+        if legacy_scene.is_file():
+            if args.skip_blender:
+                print("⏭ Пропуск Blender для legacy scene")
+                built_any = True
+            else:
+                blend_out, render_out = blender_outputs_for_mode(args, run_dir, "reuse")
+                glb_for_arg = os.path.abspath(DEFAULT_ROOM_GLB)
+                cmd = [
+                    sys.executable, BLENDER_VIS_SCRIPT,
+                    "--glb", glb_for_arg,
+                    "--json", str(legacy_scene.resolve()),
+                ]
+                if args.blender:
+                    cmd += ["--blender", args.blender]
+                if args.headless:
+                    cmd.append("--background")
+                if args.no_import_glb or room_path.lower().endswith(".json"):
+                    cmd.append("--no-import-glb")
+                if blend_out:
+                    cmd += ["--save-blend", str(Path(blend_out).resolve())]
+                if render_out:
+                    cmd += ["--render", str(Path(render_out).resolve())]
+                print("▶ Reuse legacy scene:\n ", " ".join(cmd))
+                subprocess.run(cmd, check=True)
+                built_any = True
+
+        elif legacy_placement.is_file():
+            if args.skip_blender:
+                print("⏭ Пропуск Blender для legacy placement")
+                built_any = True
+            else:
+                run_blender_for_mode(args, room_path, run_dir, "reuse", legacy_placement)
+                built_any = True
+
+    return built_any
 
 # ------------------------------------------------------------
 # Main pipeline per mode
@@ -466,13 +552,16 @@ def run_pipeline_for_mode(
                     out_path=placement_out,
                 )
 
-            run_blender_for_mode(
-                args=args,
-                room_path=room_path,
-                run_dir=run_dir,
-                mode=mode,
-                placement_path=placement_out,
-            )
+            if args.skip_blender:
+                print(f"⏭ Пропуск Blender для режима {mode}")
+            else:
+                run_blender_for_mode(
+                    args=args,
+                    room_path=room_path,
+                    run_dir=run_dir,
+                    mode=mode,
+                    placement_path=placement_out,
+                )
 
             print(f"\n✅ УСПЕХ! РЕЖИМ {mode}")
             return
@@ -483,7 +572,6 @@ def run_pipeline_for_mode(
             print(f"❌ Ошибка ({mode}): {e}")
 
     raise RuntimeError(f"Не удалось собрать сцену в режиме {mode}")
-
 
 # ------------------------------------------------------------
 # CLI
@@ -508,6 +596,7 @@ def build_cli() -> argparse.ArgumentParser:
     p.add_argument("--no-import-glb", action="store_true", help="Не импортировать room.glb")
     p.add_argument("--save-blend", default=None, help="Базовый путь для .blend; mode будет дописан автоматически")
     p.add_argument("--render", default=None, help="Базовый путь для render; mode будет дописан автоматически")
+    p.add_argument("--skip-blender", action="store_true", help="Не запускать Blender-визуализацию")
     p.add_argument("--max-attempts", type=int, default=MAX_ATTEMPTS)
 
     p.add_argument(
@@ -536,8 +625,6 @@ def build_cli() -> argparse.ArgumentParser:
     )
 
     return p
-
-
 # ------------------------------------------------------------
 # Main
 # ------------------------------------------------------------
