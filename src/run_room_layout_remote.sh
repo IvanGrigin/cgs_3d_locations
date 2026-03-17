@@ -1,124 +1,282 @@
 #!/usr/bin/env bash
+# -*- coding: utf-8 -*-
+# src/run_room_layout_remote.sh
+
 set -euo pipefail
 
-ROOM_JSON="${1:?need room json}"
-OBJECTS_JSON="${2:?need objects json}"
-RUN_NAME="${3:-run_$(date +%s)}"
+if [[ $# -lt 3 ]]; then
+  echo "Usage: $0 <room.json> <objects_for_server.json> <run_name>" >&2
+  exit 2
+fi
 
-SERVER_USER="root"
-SERVER_HOST="207.102.87.207"
-SERVER_PORT="40527"
-SSH_KEY="${HOME}/.ssh/id_ed25519"
+LOCAL_ROOM_JSON="$1"
+LOCAL_OBJECTS_JSON="$2"
+RUN_NAME="$3"
 
-REMOTE_BASE="/workspace/projects/DiffuScene/room_inbox_remote"
-REMOTE_RUN_DIR="${REMOTE_BASE}/${RUN_NAME}"
+# ------------------------------------------------------------
+# helpers
+# ------------------------------------------------------------
+err() {
+  echo "[ERROR] $*" >&2
+}
 
-# Локальные результаты кладём не в $(pwd), а в ту же папку, где лежит ROOM_JSON,
-# то есть в текущий run_dir пайплайна.
-LOCAL_OUT_DIR="$(cd "$(dirname "${ROOM_JSON}")" && pwd)"
-mkdir -p "${LOCAL_OUT_DIR}"
+info() {
+  echo "[INFO] $*"
+}
 
-echo "==> create remote dir"
-ssh -T -i "${SSH_KEY}" -p "${SERVER_PORT}" "${SERVER_USER}@${SERVER_HOST}" \
-  "mkdir -p '${REMOTE_RUN_DIR}'"
+require_file() {
+  local p="$1"
+  if [[ ! -f "$p" ]]; then
+    err "File not found: $p"
+    exit 2
+  fi
+}
 
-echo "==> upload inputs"
-scp -i "${SSH_KEY}" -P "${SERVER_PORT}" \
-  "${ROOM_JSON}" \
-  "${OBJECTS_JSON}" \
-  "${SERVER_USER}@${SERVER_HOST}:${REMOTE_RUN_DIR}/"
-
-echo "==> run server pipeline"
-ssh -T -i "${SSH_KEY}" -p "${SERVER_PORT}" "${SERVER_USER}@${SERVER_HOST}" <<EOF
-set -euo pipefail
-cd /workspace/projects/DiffuScene
-source /opt/miniforge3/etc/profile.d/conda.sh || true
-conda activate diffuscene || true
-
-python scripts/objects_json_to_model_input.py \
-  --in_json "${REMOTE_RUN_DIR}/$(basename "${OBJECTS_JSON}")" \
-  --out_json "${REMOTE_RUN_DIR}/objects_model_input.json" \
-  --allow-missing-objfeats
-
-python scripts/infer_room.py \
-  --room_json "${REMOTE_RUN_DIR}/$(basename "${ROOM_JSON}")" \
-  --objects_json "${REMOTE_RUN_DIR}/objects_model_input.json" \
-  --run_dir "${REMOTE_RUN_DIR}/run" \
-  --cfg /workspace/projects/DiffuScene/config/rearrange/diffusion_bedrooms_instancond_lat32_v_rearrange.yaml \
-  --threed_future /workspace/data/assets/datasets/3d_front_processed/threed_future_model_bedroom.pkl \
-  --weight /workspace/data/assets/checkpoints/pretrained_diffusion/bedrooms_rearrange/model_17000 \
-  --n_sequences 1
-
-python - <<PY
-import json, math
+yaml_get_py() {
+  local yaml_path="$1"
+  local dotted_key="$2"
+  python3 - "$yaml_path" "$dotted_key" <<'PY'
+import sys
 from pathlib import Path
 
-run_dir = Path("${REMOTE_RUN_DIR}/run")
-pred = json.loads((run_dir / "model_out/seq_0000/pred_bbox.json").read_text(encoding="utf-8"))
-room_meta = json.loads((run_dir / "room_meta.json").read_text(encoding="utf-8"))
-room = json.loads(Path(room_meta["room_json"]).read_text(encoding="utf-8"))
+yaml_path = Path(sys.argv[1]).expanduser().resolve()
+dotted_key = sys.argv[2]
 
-CENTROIDS_MIN = [-2.7625005, 0.045, -2.75275]
-CENTROIDS_MAX = [2.77844175, 3.6248396, 2.81854277]
-SIZES_MIN = [0.03998288, 0.02000002, 0.012772]
-SIZES_MAX = [2.8682, 1.770065, 1.698315]
+try:
+    import yaml
+except Exception:
+    print("")
+    raise SystemExit(0)
 
-def descale(v, mn, mx):
-    return [((x + 1.0) / 2.0) * (b - a) + a for x, a, b in zip(v, mn, mx)]
+if not yaml_path.is_file():
+    print("")
+    raise SystemExit(0)
 
-def lerp(a, b, t):
-    return a + (b - a) * t
+data = yaml.safe_load(yaml_path.read_text(encoding="utf-8")) or {}
+cur = data
+for part in dotted_key.split("."):
+    if not isinstance(cur, dict) or part not in cur:
+        print("")
+        raise SystemExit(0)
+    cur = cur[part]
 
-def remap(v, src_min, src_max, dst_min, dst_max):
-    if abs(src_max - src_min) < 1e-12:
-        return (dst_min + dst_max) / 2.0
-    t = (v - src_min) / (src_max - src_min)
-    return lerp(dst_min, dst_max, t)
-
-poly = room["room"]["floor_polygon"]
-room_xs = [float(p["x"]) for p in poly]
-room_ys = [float(p["y"]) for p in poly]
-room_xmin, room_xmax = min(room_xs), max(room_xs)
-room_ymin, room_ymax = min(room_ys), max(room_ys)
-
-MODEL_X_MIN, MODEL_X_MAX = -2.7625005, 2.77844175
-MODEL_Z_MIN, MODEL_Z_MAX = -2.75275, 2.81854277
-
-items = []
-for it in pred["items"]:
-    t_metric = descale(it["translation"], CENTROIDS_MIN, CENTROIDS_MAX)
-    s_metric = descale(it["size"], SIZES_MIN, SIZES_MAX)
-    yaw = math.atan2(it["angle"][1], it["angle"][0])
-
-    room_x = remap(t_metric[0], MODEL_X_MIN, MODEL_X_MAX, room_xmin, room_xmax)
-    room_y = remap(t_metric[2], MODEL_Z_MIN, MODEL_Z_MAX, room_ymin, room_ymax)
-
-    items.append({
-        "i": it["i"],
-        "class_name": it["class_name"],
-        "position_room_xy_m": [room_x, room_y],
-        "z_floor_m": 0.0,
-        "size_m": s_metric,
-        "yaw_rad": yaw,
-        "yaw_deg": yaw * 180.0 / math.pi
-    })
-
-out = {"items": items}
-(run_dir / "model_out/seq_0000/placements_room.json").write_text(
-    json.dumps(out, ensure_ascii=False, indent=2),
-    encoding="utf-8"
-)
-print("saved placements_room.json")
+if cur is None:
+    print("")
+elif isinstance(cur, (dict, list)):
+    print("")
+else:
+    print(str(cur))
 PY
+}
+
+pick_value() {
+  local current="$1"
+  local yaml_path="$2"
+  local dotted_key="$3"
+  if [[ -n "${current:-}" ]]; then
+    printf '%s\n' "$current"
+    return
+  fi
+  yaml_get_py "$yaml_path" "$dotted_key"
+}
+
+# ------------------------------------------------------------
+# validate local inputs
+# ------------------------------------------------------------
+require_file "$LOCAL_ROOM_JSON"
+require_file "$LOCAL_OBJECTS_JSON"
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+PATHS_CONFIG="${DIFFUSCENE_PATHS_CONFIG:-$PROJECT_ROOT/config/paths.yaml}"
+if [[ ! -f "$PATHS_CONFIG" ]]; then
+  info "paths config not found at $PATHS_CONFIG, will rely on env/defaults"
+fi
+
+# ------------------------------------------------------------
+# resolve ssh config
+# ------------------------------------------------------------
+REMOTE_HOST="$(pick_value "${DIFFUSCENE_REMOTE_HOST:-}" "$PATHS_CONFIG" "remote.ssh.host")"
+REMOTE_PORT="$(pick_value "${DIFFUSCENE_REMOTE_PORT:-}" "$PATHS_CONFIG" "remote.ssh.port")"
+REMOTE_USER="$(pick_value "${DIFFUSCENE_REMOTE_USER:-}" "$PATHS_CONFIG" "remote.ssh.user")"
+REMOTE_KEY="$(pick_value "${DIFFUSCENE_REMOTE_KEY:-}" "$PATHS_CONFIG" "remote.ssh.key")"
+
+REMOTE_PROJECT_ROOT="$(pick_value "${DIFFUSCENE_REMOTE_PROJECT_ROOT:-}" "$PATHS_CONFIG" "remote.project.root")"
+REMOTE_INPUT_ROOT="$(pick_value "${DIFFUSCENE_REMOTE_INPUT_ROOT:-}" "$PATHS_CONFIG" "remote.dirs.input_root")"
+REMOTE_RUNS_ROOT="$(pick_value "${DIFFUSCENE_REMOTE_RUNS_ROOT:-}" "$PATHS_CONFIG" "remote.dirs.runs_root")"
+
+REMOTE_CONDA_ENV="$(pick_value "${DIFFUSCENE_REMOTE_CONDA_ENV:-}" "$PATHS_CONFIG" "remote.env.conda_env")"
+REMOTE_NLTK_DATA="$(pick_value "${DIFFUSCENE_REMOTE_NLTK_DATA:-}" "$PATHS_CONFIG" "remote.env.nltk_data")"
+
+REMOTE_THREED_FUTURE="$(pick_value "${DIFFUSCENE_REMOTE_THREED_FUTURE:-}" "$PATHS_CONFIG" "remote.data.threed_future")"
+
+DOMAIN="${DIFFUSCENE_DOMAIN:-bedroom}"
+case "$DOMAIN" in
+  bedroom)
+    REMOTE_CFG="$(pick_value "${DIFFUSCENE_REMOTE_CFG:-}" "$PATHS_CONFIG" "remote.config.rearrange_bedrooms")"
+    REMOTE_WEIGHT="$(pick_value "${DIFFUSCENE_REMOTE_WEIGHT:-}" "$PATHS_CONFIG" "remote.weights.bedrooms_rearrange")"
+    ;;
+  livingroom)
+    REMOTE_CFG="$(pick_value "${DIFFUSCENE_REMOTE_CFG:-}" "$PATHS_CONFIG" "remote.config.rearrange_livingrooms")"
+    REMOTE_WEIGHT="$(pick_value "${DIFFUSCENE_REMOTE_WEIGHT:-}" "$PATHS_CONFIG" "remote.weights.livingrooms_rearrange")"
+    ;;
+  diningroom)
+    REMOTE_CFG="$(pick_value "${DIFFUSCENE_REMOTE_CFG:-}" "$PATHS_CONFIG" "remote.config.rearrange_diningrooms")"
+    # в yaml у тебя нет diningrooms_rearrange, поэтому здесь нужен fallback
+    REMOTE_WEIGHT="${DIFFUSCENE_REMOTE_WEIGHT:-}"
+    ;;
+  *)
+    err "Unsupported domain: $DOMAIN"
+    exit 2
+    ;;
+esac
+
+REMOTE_PORT="${REMOTE_PORT:-22}"
+REMOTE_USER="${REMOTE_USER:-root}"
+REMOTE_CONDA_ENV="${REMOTE_CONDA_ENV:-diffuscene}"
+REMOTE_PROJECT_ROOT="${REMOTE_PROJECT_ROOT:-/workspace/projects/DiffuScene}"
+REMOTE_INPUT_ROOT="${REMOTE_INPUT_ROOT:-/workspace/room_inputs}"
+REMOTE_RUNS_ROOT="${REMOTE_RUNS_ROOT:-$REMOTE_PROJECT_ROOT/scripts/room_runs}"
+REMOTE_NLTK_DATA="${REMOTE_NLTK_DATA:-/root/nltk_data}"
+REMOTE_THREED_FUTURE="${REMOTE_THREED_FUTURE:-/workspace/data/models/3D-FUTURE-model-processed/3D-FUTURE-model}"
+
+if [[ -z "$REMOTE_HOST" ]]; then
+  err "REMOTE_HOST is empty"
+  exit 2
+fi
+
+if [[ -z "$REMOTE_KEY" ]]; then
+  err "REMOTE_KEY is empty"
+  exit 2
+fi
+
+REMOTE_KEY="${REMOTE_KEY/#\~/$HOME}"
+
+if [[ ! -f "$REMOTE_KEY" ]]; then
+  err "SSH key not found: $REMOTE_KEY"
+  exit 2
+fi
+
+if [[ -z "${REMOTE_CFG:-}" ]]; then
+  err "REMOTE_CFG is empty for domain=$DOMAIN"
+  exit 2
+fi
+
+if [[ -z "${REMOTE_WEIGHT:-}" ]]; then
+  err "REMOTE_WEIGHT is empty for domain=$DOMAIN"
+  exit 2
+fi
+
+REMOTE_HOST_SPEC="${REMOTE_USER}@${REMOTE_HOST}"
+
+REMOTE_INPUT_DIR="${REMOTE_INPUT_ROOT%/}/${RUN_NAME}"
+REMOTE_RUN_DIR="${REMOTE_RUNS_ROOT%/}/${RUN_NAME}"
+
+REMOTE_ROOM_JSON="${REMOTE_INPUT_DIR}/room.json"
+REMOTE_OBJECTS_JSON="${REMOTE_INPUT_DIR}/objects_for_server.json"
+
+LOCAL_RESULTS_DIR="$(cd "$(dirname "$LOCAL_ROOM_JSON")" && pwd)"
+
+SSH_OPTS=(
+  -i "$REMOTE_KEY"
+  -p "$REMOTE_PORT"
+  -o StrictHostKeyChecking=no
+  -o UserKnownHostsFile=/dev/null
+  -o ServerAliveInterval=30
+  -o ServerAliveCountMax=120
+)
+
+SCP_OPTS=(
+  -i "$REMOTE_KEY"
+  -P "$REMOTE_PORT"
+  -o StrictHostKeyChecking=no
+  -o UserKnownHostsFile=/dev/null
+)
+
+# ------------------------------------------------------------
+# debug print
+# ------------------------------------------------------------
+info "REMOTE_HOST      = $REMOTE_HOST"
+info "REMOTE_PORT      = $REMOTE_PORT"
+info "REMOTE_USER      = $REMOTE_USER"
+info "REMOTE_PROJECT   = $REMOTE_PROJECT_ROOT"
+info "REMOTE_INPUT_DIR = $REMOTE_INPUT_DIR"
+info "REMOTE_RUN_DIR   = $REMOTE_RUN_DIR"
+info "DOMAIN           = $DOMAIN"
+info "REMOTE_CFG       = $REMOTE_CFG"
+info "REMOTE_WEIGHT    = $REMOTE_WEIGHT"
+
+# ------------------------------------------------------------
+# quick ssh check
+# ------------------------------------------------------------
+info "Checking SSH connectivity..."
+ssh "${SSH_OPTS[@]}" "$REMOTE_HOST_SPEC" 'echo "[REMOTE] ssh ok: $(hostname)"'
+
+# ------------------------------------------------------------
+# prepare remote dirs
+# ------------------------------------------------------------
+info "Preparing remote directories..."
+ssh "${SSH_OPTS[@]}" "$REMOTE_HOST_SPEC" "
+  mkdir -p '$REMOTE_INPUT_DIR'
+  mkdir -p '$REMOTE_RUN_DIR'
+"
+
+# ------------------------------------------------------------
+# upload inputs
+# ------------------------------------------------------------
+info "Uploading room/object files..."
+scp "${SCP_OPTS[@]}" "$LOCAL_ROOM_JSON"    "${REMOTE_HOST_SPEC}:${REMOTE_ROOM_JSON}"
+scp "${SCP_OPTS[@]}" "$LOCAL_OBJECTS_JSON" "${REMOTE_HOST_SPEC}:${REMOTE_OBJECTS_JSON}"
+
+# ------------------------------------------------------------
+# run remote inference
+# ------------------------------------------------------------
+info "Running remote DiffuScene inference..."
+
+read -r -d '' REMOTE_SCRIPT <<EOF || true
+set -euo pipefail
+
+source /root/miniconda3/etc/profile.d/conda.sh 2>/dev/null || true
+source /opt/conda/etc/profile.d/conda.sh 2>/dev/null || true
+
+conda activate "$REMOTE_CONDA_ENV"
+
+cd "$REMOTE_PROJECT_ROOT"
+
+export PYTHONPATH="$REMOTE_PROJECT_ROOT:$REMOTE_PROJECT_ROOT/ChamferDistancePytorch:\$PYTHONPATH"
+export NLTK_DATA="$REMOTE_NLTK_DATA"
+
+python scripts/infer_room.py \
+  --room_json "$REMOTE_ROOM_JSON" \
+  --objects_json "$REMOTE_OBJECTS_JSON" \
+  --run_dir "$REMOTE_RUN_DIR" \
+  --cfg "$REMOTE_CFG" \
+  --threed_future "$REMOTE_THREED_FUTURE" \
+  --weight "$REMOTE_WEIGHT" \
+  --n_sequences 1
+
+test -f "$REMOTE_RUN_DIR/placements_room.json"
 EOF
 
-echo "==> download results"
-scp -i "${SSH_KEY}" -P "${SERVER_PORT}" \
-  "${SERVER_USER}@${SERVER_HOST}:${REMOTE_RUN_DIR}/run/model_out/seq_0000/placements_room.json" \
-  "${LOCAL_OUT_DIR}/"
+ssh "${SSH_OPTS[@]}" "$REMOTE_HOST_SPEC" "$REMOTE_SCRIPT"
 
-scp -i "${SSH_KEY}" -P "${SERVER_PORT}" \
-  "${SERVER_USER}@${SERVER_HOST}:${REMOTE_RUN_DIR}/run/model_out/seq_0000/pred_bbox.json" \
-  "${LOCAL_OUT_DIR}/" || true
+# ------------------------------------------------------------
+# download outputs
+# ------------------------------------------------------------
+info "Downloading result files..."
 
-echo "Done. Results in: ${LOCAL_OUT_DIR}"
+download_if_exists() {
+  local remote_file="$1"
+  local local_file="$2"
+  if ssh "${SSH_OPTS[@]}" "$REMOTE_HOST_SPEC" "test -f '$remote_file'"; then
+    scp "${SCP_OPTS[@]}" "${REMOTE_HOST_SPEC}:${remote_file}" "$local_file"
+  fi
+}
+
+download_if_exists "$REMOTE_RUN_DIR/placements_room.json"       "$LOCAL_RESULTS_DIR/placements_room.json"
+download_if_exists "$REMOTE_RUN_DIR/placements_room_check.json" "$LOCAL_RESULTS_DIR/placements_room_check.json"
+download_if_exists "$REMOTE_RUN_DIR/pred_bbox.json"             "$LOCAL_RESULTS_DIR/pred_bbox.json"
+download_if_exists "$REMOTE_RUN_DIR/pred_bbox_metric.json"      "$LOCAL_RESULTS_DIR/pred_bbox_metric.json"
+
+echo "Done. Results in: $LOCAL_RESULTS_DIR"

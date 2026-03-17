@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # src/Plasement/blender_scene_builder.py
 #
-# Совместимый builder: GLB комнаты + placement JSON.
+# Совместимый builder: GLB комнаты + placement JSON / scene.v1 JSON.
 # Главная цель: корректные текстуры.
 # Логика:
 #   - если keep_existing_mats=True (по умолчанию), НЕ затираем авторские материалы OBJ/MTL
@@ -16,16 +16,16 @@ import math
 import os
 import re
 import sys
+import random
+import traceback
 from dataclasses import dataclass
+from glob import glob
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
-import random
-from glob import glob
-
 
 import bpy
+import bmesh
 import mathutils
-import traceback
 
 
 # ============================================================
@@ -62,11 +62,10 @@ def _parse_argv(argv: List[str]) -> argparse.Namespace:
         help="Alias: disable keeping existing materials (same as --rebuild-materials).",
     )
 
-    # Other
     ap.add_argument("--no-pack-assets", action="store_true", help="Do not pack external files into .blend")
     ap.add_argument("--verbose", action="store_true")
 
-    # Room environment textures (walls/floor/windows/doors)
+    # Room environment textures
     ap.add_argument(
         "--env-textures-dir",
         default="data/sourse",
@@ -83,7 +82,6 @@ def _parse_argv(argv: List[str]) -> argparse.Namespace:
         default=0,
         help="Random seed for env texture selection (0 = derive from json path).",
     )
-
 
     return ap.parse_args(argv)
 
@@ -111,7 +109,6 @@ def reset_scene() -> None:
     except Exception:
         pass
 
-    # Use EEVEE by default for speed / compatibility
     try:
         if "BLENDER_EEVEE_NEXT" in bpy.app.build_options:
             scene.render.engine = "BLENDER_EEVEE_NEXT"
@@ -120,7 +117,6 @@ def reset_scene() -> None:
     except Exception:
         pass
 
-    # clean
     for obj in list(bpy.data.objects):
         try:
             bpy.data.objects.remove(obj, do_unlink=True)
@@ -172,7 +168,7 @@ def _world_bounds_mesh_objects(objs: List[bpy.types.Object]) -> Tuple[mathutils.
             bb_max.z = max(bb_max.z, p.z)
         eo.to_mesh_clear()
 
-    if bb_min.x > bb_max.x:  # empty
+    if bb_min.x > bb_max.x:
         z = mathutils.Vector((0.0, 0.0, 0.0))
         return z, z
     return bb_min, bb_max
@@ -269,14 +265,12 @@ def _add_basic_lights(bb_min: mathutils.Vector, bb_max: mathutils.Vector) -> Non
     dims = bb_max - bb_min
     radius = max(dims.x, dims.y, dims.z, 0.1)
 
-    # Sun
     sun_data = bpy.data.lights.new("Sun", "SUN")
     sun_data.energy = 3.0
     sun = bpy.data.objects.new("Sun", sun_data)
     bpy.context.scene.collection.objects.link(sun)
     sun.location = (center.x + 3.0 * radius, center.y + 2.5 * radius, center.z + 3.0 * radius)
 
-    # Area key light (if available)
     try:
         area_data = bpy.data.lights.new("Key", "AREA")
         area_data.energy = 500.0
@@ -300,11 +294,17 @@ def _pack_assets_best_effort() -> None:
     except Exception:
         pass
 
+
 def _clamp(v: float, lo: float, hi: float) -> float:
     return max(lo, min(hi, v))
 
 
-def clamp_item_aabb_to_room_glb(aabb: Dict[str, float], bb_min: mathutils.Vector, bb_max: mathutils.Vector, margin: float = 0.02) -> Dict[str, float]:
+def clamp_item_aabb_to_room_glb(
+    aabb: Dict[str, float],
+    bb_min: mathutils.Vector,
+    bb_max: mathutils.Vector,
+    margin: float = 0.02,
+) -> Dict[str, float]:
     x1, x2 = float(aabb["x_min"]), float(aabb["x_max"])
     y1, y2 = float(aabb["y_min"]), float(aabb["y_max"])
     z1, z2 = float(aabb["z_min"]), float(aabb["z_max"])
@@ -327,6 +327,7 @@ def clamp_item_aabb_to_room_glb(aabb: Dict[str, float], bb_min: mathutils.Vector
         "z_min": cz - sz * 0.5, "z_max": cz + sz * 0.5,
     }
 
+
 # ============================================================
 # Path helpers
 # ============================================================
@@ -341,6 +342,43 @@ def _resolve_path_maybe(base_dir: Path, p: Optional[str]) -> Optional[str]:
     if pp.is_absolute():
         return str(pp)
     return str((base_dir / pp).resolve())
+
+
+def _item_asset_dict(it: dict) -> dict:
+    asset = it.get("asset")
+    return asset if isinstance(asset, dict) else {}
+
+
+def _item_mesh_path_raw(it: dict) -> Optional[str]:
+    asset = _item_asset_dict(it)
+    return (
+        it.get("mesh_path")
+        or it.get("obj_path")
+        or asset.get("mesh_path")
+        or asset.get("obj_path")
+    )
+
+
+def _item_mesh_texture_dirs_raw(it: dict) -> List[str]:
+    asset = _item_asset_dict(it)
+    raw = it.get("mesh_texture_dirs")
+    if isinstance(raw, list) and raw:
+        return [str(x) for x in raw]
+
+    raw = asset.get("mesh_texture_dirs")
+    if isinstance(raw, list) and raw:
+        return [str(x) for x in raw]
+
+    return []
+
+
+def _item_mesh_fit_mode(it: dict) -> str:
+    asset = _item_asset_dict(it)
+    return str(it.get("mesh_fit_mode") or asset.get("mesh_fit_mode") or "stretch")
+
+
+def _item_name(it: dict) -> str:
+    return str(it.get("name") or it.get("category") or it.get("id") or "Item")
 
 
 # ============================================================
@@ -358,10 +396,6 @@ def import_glb_into_collection(glb_path: str, collection: bpy.types.Collection) 
 
 
 def _build_obj_import_override() -> Optional[dict]:
-    """
-    OBJ importer в ряде версий требует контекст VIEW_3D.
-    В headless может не быть окон => вернём None и будем пробовать минимальный override.
-    """
     wm = bpy.context.window_manager
     windows = getattr(wm, "windows", None) if wm else None
     if not windows:
@@ -405,14 +439,12 @@ def _build_obj_import_override() -> Optional[dict]:
 def import_obj(mesh_path: str) -> List[bpy.types.Object]:
     before = set(bpy.data.objects)
 
-    # Ensure Object mode
     try:
         if bpy.context.mode != "OBJECT":
             bpy.ops.object.mode_set(mode="OBJECT")
     except Exception:
         pass
 
-    # 1) Try modern importer with UI override
     override = _build_obj_import_override()
     if hasattr(bpy.ops.wm, "obj_import"):
         try:
@@ -420,11 +452,9 @@ def import_obj(mesh_path: str) -> List[bpy.types.Object]:
                 with bpy.context.temp_override(**override):
                     bpy.ops.wm.obj_import(filepath=mesh_path)
             else:
-                # 2) Try minimal override (works in some headless setups)
                 with bpy.context.temp_override(scene=bpy.context.scene, view_layer=bpy.context.view_layer):
                     bpy.ops.wm.obj_import(filepath=mesh_path)
         except Exception:
-            # 3) Try legacy importer if exists
             if hasattr(bpy.ops.import_scene, "obj"):
                 try:
                     if override:
@@ -565,7 +595,7 @@ def build_image_index(search_dirs: List[str], max_depth: int = 4, max_files: int
 # MTL parsing / resolving
 # ============================================================
 
-_MTL_MAP_RE = re.compile(r"^\s*(map_Kd|map_Bump|bump|map_d|map_Ks)\s+(.*)$", re.IGNORECASE)
+_MTL_MAP_RE = re.compile(r"^\s*(map_Kd|map_Bump|bump|map_d|map_Ks|map_Ka)\s+(.*)$", re.IGNORECASE)
 _OBJ_MTLLIB_RE = re.compile(r"^\s*mtllib\s+(.*)$", re.IGNORECASE)
 
 
@@ -609,11 +639,6 @@ def parse_obj_mtl_files(obj_path: str) -> List[str]:
 
 
 def parse_mtl_refs(mtl_path: str) -> Dict[str, str]:
-    """
-    Старый совместимый вариант:
-    возвращает первую найденную ссылку на карты из файла MTL.
-    Нужен для legacy-кода.
-    """
     out: Dict[str, str] = {}
     try:
         lines = Path(mtl_path).read_text(encoding="utf-8", errors="ignore").splitlines()
@@ -637,26 +662,13 @@ def parse_mtl_refs(mtl_path: str) -> Dict[str, str]:
             out.setdefault("opacity_ref", val)
         elif key == "map_ks":
             out.setdefault("specular_ref", val)
+        elif key == "map_ka":
+            out.setdefault("ambient_ref", val)
 
     return out
 
 
 def parse_mtl_materials(mtl_path: str) -> Dict[str, Dict[str, str]]:
-    """
-    Полный разбор MTL по секциям newmtl.
-
-    Возвращает:
-      {
-        "MaterialName": {
-            "basecolor_ref": "...",
-            "bump_ref": "...",
-            "opacity_ref": "...",
-            "specular_ref": "...",
-            "ambient_ref": "...",
-        },
-        ...
-      }
-    """
     out: Dict[str, Dict[str, str]] = {}
     current: Optional[str] = None
 
@@ -703,6 +715,7 @@ def parse_mtl_materials(mtl_path: str) -> Dict[str, Dict[str, str]]:
 
     return out
 
+
 def resolve_texture_ref(ref: str, model_dir: Path, idx: Dict[str, str]) -> Optional[str]:
     if not ref:
         return None
@@ -725,7 +738,7 @@ def resolve_texture_ref(ref: str, model_dir: Path, idx: Dict[str, str]) -> Optio
 
 
 # ============================================================
-# PBR material building (only when реально нужно)
+# PBR material building
 # ============================================================
 
 def _hsv_to_rgb(h: float, s: float, v: float) -> Tuple[float, float, float]:
@@ -807,7 +820,6 @@ def _make_pbr_material(name: str, maps: PBRMaps, tint_rgb: Optional[Tuple[float,
         links.new(mapping.outputs["Vector"], n.inputs["Vector"])
         return n
 
-    # BaseColor (+AO multiply)
     if maps.basecolor:
         base = add_tex_image(maps.basecolor, (440, 240), is_data=False)
         if maps.ao:
@@ -824,17 +836,14 @@ def _make_pbr_material(name: str, maps: PBRMaps, tint_rgb: Optional[Tuple[float,
     elif tint_rgb:
         bsdf.inputs["Base Color"].default_value = (float(tint_rgb[0]), float(tint_rgb[1]), float(tint_rgb[2]), 1.0)
 
-    # Roughness
     if maps.roughness:
         r = add_tex_image(maps.roughness, (440, -40), is_data=True)
         links.new(r.outputs["Color"], bsdf.inputs["Roughness"])
 
-    # Metallic
     if maps.metallic:
         m = add_tex_image(maps.metallic, (440, -260), is_data=True)
         links.new(m.outputs["Color"], bsdf.inputs["Metallic"])
 
-    # Normal
     if maps.normal:
         ntex = add_tex_image(maps.normal, (440, -480), is_data=True)
         nmap = nodes.new("ShaderNodeNormalMap")
@@ -842,7 +851,6 @@ def _make_pbr_material(name: str, maps: PBRMaps, tint_rgb: Optional[Tuple[float,
         links.new(ntex.outputs["Color"], nmap.inputs["Color"])
         links.new(nmap.outputs["Normal"], bsdf.inputs["Normal"])
 
-    # Height -> Displacement
     if maps.height:
         h = add_tex_image(maps.height, (440, -700), is_data=True)
         disp = nodes.new("ShaderNodeDisplacement")
@@ -850,7 +858,6 @@ def _make_pbr_material(name: str, maps: PBRMaps, tint_rgb: Optional[Tuple[float,
         links.new(h.outputs["Color"], disp.inputs["Height"])
         links.new(disp.outputs["Displacement"], out.inputs["Displacement"])
 
-    # Emissive (без падений)
     if maps.emissive:
         e = add_tex_image(maps.emissive, (440, 660), is_data=False)
         if "Emission" in bsdf.inputs:
@@ -860,7 +867,6 @@ def _make_pbr_material(name: str, maps: PBRMaps, tint_rgb: Optional[Tuple[float,
         if "Emission Strength" in bsdf.inputs:
             bsdf.inputs["Emission Strength"].default_value = 1.0
 
-    # Opacity
     if maps.opacity and "Alpha" in bsdf.inputs:
         o = add_tex_image(maps.opacity, (440, 880), is_data=True)
         links.new(o.outputs["Color"], bsdf.inputs["Alpha"])
@@ -874,7 +880,7 @@ def _make_pbr_material(name: str, maps: PBRMaps, tint_rgb: Optional[Tuple[float,
 
 
 # ============================================================
-# Heuristic guessing (fallback for PBR build)
+# Heuristic guessing
 # ============================================================
 
 def _pick_best_match(stem: str, files_lower: Dict[str, str], keys: List[str]) -> Optional[str]:
@@ -909,13 +915,13 @@ def _guess_maps_from_scan(mesh_path: Optional[str], search_dirs: List[str], expl
         return PBRMaps(basecolor=(explicit_base if (explicit_base and os.path.isfile(explicit_base)) else None))
 
     base_keys = ["basecolor", "base_color", "albedo", "diffuse", "dif", "color", "col", "base", "tex", "texture"]
-    nor_keys  = ["normal", "norm", "nrm", "nmap"]
-    rou_keys  = ["roughness", "rough", "rgh"]
-    met_keys  = ["metallic", "metalness", "metal", "mtl", "met"]
-    ao_keys   = ["ambientocclusion", "ambient_occlusion", "occlusion", "occ", "ao"]
-    hgt_keys  = ["height", "displacement", "disp"]
-    emi_keys  = ["emissive", "emission", "emit", "glow"]
-    op_keys   = ["opacity", "alpha", "transparency"]
+    nor_keys = ["normal", "norm", "nrm", "nmap"]
+    rou_keys = ["roughness", "rough", "rgh"]
+    met_keys = ["metallic", "metalness", "metal", "mtl", "met"]
+    ao_keys = ["ambientocclusion", "ambient_occlusion", "occlusion", "occ", "ao"]
+    hgt_keys = ["height", "displacement", "disp"]
+    emi_keys = ["emissive", "emission", "emit", "glow"]
+    op_keys = ["opacity", "alpha", "transparency"]
 
     stems: List[str] = []
     if mesh_path:
@@ -953,7 +959,7 @@ def _guess_maps_from_scan(mesh_path: Optional[str], search_dirs: List[str], expl
 
 
 # ============================================================
-# Existing materials: detect / relink / apply map_Kd / fallback
+# Existing materials
 # ============================================================
 
 def _iter_mesh_children(root: bpy.types.Object) -> List[bpy.types.Object]:
@@ -975,13 +981,8 @@ def _object_has_any_material_slots(parent: bpy.types.Object) -> bool:
             return True
     return False
 
+
 def _material_has_effective_basecolor_texture(mat: bpy.types.Material) -> bool:
-    """
-    Считаем материал реально текстурированным только если:
-    - есть use_nodes
-    - есть Principled BSDF
-    - в Base Color приходит цепочка от TEX_IMAGE
-    """
     if not mat or not getattr(mat, "use_nodes", False) or not mat.node_tree:
         return False
 
@@ -1030,13 +1031,6 @@ def _material_has_effective_basecolor_texture(mat: bpy.types.Material) -> bool:
 
 
 def _has_loaded_textures(parent: bpy.types.Object) -> bool:
-    """
-    Старый вариант был слишком оптимистичным:
-    достаточно было просто загруженной картинки в любом TEX_IMAGE-узле.
-
-    Теперь считаем успехом только случай, когда у материала реально есть
-    текстура, подключённая к Base Color Principled BSDF.
-    """
     for o in _iter_mesh_children(parent):
         me = getattr(o, "data", None)
         mats = getattr(me, "materials", None) if me else None
@@ -1045,18 +1039,13 @@ def _has_loaded_textures(parent: bpy.types.Object) -> bool:
                 return True
     return False
 
+
 def _apply_image_to_material_nodes(
     mat: bpy.types.Material,
     basecolor_img: Optional[bpy.types.Image] = None,
     normal_img: Optional[bpy.types.Image] = None,
     opacity_img: Optional[bpy.types.Image] = None,
 ) -> None:
-    """
-    Аккуратно встраивает карты в существующий материал:
-    - Base Color
-    - Normal
-    - Alpha
-    """
     if not mat:
         return
 
@@ -1140,7 +1129,7 @@ def _apply_image_to_material_nodes(
             mat.shadow_method = "HASHED"
         except Exception:
             pass
-        
+
 
 def _ensure_principled_basecolor_image(mat: bpy.types.Material, img: bpy.types.Image) -> None:
     mat.use_nodes = True
@@ -1220,12 +1209,6 @@ def _relink_missing_images(parent: bpy.types.Object, idx: Dict[str, str]) -> Tup
 
 
 def _apply_mtl_map_kd_to_existing_mats(parent: bpy.types.Object, mesh_path: str, idx: Dict[str, str], verbose: bool) -> bool:
-    """
-    Корректно восстанавливает текстуры по MTL:
-    - сопоставляет newmtl -> material.name
-    - применяет map_Kd
-    - при необходимости использует map_Ka как fallback
-    """
     obj_path = Path(mesh_path).resolve()
     model_dir = obj_path.parent
 
@@ -1358,6 +1341,7 @@ def _fallback_apply_largest_image_existing_mats(parent: bpy.types.Object, idx: D
         _log(verbose, f"[Textures] {parent.name}: fallback largest={best_path}")
     return applied
 
+
 def _ensure_textures(
     parent: bpy.types.Object,
     mesh_path: Optional[str],
@@ -1373,25 +1357,21 @@ def _ensure_textures(
     idx = build_image_index(search_dirs, max_depth=4, max_files=15000)
 
     if keep_existing_mats:
-        # 1. Если материал уже реально текстурирован — не трогаем
         if _has_loaded_textures(parent):
             _log(verbose, f"[Textures] {parent.name}: effective basecolor texture already exists -> keep")
             return
 
-        # 2. Чиним битые TEX_IMAGE узлы
         fixed, _ = _relink_missing_images(parent, idx)
         if fixed > 0 and _has_loaded_textures(parent):
             _log(verbose, f"[Textures] {parent.name}: relink fixed={fixed}")
             return
 
-        # 3. Читаем MTL и насильно подключаем карты в существующие материалы
         if mesh_path and os.path.isfile(mesh_path):
             if _apply_mtl_map_kd_to_existing_mats(parent, mesh_path, idx, verbose):
                 if _has_loaded_textures(parent):
                     _log(verbose, f"[Textures] {parent.name}: restored from MTL")
                     return
 
-        # 4. Только если MTL не помог — largest fallback
         if _object_has_any_material_slots(parent):
             if _fallback_apply_largest_image_existing_mats(parent, idx, verbose):
                 if _has_loaded_textures(parent):
@@ -1399,7 +1379,6 @@ def _ensure_textures(
             _log(verbose, f"[Textures] {parent.name}: materials exist, but MTL restore failed")
             return
 
-    # ----- если материалов нет, строим PBR -----
     maps = PBRMaps()
     explicit_base = texture_path if (texture_path and os.path.isfile(texture_path)) else None
 
@@ -1427,6 +1406,8 @@ def _ensure_textures(
                 maps.normal = resolve_texture_ref(refs["bump_ref"], model_dir, idx)
             if not maps.opacity and "opacity_ref" in refs:
                 maps.opacity = resolve_texture_ref(refs["opacity_ref"], model_dir, idx)
+            if not maps.basecolor and "ambient_ref" in refs:
+                maps.basecolor = resolve_texture_ref(refs["ambient_ref"], model_dir, idx)
 
             if any([maps.basecolor, maps.normal, maps.opacity]):
                 break
@@ -1486,14 +1467,12 @@ def _ensure_textures(
             for i in range(len(me.materials)):
                 me.materials[i] = mat
 
+
+# ============================================================
+# Room environment textures
+# ============================================================
+
 def _list_env_textures(env_dir: str) -> Dict[str, List[str]]:
-    """
-    Expected files (you can расширять):
-      - floor_*.jpg/png, floor*.jpg/png
-      - wall_*.jpg/png
-      - window_*.jpg/png
-      - door_*.jpg/png
-    """
     d = str(Path(env_dir).expanduser().resolve())
     exts = ["*.jpg", "*.jpeg", "*.png", "*.webp", "*.tif", "*.tiff"]
 
@@ -1502,31 +1481,24 @@ def _list_env_textures(env_dir: str) -> Dict[str, List[str]]:
         for pref in prefixes:
             for e in exts:
                 out.extend(glob(os.path.join(d, f"{pref}{e}")))
-        # уникализируем + сортировка для детерминизма до рандома
         out = sorted({str(Path(p).resolve()) for p in out})
         return out
 
     return {
         "floor": collect(["floor_", "floor"]),
-        "wall": collect(["wall_","wall"]),
-        "window": collect(["window_","window"]),
-        "door": collect(["door_","door"]),
+        "wall": collect(["wall_", "wall"]),
+        "window": collect(["window_", "window"]),
+        "door": collect(["door_", "door"]),
     }
 
 
 def _choose_texture(kind: str, candidates: List[str], style_text: Optional[str], rng: random.Random) -> Optional[str]:
-    """
-    Заготовка под будущий алгоритм:
-      - сейчас: random.choice
-      - потом: заменить на scoring(style_text, filename/metadata) и брать best
-    """
+    del kind
+    del style_text
     if not candidates:
         return None
-
-    # placeholder для future:
-    # score = rank_by_text(style_text, candidates)
-    # return best
     return rng.choice(candidates)
+
 
 def _make_image_material(name: str, image_path: str, uv_scale: float = 1.0, is_data: bool = False) -> bpy.types.Material:
     mat = bpy.data.materials.new(name)
@@ -1584,189 +1556,343 @@ def _assign_material_to_object(obj: bpy.types.Object, mat: bpy.types.Material) -
         for i in range(len(me.materials)):
             me.materials[i] = mat
 
-def _classify_room_object(obj: bpy.types.Object) -> Optional[str]:
-    """
-    Very pragmatic heuristic:
-      - If name contains keywords -> direct
-      - Else use bounding box sizes (world-space approx using obj.dimensions)
-    """
-    if obj.type != "MESH":
-        return None
 
-    n = (obj.name or "").lower()
+def _make_glass_material(name: str, image_path: Optional[str]) -> bpy.types.Material:
+    mat = bpy.data.materials.new(name)
+    mat.use_nodes = True
+    nt = mat.node_tree
+    nodes = nt.nodes
+    links = nt.links
+    nodes.clear()
 
-    # explicit by name
-    if "floor" in n or "пол" in n:
-        return "floor"
-    if "wall" in n or "стен" in n:
-        return "wall"
-    if "window" in n or "окн" in n:
-        return "window"
-    if "door" in n or "двер" in n:
-        return "door"
+    out = nodes.new("ShaderNodeOutputMaterial")
+    out.location = (700, 0)
 
-    # geometry heuristic
-    try:
-        dx, dy, dz = float(obj.dimensions.x), float(obj.dimensions.y), float(obj.dimensions.z)
-    except Exception:
-        return None
+    bsdf = nodes.new("ShaderNodeBsdfPrincipled")
+    bsdf.location = (430, 0)
+    links.new(bsdf.outputs["BSDF"], out.inputs["Surface"])
 
-    # floor: very thin by Z and large by X/Y
-    if dz < 0.15 and max(dx, dy) > 1.0:
-        return "floor"
+    if "Transmission Weight" in bsdf.inputs:
+        bsdf.inputs["Transmission Weight"].default_value = 1.0
+    elif "Transmission" in bsdf.inputs:
+        bsdf.inputs["Transmission"].default_value = 1.0
 
-    # walls: tall by Z and thin by one horizontal axis
-    if dz > 1.5 and (dx < 0.25 or dy < 0.25) and max(dx, dy) > 1.0:
-        return "wall"
+    if "Roughness" in bsdf.inputs:
+        bsdf.inputs["Roughness"].default_value = 0.05
+    if "IOR" in bsdf.inputs:
+        bsdf.inputs["IOR"].default_value = 1.45
 
-    # windows/doors: vertical, medium size
-    if dz > 1.0 and dz < 3.0 and max(dx, dy) < 2.5:
-        # очень грубо: ближе к дверям если высокий и узкий
-        if dz > 1.9 and (dx < 1.2 and dy < 1.2):
-            return "door"
-        return "window"
+    if image_path and os.path.isfile(image_path):
+        texcoord = nodes.new("ShaderNodeTexCoord")
+        texcoord.location = (0, 0)
 
-    return None
+        mapping = nodes.new("ShaderNodeMapping")
+        mapping.location = (170, 0)
+        links.new(texcoord.outputs["UV"], mapping.inputs["Vector"])
 
-def apply_env_textures_to_room(
-    room_objs: List[bpy.types.Object],
-    env_dir: str,
-    style_text: Optional[str],
-    seed: int,
-    verbose: bool,
-) -> None:
-    tex = _list_env_textures(env_dir)
+        tex = nodes.new("ShaderNodeTexImage")
+        tex.location = (340, 0)
+        img = bpy.data.images.load(image_path, check_existing=True)
+        tex.image = img
+        _set_image_colorspace(img, is_data=False)
 
-    if seed == 0:
-        # детерминированно “как бы случайно” от env_dir + состава текстур
-        basis = env_dir + "|" + "|".join(sum((tex[k] for k in ["floor", "wall", "window", "door"]), []))
-        seed = (hash(basis) & 0xFFFFFFFF)
+        links.new(mapping.outputs["Vector"], tex.inputs["Vector"])
+        links.new(tex.outputs["Color"], bsdf.inputs["Base Color"])
 
-    rng = random.Random(seed)
+        if "Alpha" in bsdf.inputs:
+            links.new(tex.outputs["Alpha"], bsdf.inputs["Alpha"])
+            try:
+                mat.blend_method = "HASHED"
+                mat.shadow_method = "HASHED"
+            except Exception:
+                pass
+        else:
+            try:
+                mat.blend_method = "HASHED"
+                mat.shadow_method = "HASHED"
+            except Exception:
+                pass
 
-    chosen: Dict[str, Optional[str]] = {}
-    for kind in ["floor", "wall", "window", "door"]:
-        chosen[kind] = _choose_texture(kind, tex.get(kind, []), style_text, rng)
+    return mat
 
-    if verbose:
-        print(f"[EnvTextures] dir={Path(env_dir).resolve()}")
-        for k, v in chosen.items():
-            print(f"[EnvTextures] {k}: {v}")
 
-    mats: Dict[str, Optional[bpy.types.Material]] = {}
-    if chosen["floor"]:
-        mats["floor"] = _make_image_material("MAT_ENV_FLOOR", chosen["floor"], uv_scale=1.0)
-    else:
-        mats["floor"] = None
+# ============================================================
+# Room spec mesh building
+# ============================================================
 
-    if chosen["wall"]:
-        mats["wall"] = _make_image_material("MAT_ENV_WALL", chosen["wall"], uv_scale=1.0)
-    else:
-        mats["wall"] = None
+def _poly_signed_area_xy(pts: List[Tuple[float, float]]) -> float:
+    a = 0.0
+    n = len(pts)
+    for i in range(n):
+        x1, y1 = pts[i]
+        x2, y2 = pts[(i + 1) % n]
+        a += x1 * y2 - x2 * y1
+    return 0.5 * a
 
-    if chosen["window"]:
-        mats["window"] = _make_image_material("MAT_ENV_WINDOW", chosen["window"], uv_scale=1.0)
-    else:
-        mats["window"] = None
 
-    if chosen["door"]:
-        mats["door"] = _make_image_material("MAT_ENV_DOOR", chosen["door"], uv_scale=1.0)
-    else:
-        mats["door"] = None
+def _normalize2(x: float, y: float) -> Tuple[float, float]:
+    l = math.hypot(x, y)
+    if l < 1e-12:
+        return (1.0, 0.0)
+    return (x / l, y / l)
 
-    # assign
-    for o in room_objs:
-        kind = _classify_room_object(o)
-        if not kind:
-            continue
-        mat = mats.get(kind)
-        if mat:
-            _assign_material_to_object(o, mat)
 
-def _create_plane(name: str, size_x: float, size_y: float, location: Tuple[float, float, float], rot_xyz: Tuple[float, float, float],
-                  collection: bpy.types.Collection) -> bpy.types.Object:
-    bpy.ops.mesh.primitive_plane_add(size=1.0, location=location, rotation=rot_xyz)
-    obj = bpy.context.active_object
-    obj.name = name
-    obj.scale = (size_x * 0.5, size_y * 0.5, 1.0)
+def _make_mesh_object(name: str, verts: List[Tuple[float, float, float]], faces: List[Tuple[int, ...]], coll) -> bpy.types.Object:
+    me = bpy.data.meshes.new(name + "_MESH")
+    me.from_pydata(verts, [], faces)
+    me.update()
+
+    obj = bpy.data.objects.new(name, me)
+    bpy.context.scene.collection.objects.link(obj)
     _unlink_from_all_collections(obj)
-    collection.objects.link(obj)
+    coll.objects.link(obj)
     return obj
 
 
-def build_preview_room_2walls(
-    bb_min: mathutils.Vector,
-    bb_max: mathutils.Vector,
+def _ensure_uv_layer(me: bpy.types.Mesh, name: str = "UVMap") -> None:
+    if not me.uv_layers:
+        me.uv_layers.new(name=name)
+
+
+def _set_uvs_floor_xy(obj: bpy.types.Object, uv_scale: float = 1.0) -> None:
+    me = obj.data
+    _ensure_uv_layer(me)
+    uv = me.uv_layers.active.data
+
+    for poly in me.polygons:
+        for li in poly.loop_indices:
+            vi = me.loops[li].vertex_index
+            x, y, _z = me.vertices[vi].co
+            uv[li].uv = (x * uv_scale, y * uv_scale)
+
+
+def _set_uvs_wall_sz(obj: bpy.types.Object, origin_xy: Tuple[float, float], dir_xy: Tuple[float, float], uv_scale: float = 1.0) -> None:
+    me = obj.data
+    _ensure_uv_layer(me)
+    uv = me.uv_layers.active.data
+
+    ox, oy = origin_xy
+    dx, dy = dir_xy
+
+    for poly in me.polygons:
+        for li in poly.loop_indices:
+            vi = me.loops[li].vertex_index
+            x, y, z = me.vertices[vi].co
+            s = (x - ox) * dx + (y - oy) * dy
+            uv[li].uv = (s * uv_scale, z * uv_scale)
+
+
+def _make_floor_from_polygon(name: str, poly_xy: List[Tuple[float, float]], z: float, coll) -> bpy.types.Object:
+    bm = bmesh.new()
+    verts = [bm.verts.new((x, y, z)) for (x, y) in poly_xy]
+    bm.faces.new(verts)
+    bmesh.ops.triangulate(bm, faces=bm.faces[:])
+
+    me = bpy.data.meshes.new(name + "_MESH")
+    bm.to_mesh(me)
+    bm.free()
+    me.update()
+
+    obj = bpy.data.objects.new(name, me)
+    bpy.context.scene.collection.objects.link(obj)
+    _unlink_from_all_collections(obj)
+    coll.objects.link(obj)
+    return obj
+
+
+def _make_wall_quad(name: str, p0: Tuple[float, float], p1: Tuple[float, float], z0: float, z1: float, coll) -> bpy.types.Object:
+    x0, y0 = p0
+    x1, y1 = p1
+    verts = [
+        (x0, y0, z0),
+        (x1, y1, z0),
+        (x1, y1, z1),
+        (x0, y0, z1),
+    ]
+    faces = [(0, 1, 2, 3)]
+    return _make_mesh_object(name, verts, faces, coll)
+
+
+def _make_decal_on_wall(
+    name: str,
+    wall_p0: Tuple[float, float],
+    wall_p1: Tuple[float, float],
+    inward_n: Tuple[float, float],
+    s0: float,
+    width: float,
+    z0: float,
+    height: float,
+    coll,
+    offset: float = 0.002,
+) -> bpy.types.Object:
+    x0, y0 = wall_p0
+    x1, y1 = wall_p1
+    ex, ey = (x1 - x0, y1 - y0)
+    ex, ey = _normalize2(ex, ey)
+
+    sc = s0 + 0.5 * width
+    cx = x0 + ex * sc
+    cy = y0 + ey * sc
+
+    nx, ny = inward_n
+    cx += nx * offset
+    cy += ny * offset
+
+    u0 = -0.5 * width
+    u1 = +0.5 * width
+    v0 = z0
+    v1 = z0 + height
+
+    verts = [
+        (cx + ex * u0, cy + ey * u0, v0),
+        (cx + ex * u1, cy + ey * u1, v0),
+        (cx + ex * u1, cy + ey * u1, v1),
+        (cx + ex * u0, cy + ey * u0, v1),
+    ]
+    faces = [(0, 1, 2, 3)]
+    return _make_mesh_object(name, verts, faces, coll)
+
+
+def build_room_from_spec(
+    room_json: dict,
     coll_room: bpy.types.Collection,
-    floor_mat: Optional[bpy.types.Material],
-    wall_mat: Optional[bpy.types.Material],
-) -> List[bpy.types.Object]:
-    """
-    Делает:
-      - пол (Z=bb_min.z)
-      - левую стену (X=bb_min.x)
-      - переднюю стену (Y=bb_min.y)
-    """
-    dx = float(bb_max.x - bb_min.x)
-    dy = float(bb_max.y - bb_min.y)
-    dz = float(bb_max.z - bb_min.z)
+    env_textures_dir: str,
+    style_text: Optional[str],
+    seed: int,
+    verbose: bool,
+) -> Tuple[List[bpy.types.Object], mathutils.Vector, mathutils.Vector]:
+    r = room_json["room"]
+    H = float(r.get("ceiling_height", 2.8))
 
-    cx = float((bb_min.x + bb_max.x) * 0.5)
-    cy = float((bb_min.y + bb_max.y) * 0.5)
-    cz = float((bb_min.z + bb_max.z) * 0.5)
+    poly = r["floor_polygon"]
+    poly_xy = [(float(p["x"]), float(p["y"])) for p in poly]
 
-    out = []
+    area = _poly_signed_area_xy(poly_xy)
+    ccw = (area > 0.0)
 
-    # floor: plane in XY
-    floor = _create_plane(
-        name="Preview_Floor",
-        size_x=dx,
-        size_y=dy,
-        location=(cx, cy, float(bb_min.z) + 1e-4),
-        rot_xyz=(0.0, 0.0, 0.0),
-        collection=coll_room,
-    )
+    floor_tex = wall_tex = door_tex = window_tex = None
+    if env_textures_dir and os.path.isdir(env_textures_dir):
+        tex = _list_env_textures(env_textures_dir)
+        rng = random.Random(int(seed) if int(seed) != 0 else (hash(json.dumps(r, sort_keys=True)) & 0xFFFFFFFF))
+
+        floor_tex = _choose_texture("floor", tex.get("floor", []), style_text, rng)
+        wall_tex = _choose_texture("wall", tex.get("wall", []), style_text, rng)
+        door_tex = _choose_texture("door", tex.get("door", []), style_text, rng)
+        window_tex = _choose_texture("window", tex.get("window", []), style_text, rng)
+
+    if verbose:
+        print(f"[RoomSpec] ccw={ccw} H={H}")
+        print(f"[RoomSpec] floor_tex={floor_tex}")
+        print(f"[RoomSpec] wall_tex ={wall_tex}")
+        print(f"[RoomSpec] door_tex ={door_tex}")
+        print(f"[RoomSpec] win_tex  ={window_tex}")
+
+    floor_mat = _make_image_material("MAT_ROOM_FLOOR", floor_tex, uv_scale=1.0) if floor_tex else None
+    wall_mat = _make_image_material("MAT_ROOM_WALL", wall_tex, uv_scale=1.0) if wall_tex else None
+    door_mat = _make_image_material("MAT_ROOM_DOOR", door_tex, uv_scale=1.0) if door_tex else None
+    win_mat = _make_glass_material("MAT_ROOM_WINDOW", window_tex) if window_tex else _make_glass_material("MAT_ROOM_WINDOW", None)
+
+    out_objs: List[bpy.types.Object] = []
+
+    floor_obj = _make_floor_from_polygon("Room_Floor", poly_xy, z=0.0, coll=coll_room)
+    _set_uvs_floor_xy(floor_obj, uv_scale=1.0)
     if floor_mat:
-        _assign_material_to_object(floor, floor_mat)
-    out.append(floor)
+        _assign_material_to_object(floor_obj, floor_mat)
+    out_objs.append(floor_obj)
 
-    # left wall: plane in YZ (rotate around Y by 90deg to face inward)
-    left = _create_plane(
-        name="Preview_Wall_Left",
-        size_x=dy,          # along Y
-        size_y=dz,          # along Z
-        location=(float(bb_min.x) + 1e-4, cy, cz),
-        rot_xyz=(0.0, math.radians(90.0), math.radians(90.0)),
-        collection=coll_room,
-    )
-    if wall_mat:
-        _assign_material_to_object(left, wall_mat)
-    out.append(left)
+    walls = r.get("walls", [])
+    wall_by_id = {}
 
-    # front wall: plane in XZ at y_min
-    front = _create_plane(
-        name="Preview_Wall_Front",
-        size_x=dx,          # along X
-        size_y=dz,          # along Z
-        location=(cx, float(bb_min.y) + 1e-4, cz),
-        rot_xyz=(math.radians(90.0), 0.0, 0.0),
-        collection=coll_room,
-    )
-    if wall_mat:
-        _assign_material_to_object(front, wall_mat)
-    out.append(front)
+    for w in walls:
+        wid = w["id"]
+        i0 = int(w["from_vertex"])
+        i1 = int(w["to_vertex"])
+        p0 = poly_xy[i0]
+        p1 = poly_xy[i1]
 
-    return out
+        ex, ey = (p1[0] - p0[0], p1[1] - p0[1])
+        ex, ey = _normalize2(ex, ey)
+
+        if ccw:
+            nx, ny = (-ey, ex)
+        else:
+            nx, ny = (ey, -ex)
+
+        wall_obj = _make_wall_quad(f"Room_Wall_{wid}", p0, p1, z0=0.0, z1=H, coll=coll_room)
+        _set_uvs_wall_sz(wall_obj, origin_xy=p0, dir_xy=(ex, ey), uv_scale=1.0)
+        if wall_mat:
+            _assign_material_to_object(wall_obj, wall_mat)
+        out_objs.append(wall_obj)
+
+        wall_by_id[wid] = {
+            "p0": p0, "p1": p1,
+            "dir": (ex, ey),
+            "in": (nx, ny),
+        }
+
+    for d in r.get("doors", []):
+        wid = d["wall_id"]
+        info = wall_by_id.get(wid)
+        if not info:
+            continue
+
+        s0 = float(d["s"])
+        width = float(d["width"])
+        z0 = float(d.get("z0", 0.0))
+        height = float(d.get("height", 2.0))
+
+        door_obj = _make_decal_on_wall(
+            name=f"Room_Door_{d['id']}",
+            wall_p0=info["p0"],
+            wall_p1=info["p1"],
+            inward_n=info["in"],
+            s0=s0,
+            width=width,
+            z0=z0,
+            height=height,
+            coll=coll_room,
+            offset=0.003,
+        )
+        _set_uvs_wall_sz(door_obj, origin_xy=info["p0"], dir_xy=info["dir"], uv_scale=1.0)
+        if door_mat:
+            _assign_material_to_object(door_obj, door_mat)
+        out_objs.append(door_obj)
+
+    for w in r.get("windows", []):
+        wid = w["wall_id"]
+        info = wall_by_id.get(wid)
+        if not info:
+            continue
+
+        s0 = float(w["s"])
+        width = float(w["width"])
+        z0 = float(w.get("z0", 0.9))
+        height = float(w.get("height", 1.2))
+
+        win_obj = _make_decal_on_wall(
+            name=f"Room_Window_{w['id']}",
+            wall_p0=info["p0"],
+            wall_p1=info["p1"],
+            inward_n=info["in"],
+            s0=s0,
+            width=width,
+            z0=z0,
+            height=height,
+            coll=coll_room,
+            offset=0.004,
+        )
+        _set_uvs_wall_sz(win_obj, origin_xy=info["p0"], dir_xy=info["dir"], uv_scale=1.0)
+        if win_mat:
+            _assign_material_to_object(win_obj, win_mat)
+        out_objs.append(win_obj)
+
+    bmin, bmax = _world_bounds_mesh_objects(out_objs)
+    return out_objs, bmin, bmax
+
 
 # ============================================================
 # Placement
 # ============================================================
-
-def _is_floor_item_by_aabb(aabb: Dict[str, float], room: Dict[str, float]) -> bool:
-    zmin = float(aabb["z_min"])
-    zfloor = float(room.get("z_min", 0.0))
-    return abs(zmin - zfloor) < 1e-3
-
 
 def place_in_aabb(
     objs: List[bpy.types.Object],
@@ -1834,7 +1960,6 @@ def place_in_aabb(
     if snap_to_floor and not snap_to_ceiling:
         bottom_after_center = bmin2.z + delta.z
         delta.z += (float(aabb["z_min"]) - bottom_after_center) + float(floor_offset)
-
     elif snap_to_ceiling and not snap_to_floor:
         top_after_center = bmax2.z + delta.z
         delta.z += (float(aabb["z_max"]) - top_after_center) - float(ceiling_offset)
@@ -1843,361 +1968,11 @@ def place_in_aabb(
     bpy.context.view_layer.update()
     return parent
 
-import bmesh
-
-def _poly_signed_area_xy(pts: List[Tuple[float, float]]) -> float:
-    a = 0.0
-    n = len(pts)
-    for i in range(n):
-        x1, y1 = pts[i]
-        x2, y2 = pts[(i + 1) % n]
-        a += x1 * y2 - x2 * y1
-    return 0.5 * a
-
-def _normalize2(x: float, y: float) -> Tuple[float, float]:
-    l = math.hypot(x, y)
-    if l < 1e-12:
-        return (1.0, 0.0)
-    return (x / l, y / l)
-
-def _make_mesh_object(name: str, verts: List[Tuple[float, float, float]], faces: List[Tuple[int, ...]], coll) -> bpy.types.Object:
-    me = bpy.data.meshes.new(name + "_MESH")
-    me.from_pydata(verts, [], faces)
-    me.update()
-
-    obj = bpy.data.objects.new(name, me)
-    bpy.context.scene.collection.objects.link(obj)
-    _unlink_from_all_collections(obj)
-    coll.objects.link(obj)
-    return obj
-
-def _ensure_uv_layer(me: bpy.types.Mesh, name: str = "UVMap") -> None:
-    if not me.uv_layers:
-        me.uv_layers.new(name=name)
-
-def _set_uvs_floor_xy(obj: bpy.types.Object, uv_scale: float = 1.0) -> None:
-    me = obj.data
-    _ensure_uv_layer(me)
-    uv = me.uv_layers.active.data
-
-    # UV = (x, y) * scale
-    # Важно: порядок uv соответствует loopам
-    for poly in me.polygons:
-        for li in poly.loop_indices:
-            vi = me.loops[li].vertex_index
-            x, y, _z = me.vertices[vi].co
-            uv[li].uv = (x * uv_scale, y * uv_scale)
-
-def _set_uvs_wall_sz(obj: bpy.types.Object, origin_xy: Tuple[float, float], dir_xy: Tuple[float, float], uv_scale: float = 1.0) -> None:
-    """
-    UV по стене: U = проекция на ось вдоль стены (s), V = z.
-    origin_xy = (x0,y0) начала стены
-    dir_xy = нормированный (dx,dy) вдоль стены
-    """
-    me = obj.data
-    _ensure_uv_layer(me)
-    uv = me.uv_layers.active.data
-
-    ox, oy = origin_xy
-    dx, dy = dir_xy
-
-    for poly in me.polygons:
-        for li in poly.loop_indices:
-            vi = me.loops[li].vertex_index
-            x, y, z = me.vertices[vi].co
-            s = (x - ox) * dx + (y - oy) * dy
-            uv[li].uv = (s * uv_scale, z * uv_scale)
-
-def _make_floor_from_polygon(name: str, poly_xy: List[Tuple[float, float]], z: float, coll) -> bpy.types.Object:
-    # bmesh триангуляция
-    bm = bmesh.new()
-    verts = [bm.verts.new((x, y, z)) for (x, y) in poly_xy]
-    bm.faces.new(verts)
-    bmesh.ops.triangulate(bm, faces=bm.faces[:])
-
-    me = bpy.data.meshes.new(name + "_MESH")
-    bm.to_mesh(me)
-    bm.free()
-    me.update()
-
-    obj = bpy.data.objects.new(name, me)
-    bpy.context.scene.collection.objects.link(obj)
-    _unlink_from_all_collections(obj)
-    coll.objects.link(obj)
-    return obj
-
-def _make_wall_quad(name: str,
-                    p0: Tuple[float, float],
-                    p1: Tuple[float, float],
-                    z0: float,
-                    z1: float,
-                    coll) -> bpy.types.Object:
-    x0, y0 = p0
-    x1, y1 = p1
-    verts = [
-        (x0, y0, z0),
-        (x1, y1, z0),
-        (x1, y1, z1),
-        (x0, y0, z1),
-    ]
-    faces = [(0, 1, 2, 3)]
-    return _make_mesh_object(name, verts, faces, coll)
-
-def _make_decal_on_wall(name: str,
-                        wall_p0: Tuple[float, float],
-                        wall_p1: Tuple[float, float],
-                        inward_n: Tuple[float, float],
-                        s0: float,
-                        width: float,
-                        z0: float,
-                        height: float,
-                        coll,
-                        offset: float = 0.002) -> bpy.types.Object:
-    """
-    Делает прямоугольник двери/окна как отдельную плоскость,
-    лежащую на стене (со смещением offset по inward normal).
-    """
-    x0, y0 = wall_p0
-    x1, y1 = wall_p1
-    ex, ey = (x1 - x0, y1 - y0)
-    ex, ey = _normalize2(ex, ey)
-
-    # центр по s
-    sc = s0 + 0.5 * width
-    cx = x0 + ex * sc
-    cy = y0 + ey * sc
-
-    nx, ny = inward_n
-    cx += nx * offset
-    cy += ny * offset
-
-    # локальные оси decal: U вдоль стены, V вверх
-    # построим 4 вершины в мировых координатах
-    u0 = -0.5 * width
-    u1 = +0.5 * width
-    v0 = z0
-    v1 = z0 + height
-
-    verts = [
-        (cx + ex * u0, cy + ey * u0, v0),
-        (cx + ex * u1, cy + ey * u1, v0),
-        (cx + ex * u1, cy + ey * u1, v1),
-        (cx + ex * u0, cy + ey * u0, v1),
-    ]
-    faces = [(0, 1, 2, 3)]
-    return _make_mesh_object(name, verts, faces, coll)
-
-def _make_glass_material(name: str, image_path: Optional[str]) -> bpy.types.Material:
-    # “Стекло” + текстура как оттенок (если есть)
-    mat = bpy.data.materials.new(name)
-    mat.use_nodes = True
-    nt = mat.node_tree
-    nodes = nt.nodes
-    links = nt.links
-    nodes.clear()
-
-    out = nodes.new("ShaderNodeOutputMaterial")
-    out.location = (700, 0)
-
-    bsdf = nodes.new("ShaderNodeBsdfPrincipled")
-    bsdf.location = (430, 0)
-    links.new(bsdf.outputs["BSDF"], out.inputs["Surface"])
-
-    # стекло
-    if "Transmission Weight" in bsdf.inputs:
-        bsdf.inputs["Transmission Weight"].default_value = 1.0
-    elif "Transmission" in bsdf.inputs:
-        bsdf.inputs["Transmission"].default_value = 1.0
-
-    if "Roughness" in bsdf.inputs:
-        bsdf.inputs["Roughness"].default_value = 0.05
-    if "IOR" in bsdf.inputs:
-        bsdf.inputs["IOR"].default_value = 1.45
-
-    # текстура (опционально)
-    if image_path and os.path.isfile(image_path):
-        texcoord = nodes.new("ShaderNodeTexCoord")
-        texcoord.location = (0, 0)
-
-        mapping = nodes.new("ShaderNodeMapping")
-        mapping.location = (170, 0)
-        links.new(texcoord.outputs["UV"], mapping.inputs["Vector"])
-
-        tex = nodes.new("ShaderNodeTexImage")
-        tex.location = (340, 0)
-        img = bpy.data.images.load(image_path, check_existing=True)
-        tex.image = img
-        _set_image_colorspace(img, is_data=False)
-
-        links.new(mapping.outputs["Vector"], tex.inputs["Vector"])
-        links.new(tex.outputs["Color"], bsdf.inputs["Base Color"])
-
-        # Если у png есть alpha — можно использовать
-        if "Alpha" in bsdf.inputs:
-            links.new(tex.outputs["Alpha"], bsdf.inputs["Alpha"])
-            try:
-                mat.blend_method = "HASHED"
-                mat.shadow_method = "HASHED"
-            except Exception:
-                pass
-        else:
-            try:
-                mat.blend_method = "HASHED"
-                mat.shadow_method = "HASHED"
-            except Exception:
-                pass
-
-    return mat
-
-def build_room_from_spec(room_json: dict,
-                         coll_room: bpy.types.Collection,
-                         env_textures_dir: str,
-                         style_text: Optional[str],
-                         seed: int,
-                         verbose: bool) -> Tuple[List[bpy.types.Object], mathutils.Vector, mathutils.Vector]:
-    r = room_json["room"]
-    H = float(r.get("ceiling_height", 2.8))
-
-    poly = r["floor_polygon"]
-    poly_xy = [(float(p["x"]), float(p["y"])) for p in poly]
-
-    # ориентация полигона: CCW => внутренняя сторона слева от ребра
-    area = _poly_signed_area_xy(poly_xy)
-    ccw = (area > 0.0)
-
-    # выбираем текстуры
-    floor_tex = wall_tex = door_tex = window_tex = None
-    if env_textures_dir and os.path.isdir(env_textures_dir):
-        tex = _list_env_textures(env_textures_dir)
-        rng = random.Random(int(seed) if int(seed) != 0 else (hash(json.dumps(r, sort_keys=True)) & 0xFFFFFFFF))
-
-        floor_tex = _choose_texture("floor", tex.get("floor", []), style_text, rng)
-        wall_tex  = _choose_texture("wall",  tex.get("wall",  []), style_text, rng)
-        door_tex  = _choose_texture("door",  tex.get("door",  []), style_text, rng)
-        window_tex= _choose_texture("window",tex.get("window",[]), style_text, rng)
-
-    if verbose:
-        print(f"[RoomSpec] ccw={ccw} H={H}")
-        print(f"[RoomSpec] floor_tex={floor_tex}")
-        print(f"[RoomSpec] wall_tex ={wall_tex}")
-        print(f"[RoomSpec] door_tex ={door_tex}")
-        print(f"[RoomSpec] win_tex  ={window_tex}")
-
-    floor_mat = _make_image_material("MAT_ROOM_FLOOR", floor_tex, uv_scale=1.0) if floor_tex else None
-    wall_mat  = _make_image_material("MAT_ROOM_WALL",  wall_tex,  uv_scale=1.0) if wall_tex  else None
-    door_mat  = _make_image_material("MAT_ROOM_DOOR",  door_tex,  uv_scale=1.0) if door_tex  else None
-    win_mat   = _make_glass_material("MAT_ROOM_WINDOW", window_tex) if window_tex else _make_glass_material("MAT_ROOM_WINDOW", None)
-
-    out_objs: List[bpy.types.Object] = []
-
-    # floor
-    floor_obj = _make_floor_from_polygon("Room_Floor", poly_xy, z=0.0, coll=coll_room)
-    _set_uvs_floor_xy(floor_obj, uv_scale=1.0)
-    if floor_mat:
-        _assign_material_to_object(floor_obj, floor_mat)
-    out_objs.append(floor_obj)
-
-    # walls map id -> (p0,p1,inward_n,dir_xy)
-    walls = r.get("walls", [])
-    wall_by_id = {}
-    n = len(poly_xy)
-
-    for w in walls:
-        wid = w["id"]
-        i0 = int(w["from_vertex"])
-        i1 = int(w["to_vertex"])
-        p0 = poly_xy[i0]
-        p1 = poly_xy[i1]
-
-        ex, ey = (p1[0] - p0[0], p1[1] - p0[1])
-        ex, ey = _normalize2(ex, ey)
-
-        # inward normal
-        if ccw:
-            nx, ny = (-ey, ex)   # left normal
-        else:
-            nx, ny = (ey, -ex)   # right normal
-
-        wall_obj = _make_wall_quad(f"Room_Wall_{wid}", p0, p1, z0=0.0, z1=H, coll=coll_room)
-        _set_uvs_wall_sz(wall_obj, origin_xy=p0, dir_xy=(ex, ey), uv_scale=1.0)
-        if wall_mat:
-            _assign_material_to_object(wall_obj, wall_mat)
-        out_objs.append(wall_obj)
-
-        wall_by_id[wid] = {
-            "p0": p0, "p1": p1,
-            "dir": (ex, ey),
-            "in": (nx, ny),
-        }
-
-    # doors (decal planes)
-    for d in r.get("doors", []):
-        wid = d["wall_id"]
-        info = wall_by_id.get(wid)
-        if not info:
-            continue
-
-        s0 = float(d["s"])
-        width = float(d["width"])
-        z0 = float(d.get("z0", 0.0))
-        height = float(d.get("height", 2.0))
-
-        door_obj = _make_decal_on_wall(
-            name=f"Room_Door_{d['id']}",
-            wall_p0=info["p0"],
-            wall_p1=info["p1"],
-            inward_n=info["in"],
-            s0=s0,
-            width=width,
-            z0=z0,
-            height=height,
-            coll=coll_room,
-            offset=0.003,
-        )
-        # UV как у стены
-        _set_uvs_wall_sz(door_obj, origin_xy=info["p0"], dir_xy=info["dir"], uv_scale=1.0)
-        if door_mat:
-            _assign_material_to_object(door_obj, door_mat)
-        out_objs.append(door_obj)
-
-    # windows (glass decal planes)
-    for w in r.get("windows", []):
-        wid = w["wall_id"]
-        info = wall_by_id.get(wid)
-        if not info:
-            continue
-
-        s0 = float(w["s"])
-        width = float(w["width"])
-        z0 = float(w.get("z0", 0.9))
-        height = float(w.get("height", 1.2))
-
-        win_obj = _make_decal_on_wall(
-            name=f"Room_Window_{w['id']}",
-            wall_p0=info["p0"],
-            wall_p1=info["p1"],
-            inward_n=info["in"],
-            s0=s0,
-            width=width,
-            z0=z0,
-            height=height,
-            coll=coll_room,
-            offset=0.004,
-        )
-        _set_uvs_wall_sz(win_obj, origin_xy=info["p0"], dir_xy=info["dir"], uv_scale=1.0)
-        if win_mat:
-            _assign_material_to_object(win_obj, win_mat)
-        out_objs.append(win_obj)
-
-    # bounds (по полу достаточно, но возьмём все)
-    bmin, bmax = _world_bounds_mesh_objects(out_objs)
-    return out_objs, bmin, bmax
-
-
 
 # ============================================================
 # Main build
 # ============================================================
+
 def build_scene(
     glb_path: str,
     json_path: str,
@@ -2246,7 +2021,6 @@ def build_scene(
     else:
         room_engine = data.get("room") or data.get("room_spec") or {}
         items = data.get("placements") or data.get("items") or []
-        items = items or []
 
     if is_room_spec:
         try:
@@ -2304,7 +2078,6 @@ def build_scene(
 
         floor_mat = None
         wall_mat = None
-
         seed_eff = (hash(str(json_file)) & 0xFFFFFFFF) if int(seed) == 0 else int(seed)
 
         if env_textures_dir and os.path.isdir(env_textures_dir):
@@ -2333,36 +2106,38 @@ def build_scene(
             cy = float((bb_min.y + bb_max.y) * 0.5)
             cz = float((bb_min.z + bb_max.z) * 0.5)
 
-            floor = _create_plane(
-                name="Preview_Floor",
-                size_x=dx,
-                size_y=dy,
-                location=(cx, cy, float(bb_min.z) + 1e-4),
-                rot_xyz=(0.0, 0.0, 0.0),
-                collection=coll_room,
-            )
+            bpy.ops.mesh.primitive_plane_add(size=1.0, location=(cx, cy, float(bb_min.z) + 1e-4))
+            floor = bpy.context.active_object
+            floor.name = "Preview_Floor"
+            floor.scale = (dx * 0.5, dy * 0.5, 1.0)
+            _unlink_from_all_collections(floor)
+            coll_room.objects.link(floor)
             if floor_mat:
                 _assign_material_to_object(floor, floor_mat)
 
-            left = _create_plane(
-                name="Preview_Wall_Left",
-                size_x=dz,
-                size_y=dy,
+            bpy.ops.mesh.primitive_plane_add(
+                size=1.0,
                 location=(float(bb_min.x) + 1e-4, cy, cz),
-                rot_xyz=(0.0, math.radians(90.0), 0.0),
-                collection=coll_room,
+                rotation=(0.0, math.radians(90.0), 0.0),
             )
+            left = bpy.context.active_object
+            left.name = "Preview_Wall_Left"
+            left.scale = (dz * 0.5, dy * 0.5, 1.0)
+            _unlink_from_all_collections(left)
+            coll_room.objects.link(left)
             if wall_mat:
                 _assign_material_to_object(left, wall_mat)
 
-            front = _create_plane(
-                name="Preview_Wall_Front",
-                size_x=dx,
-                size_y=dz,
+            bpy.ops.mesh.primitive_plane_add(
+                size=1.0,
                 location=(cx, float(bb_min.y) + 1e-4, cz),
-                rot_xyz=(math.radians(90.0), 0.0, 0.0),
-                collection=coll_room,
+                rotation=(math.radians(90.0), 0.0, 0.0),
             )
+            front = bpy.context.active_object
+            front.name = "Preview_Wall_Front"
+            front.scale = (dx * 0.5, dz * 0.5, 1.0)
+            _unlink_from_all_collections(front)
+            coll_room.objects.link(front)
             if wall_mat:
                 _assign_material_to_object(front, wall_mat)
 
@@ -2392,7 +2167,7 @@ def build_scene(
             _log(verbose, f"⚠️ item without aabb: {it}")
             continue
 
-        name = it.get("name", "Item")
+        name = _item_name(it)
         constraints = it.get("constraints") or {}
         name_l = name.lower()
 
@@ -2407,10 +2182,7 @@ def build_scene(
 
         is_floor_item = (
             constraints.get("mount_type") == "floor"
-            or (
-                isinstance(constraints.get("touch_floor"), dict)
-                and constraints["touch_floor"].get("side") == "bottom"
-            )
+            or (isinstance(constraints.get("touch_floor"), dict) and constraints["touch_floor"].get("side") == "bottom")
             or (not is_ceiling_item)
         )
 
@@ -2434,15 +2206,15 @@ def build_scene(
             aabb_eng["z_max"] = float(z_ceil)
             aabb_eng["z_min"] = float(z_ceil) - sz
 
-        rot_raw = float(it.get("rotation", it.get("yaw_deg", 0.0)) or 0.0)
+        rot_raw = float(it.get("rotation", it.get("yaw_deg", it.get("rotation_deg", 0.0))) or 0.0)
         rot_deg = _quantize_rot_0_90_180_270(rot_raw)
 
-        fit_mode = it.get("mesh_fit_mode", "stretch")
+        fit_mode = _item_mesh_fit_mode(it)
 
-        mesh_path_raw = it.get("mesh_path") or it.get("obj_path")
+        mesh_path_raw = _item_mesh_path_raw(it)
         mesh_path = _resolve_path_maybe(json_dir, mesh_path_raw)
 
-        mesh_tex_dirs_raw = it.get("mesh_texture_dirs") or []
+        mesh_tex_dirs_raw = _item_mesh_texture_dirs_raw(it)
         mesh_tex_dirs: List[str] = []
         for d in mesh_tex_dirs_raw:
             rr = _resolve_path_maybe(json_dir, str(d))
@@ -2451,8 +2223,8 @@ def build_scene(
 
         texture_path = _resolve_path_maybe(json_dir, it.get("texture_path"))
         texture_files = [str(x) for x in (it.get("texture_files") or [])]
-        texture_scale = float(it.get("texture_scale", 1.0) or 1.0)
 
+        texture_scale = float(it.get("texture_scale", 1.0) or 1.0)
         color = it.get("color") or _auto_color_rgb(str(name))
         tint_rgb = (float(color[0]), float(color[1]), float(color[2]))
 
@@ -2520,6 +2292,8 @@ def build_scene(
                             )
                 else:
                     print(f"⚠️ {name}: Не удалось импортировать модель: {mesh_path}")
+        else:
+            print(f"⚠️ {name}: mesh_path не найден в placement/asset или файл отсутствует: {mesh_path_raw}")
 
         if (not placed_ok) and draw_aabb:
             _add_aabb_box(aabb_eng, name, coll_items)
@@ -2527,6 +2301,8 @@ def build_scene(
     _frame_camera_on_bounds(bb_min, bb_max)
     _add_basic_lights(bb_min, bb_max)
     _force_material_preview_if_ui()
+
+
 # ============================================================
 # RUN
 # ============================================================
@@ -2568,7 +2344,6 @@ def main() -> None:
         scene.render.image_settings.file_format = "PNG"
         scene.render.filepath = out_png
 
-        # Make render deterministic-ish
         try:
             scene.render.film_transparent = False
         except Exception:

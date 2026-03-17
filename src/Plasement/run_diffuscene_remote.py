@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-# src/Plasement/run_diffuscene_remote.py
 # -*- coding: utf-8 -*-
+# src/Plasement/run_diffuscene_remote.py
 
 import argparse
 import json
+import math
 import os
 import re
 import secrets
@@ -11,7 +12,8 @@ import shutil
 import subprocess
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
-import math
+
+import yaml
 
 
 CATEGORY_TO_DIFFUSCENE = {
@@ -72,6 +74,19 @@ def save_json(path: Path, data: Any) -> None:
     )
 
 
+def load_yaml(path: Path) -> Dict[str, Any]:
+    return yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+
+
+def deep_get(data: Dict[str, Any], keys: List[str], default: Any = None) -> Any:
+    cur = data
+    for k in keys:
+        if not isinstance(cur, dict) or k not in cur:
+            return default
+        cur = cur[k]
+    return cur
+
+
 def run_live(cmd: List[str], **kwargs) -> subprocess.CompletedProcess:
     print("▶", " ".join(cmd))
     return subprocess.run(cmd, check=True, text=True, **kwargs)
@@ -89,7 +104,7 @@ def make_run_dir(run_dir_arg: Optional[str], run_name: str) -> Tuple[Path, bool]
     return p, False
 
 
-def extract_class_name(obj):
+def extract_class_name(obj: Dict[str, Any]) -> str:
     for key in ("class_name", "class", "type"):
         v = obj.get(key)
         if v:
@@ -169,7 +184,10 @@ def extract_yaw_rad(obj: Dict[str, Any]) -> float:
     return 0.0
 
 
-def convert_local_objects_to_server_input(src_objects: Dict[str, Any]) -> Dict[str, Any]:
+def convert_local_objects_to_server_input(
+    src_objects: Dict[str, Any],
+    domain: str,
+) -> Dict[str, Any]:
     src_items = src_objects.get("objects") or src_objects.get("items") or src_objects.get("placements") or []
     if not isinstance(src_items, list):
         raise ValueError("objects.json: поле objects/items/placements должно быть списком")
@@ -194,7 +212,7 @@ def convert_local_objects_to_server_input(src_objects: Dict[str, Any]) -> Dict[s
 
     return {
         "version": "1.0",
-        "domain": "bedroom",
+        "domain": domain,
         "objects": out_items,
     }
 
@@ -354,6 +372,32 @@ def safe_copy_if_needed(src: Path, dst: Path) -> None:
     shutil.copy2(src, dst)
 
 
+def resolve_remote_value(
+    cli_value: Optional[str],
+    cfg: Dict[str, Any],
+    keys: List[str],
+    default: Optional[str] = None,
+) -> Optional[str]:
+    if cli_value is not None and str(cli_value).strip() != "":
+        return str(cli_value)
+    val = deep_get(cfg, keys, default)
+    if val is None:
+        return default
+    return str(val)
+
+
+def resolve_remote_port(
+    cli_value: Optional[int],
+    cfg: Dict[str, Any],
+    keys: List[str],
+    default: int = 22,
+) -> int:
+    if cli_value is not None:
+        return int(cli_value)
+    val = deep_get(cfg, keys, default)
+    return int(val)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--room", required=True, help="Локальный room.json")
@@ -362,7 +406,25 @@ def main() -> None:
     ap.add_argument("--run-dir", default=None, help="Каталог запуска")
     ap.add_argument("--run-name", default="", help="Имя запуска")
     ap.add_argument("--remote-runner", default="./src/run_room_layout_remote.sh")
+    ap.add_argument("--paths-config", default=None, help="Путь к YAML-конфигу путей")
+    ap.add_argument(
+        "--domain",
+        default="bedroom",
+        choices=["bedroom", "livingroom", "diningroom", "library"],
+        help="Домен DiffuScene",
+    )
+
+    # Эти аргументы раньше ломали argparse. Теперь поддерживаются.
+    ap.add_argument("--remote-host", default=None, help="SSH host удалённого сервера")
+    ap.add_argument("--remote-port", type=int, default=None, help="SSH port удалённого сервера")
+    ap.add_argument("--remote-user", default=None, help="SSH user удалённого сервера")
+    ap.add_argument("--remote-key", default=None, help="SSH private key")
+
     args = ap.parse_args()
+
+    cfg: Dict[str, Any] = {}
+    if args.paths_config:
+        cfg = load_yaml(Path(args.paths_config).expanduser().resolve())
 
     room_path = Path(args.room).expanduser().resolve()
     objects_path = Path(args.objects).expanduser().resolve()
@@ -373,13 +435,23 @@ def main() -> None:
     if not objects_path.is_file():
         raise FileNotFoundError(objects_path)
 
+    tmp_root_cfg = deep_get(cfg, ["local", "output", "tmp_root"], None)
+    global TMP_ROOT
+    if tmp_root_cfg:
+        TMP_ROOT = str(Path(tmp_root_cfg).expanduser().resolve())
+
+    remote_host = resolve_remote_value(args.remote_host, cfg, ["remote", "ssh", "host"])
+    remote_user = resolve_remote_value(args.remote_user, cfg, ["remote", "ssh", "user"])
+    remote_key = resolve_remote_value(args.remote_key, cfg, ["remote", "ssh", "key"])
+    remote_port = resolve_remote_port(args.remote_port, cfg, ["remote", "ssh", "port"], 22)
+
     run_name = args.run_name.strip() if args.run_name.strip() else f"run_{secrets.token_hex(6)}"
     run_dir, _ = make_run_dir(args.run_dir, run_name)
 
     print(f"📁 run_dir: {run_dir}")
 
     local_objects = load_json(objects_path)
-    server_input = convert_local_objects_to_server_input(local_objects)
+    server_input = convert_local_objects_to_server_input(local_objects, domain=args.domain)
 
     local_room_copy = run_dir / "room.json"
     local_server_objects = run_dir / "objects_for_server.json"
@@ -394,17 +466,44 @@ def main() -> None:
         "run_name": run_name,
         "run_dir": str(run_dir),
         "remote_runner": args.remote_runner,
+        "paths_config": args.paths_config,
+        "domain": args.domain,
+        "remote_host": remote_host,
+        "remote_port": remote_port,
+        "remote_user": remote_user,
+        "remote_key": remote_key,
     })
 
     runner = Path(args.remote_runner).expanduser()
     runner_cmd = str(runner.resolve()) if runner.exists() else args.remote_runner
 
-    proc = run_live([
-        runner_cmd,
-        str(local_room_copy),
-        str(local_server_objects),
-        run_name,
-    ], capture_output=True)
+    env = os.environ.copy()
+
+    # Прокидываем SSH-параметры shell-раннеру через environment.
+    # Это не ломает старый сценарий и даёт run_room_layout_remote.sh доступ к конфигу.
+    if remote_host:
+        env["DIFFUSCENE_REMOTE_HOST"] = remote_host
+    if remote_user:
+        env["DIFFUSCENE_REMOTE_USER"] = remote_user
+    if remote_key:
+        env["DIFFUSCENE_REMOTE_KEY"] = str(Path(remote_key).expanduser())
+    env["DIFFUSCENE_REMOTE_PORT"] = str(remote_port)
+    env["DIFFUSCENE_RUN_NAME"] = run_name
+    env["DIFFUSCENE_RUN_DIR"] = str(run_dir)
+    env["DIFFUSCENE_DOMAIN"] = args.domain
+    if args.paths_config:
+        env["DIFFUSCENE_PATHS_CONFIG"] = str(Path(args.paths_config).expanduser().resolve())
+
+    proc = run_live(
+        [
+            runner_cmd,
+            str(local_room_copy),
+            str(local_server_objects),
+            run_name,
+        ],
+        capture_output=True,
+        env=env,
+    )
 
     if proc.stdout:
         print(proc.stdout, end="" if proc.stdout.endswith("\n") else "\n")
