@@ -1,0 +1,122 @@
+project:
+  root: "/Users/a01/Desktop/ITMO/sem_7/cgs_3d_locations"
+
+local:
+  room:
+    default_glb: "data/input/room.glb"
+    default_json: "data/input/room.json"
+
+  input:
+    objects_json: "data/input/objects.json"
+
+  output:
+    placement_json: "data/output/placement_result.json"
+    tmp_root: "out/tmp"
+
+  data:
+    prepared_info: "data/sourse/3D-FRONT/prepared_model_info.json"
+    future_root: "data/sourse/3D-FRONT/3D-FUTURE-model"
+
+  scripts:
+    chooser: "src/ChooseObject/choose_obj_from_prepared.py"
+    cube: "src/Plasement/CubePlacement.py"
+    blender_visualize: "src/Plasement/BlenderVisualizePlacement.py"
+    ml_placer: "src/ml/infer/run_placer.py"
+    diffuscene_remote: "src/Plasement/run_diffuscene_remote.py"
+    ollama_layout: "src/Plasement/run_ollama_layout.py"
+    remote_runner_sh: "src/run_room_layout_remote.sh"
+    normalize_scene_format: "src/tools/normalize_scene_format.py"
+    layout_refiner_infer: "src/ml/infer_layout_refiner.py"
+    lego_postprocess: "src/ml/lego_postprocess.py"
+
+  blender:
+    binary: null
+
+  lego:
+    python: "python3"
+    repo: null
+    modes: "random,relaxed"
+    checkpoints:
+      bedroom: null
+      livingroom: null
+
+remote:
+  ssh:
+    host: "1.208.108.242"
+    port: 32172
+    user: "root"
+    key: "~/.ssh/id_ed25519"
+
+  lego_net:
+    repo_root: "/workspace/LEGO-Net"
+    python: "/venv/legofix/bin/python"
+    helper_script: "/workspace/LEGO-Net/tools/pipeline_refine_scene.py"
+    tmp_root: "/workspace/lego_pipeline_runs"
+    checkpoint_bedroom: "/workspace/LEGO-Net/pretrained/LEGO-Net_bedroom_955_aug1_MSE+L1_pointnet_simple_50000iter.pt"
+    checkpoint_livingroom: "/workspace/LEGO-Net/pretrained/LEGO-Net_livingroom_409_livonly0_aug1_MSE+L1_pointnet_simple_50000iter.pt"
+
+  project:
+    root: "/workspace/projects/DiffuScene"
+
+  env:
+    conda_env: "diffuscene"
+    nltk_data: "/root/nltk_data"
+    pythonpath:
+      - "/workspace/projects/DiffuScene"
+      - "/workspace/projects/DiffuScene/ChamferDistancePytorch"
+
+  dirs:
+    input_root: "/workspace/room_inputs"
+    runs_root: "/workspace/projects/DiffuScene/scripts/room_runs"
+
+  data:
+    datasets_root: "/workspace/data/assets/datasets"
+    checkpoints_root: "/workspace/data/assets/checkpoints"
+    results_root: "/workspace/data/assets/results"
+    models_root: "/workspace/data/models"
+
+    threed_future: "/workspace/data/models/3D-FUTURE-model-processed/3D-FUTURE-model"
+    front_processed: "/workspace/data/assets/datasets/3d_front_processed"
+    objautoencoder_pretrained: "/workspace/data/assets/checkpoints/objautoencoder_pretrained"
+    pretrained_diffusion: "/workspace/data/assets/checkpoints/pretrained_diffusion"
+    uncondgen_results: "/workspace/data/assets/results/UncondGen"
+
+  config:
+    rearrange_bedrooms: "/workspace/projects/DiffuScene/config/rearrange/diffusion_bedrooms_instancond_lat32_v_rearrange.yaml"
+    rearrange_livingrooms: "/workspace/projects/DiffuScene/config/rearrange/diffusion_livingrooms_instancond_lat32_v_rearrange.yaml"
+    rearrange_diningrooms: "/workspace/projects/DiffuScene/config/rearrange/diffusion_diningrooms_instancond_lat32_v_rearrange.yaml"
+
+  weights:
+    bedrooms_rearrange: "/workspace/data/assets/checkpoints/pretrained_diffusion/bedrooms_rearrange/model_17000"
+    livingrooms_rearrange: "/workspace/data/assets/checkpoints/pretrained_diffusion/livingrooms_rearrange/model_81000"
+    diningrooms_rearrange: "/workspace/data/assets/checkpoints/pretrained_diffusion/diningrooms_rearrange/model_???"
+
+    bedrooms_bert: "/workspace/data/assets/checkpoints/pretrained_diffusion/bedrooms_bert/model_32000"
+    bedrooms_uncond: "/workspace/data/assets/checkpoints/pretrained_diffusion/bedrooms_uncond/model_30000"
+    diningrooms_bert: "/workspace/data/assets/checkpoints/pretrained_diffusion/diningrooms_bert/model_148000"
+    diningrooms_uncond: "/workspace/data/assets/checkpoints/pretrained_diffusion/diningrooms_uncond/model_82000"
+    livingrooms_bert: "/workspace/data/assets/checkpoints/pretrained_diffusion/livingrooms_bert/model_118000"
+    livingrooms_uncond: "/workspace/data/assets/checkpoints/pretrained_diffusion/livingrooms_uncond/model_96000"
+
+defaults:
+  placer: "cube"
+  ml_device: "cpu"
+  diffusion_steps: 50
+  max_attempts: 30
+  ollama:
+    url: "http://127.0.0.1:11434"
+    model: "gpt-oss:20b"
+    timeout: 300
+    temperature: 0.1
+    max_attempts: 8
+
+modes_by_placer:
+  cube: ["random", "relaxed"]
+  forest: ["random", "relaxed"]
+  graph_stat: ["random", "relaxed"]
+  diffusion: ["random", "relaxed"]
+  layout_refiner: ["random", "relaxed"]
+  diffuscene_remote: ["diffuscene"]
+  ollama_llm: ["llm"]
+
+  

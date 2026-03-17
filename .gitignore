@@ -9,7 +9,9 @@ archive
 # macOS мусор
 .DS_Store
 data/
-.pyc
-*.py
-**/__pycache__/**
-!**/*.pyc
+out/
+runs/
+
+__pycache__/
+*.pyc
+.DS_Store

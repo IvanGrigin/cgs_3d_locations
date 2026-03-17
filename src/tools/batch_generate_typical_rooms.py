@@ -19,9 +19,24 @@ from typing import Any
 DEFAULT_ROOMS_DIR = "data/input/generated_typical_rooms"
 DEFAULT_OUTPUT_ROOT = "out/batch_typical_rooms"
 DEFAULT_RUN_PIPELINE = "src/run_pipeline.py"
+
 DEFAULT_PLACER = "diffuscene_remote"
-DEFAULT_MODES = "diffuscene"
+DEFAULT_MODES_BY_PLACER = {
+    "diffuscene_remote": "diffuscene",
+    "ollama_llm": "llm",
+    "cube": "random",
+    "forest": "random",
+    "graph_stat": "random",
+    "diffusion": "random",
+}
+
 DEFAULT_REPEATS = 20
+
+DEFAULT_OLLAMA_URL = "http://127.0.0.1:11435"
+DEFAULT_OLLAMA_MODEL = "gpt-oss:20b"
+DEFAULT_OLLAMA_TIMEOUT = 1200
+DEFAULT_OLLAMA_TEMPERATURE = 0.0
+DEFAULT_OLLAMA_MAX_ATTEMPTS = 8
 
 
 @dataclass(frozen=True)
@@ -181,6 +196,12 @@ def run_one_job(
     blender: str | None,
     headless: bool,
     max_attempts: int,
+    ollama_url: str,
+    ollama_model: str,
+    ollama_timeout: int,
+    ollama_temperature: float,
+    ollama_max_attempts: int,
+    skip_blender: bool,
 ) -> dict[str, Any]:
     started = datetime.now()
     run_dir = make_job_run_dir(output_root, room_file.stem, prompt_tpl.key, repeat_index)
@@ -200,10 +221,22 @@ def run_one_job(
         "--run-dir", str(run_dir.resolve()),
         "--max-attempts", str(max_attempts),
     ]
+
+    if placer == "ollama_llm":
+        cmd += [
+            "--ollama-url", ollama_url,
+            "--ollama-model", ollama_model,
+            "--ollama-timeout", str(int(ollama_timeout)),
+            "--ollama-temperature", str(float(ollama_temperature)),
+            "--ollama-max-attempts", str(int(ollama_max_attempts)),
+        ]
+
     if blender:
         cmd += ["--blender", blender]
     if headless:
         cmd += ["--headless"]
+    if skip_blender:
+        cmd += ["--skip-blender"]
 
     meta = {
         "room_file": str(room_file.resolve()),
@@ -275,9 +308,9 @@ def main() -> None:
     parser.add_argument(
         "--placer",
         default=DEFAULT_PLACER,
-        choices=["cube", "forest", "graph_stat", "diffusion", "diffuscene_remote"],
+        choices=["cube", "forest", "graph_stat", "diffusion", "diffuscene_remote", "ollama_llm"],
     )
-    parser.add_argument("--modes", default=DEFAULT_MODES)
+    parser.add_argument("--modes", default=None)
     parser.add_argument("--repeats", type=int, default=DEFAULT_REPEATS)
     parser.add_argument("--max-attempts", type=int, default=1)
     parser.add_argument("--blender", default=None)
@@ -290,7 +323,18 @@ def main() -> None:
     parser.set_defaults(headless=True)
     parser.add_argument("--room-limit", type=int, default=None)
     parser.add_argument("--prompt-limit-per-room", type=int, default=None)
+
+    parser.add_argument("--ollama-url", default=DEFAULT_OLLAMA_URL)
+    parser.add_argument("--ollama-model", default=DEFAULT_OLLAMA_MODEL)
+    parser.add_argument("--ollama-timeout", type=int, default=DEFAULT_OLLAMA_TIMEOUT)
+    parser.add_argument("--ollama-temperature", type=float, default=DEFAULT_OLLAMA_TEMPERATURE)
+    parser.add_argument("--ollama-max-attempts", type=int, default=DEFAULT_OLLAMA_MAX_ATTEMPTS)
+    parser.add_argument("--skip-blender", action="store_true")
+
     args = parser.parse_args()
+
+    if args.modes is None:
+        args.modes = DEFAULT_MODES_BY_PLACER.get(args.placer, "random")
 
     rooms_dir = Path(args.rooms_dir).expanduser().resolve()
     output_root = Path(args.output_root).expanduser().resolve()
@@ -329,6 +373,12 @@ def main() -> None:
         "headless": bool(args.headless),
         "room_limit": args.room_limit,
         "prompt_limit_per_room": args.prompt_limit_per_room,
+        "ollama_url": args.ollama_url,
+        "ollama_model": args.ollama_model,
+        "ollama_timeout": args.ollama_timeout,
+        "ollama_temperature": args.ollama_temperature,
+        "ollama_max_attempts": args.ollama_max_attempts,
+        "skip_blender": bool(args.skip_blender),
         "rooms": [str(x) for x in rooms],
     }
     (batch_dir / "batch_manifest.json").write_text(
@@ -362,6 +412,12 @@ def main() -> None:
                     blender=args.blender,
                     headless=bool(args.headless),
                     max_attempts=int(args.max_attempts),
+                    ollama_url=args.ollama_url,
+                    ollama_model=args.ollama_model,
+                    ollama_timeout=int(args.ollama_timeout),
+                    ollama_temperature=float(args.ollama_temperature),
+                    ollama_max_attempts=int(args.ollama_max_attempts),
+                    skip_blender=bool(args.skip_blender),
                 )
 
                 append_csv_row(csv_log, row)

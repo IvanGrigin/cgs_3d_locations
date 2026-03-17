@@ -32,6 +32,8 @@ LEGACY_PLACEMENT_JSON = "data/output/placement_result.json"
 PREPARED_INFO_DEFAULT = "data/sourse/3D-FRONT/prepared_model_info.json"
 FUTURE_ROOT_DEFAULT = "data/sourse/3D-FRONT/3D-FUTURE-model"
 
+OLLAMA_LLM_SCRIPT = "src/Plasement/run_ollama_layout.py"
+
 MAX_ATTEMPTS = 30
 TMP_ROOT = "out/tmp"
 
@@ -41,6 +43,7 @@ DEFAULT_MODES_BY_PLACER = {
     "graph_stat": ["random", "relaxed"],
     "diffusion": ["random", "relaxed"],
     "diffuscene_remote": ["diffuscene"],
+    "ollama_llm": ["llm"],
 }
 
 
@@ -269,6 +272,32 @@ def run_diffuscene_remote_placer(
     else:
         print(f"⚠️ Папка remote-артефактов не найдена: {remote_artifacts_dir}")
 
+
+def run_ollama_llm_placer(
+    args: argparse.Namespace,
+    room_path: str,
+    objects_path: Path,
+    mode: str,
+    out_path: Path,
+) -> None:
+    if not room_path.lower().endswith(".json"):
+        raise RuntimeError("ollama_llm placer требует room-spec .json")
+
+    cmd = [
+        sys.executable, OLLAMA_LLM_SCRIPT,
+        "--room", os.path.abspath(room_path),
+        "--objects", str(objects_path.resolve()),
+        "--out", str(out_path.resolve()),
+        "--mode", mode,
+        "--ollama-url", args.ollama_url,
+        "--ollama-model", args.ollama_model,
+        "--timeout", str(int(args.ollama_timeout)),
+        "--temperature", str(float(args.ollama_temperature)),
+        "--max-llm-attempts", str(int(args.ollama_max_attempts)),
+    ]
+
+    print("▶ Запуск Ollama LLM-расстановщика:\n ", " ".join(cmd))
+    subprocess.run(cmd, check=True)
 
 # ------------------------------------------------------------
 # Blender stage
@@ -510,7 +539,8 @@ def run_pipeline_for_mode(
 
     placement_out = run_dir / f"placement_{mode}.json"
 
-    for attempt in range(1, int(args.max_attempts) + 1):
+    outer_attempts = 1 if args.placer == "ollama_llm" else int(args.max_attempts)
+    for attempt in range(1, outer_attempts + 1):        
         print(f"\n---------- ПОПЫТКА {attempt} ({mode}) ----------")
         try:
             attempt_seed = int.from_bytes(secrets.token_bytes(8), "big")
@@ -541,6 +571,14 @@ def run_pipeline_for_mode(
                     seed=attempt_seed,
                     out_path=placement_out,
                     run_dir=run_dir,
+                )
+            elif args.placer == "ollama_llm":
+                run_ollama_llm_placer(
+                    args=args,
+                    room_path=room_path,
+                    objects_path=objects_path,
+                    mode=mode,
+                    out_path=placement_out,
                 )
             else:
                 run_ml_placer(
@@ -601,7 +639,7 @@ def build_cli() -> argparse.ArgumentParser:
 
     p.add_argument(
         "--placer",
-        choices=["cube", "forest", "graph_stat", "diffusion", "diffuscene_remote"],
+        choices=["cube", "forest", "graph_stat", "diffusion", "diffuscene_remote", "ollama_llm"],
         default="cube"
     )
     p.add_argument("--ml-model", default=None)
@@ -613,6 +651,12 @@ def build_cli() -> argparse.ArgumentParser:
         default="src/run_room_layout_remote.sh",
         help="Локальный shell-скрипт, который отправляет room+objects на сервер DiffuScene"
     )
+
+    p.add_argument("--ollama-url", default="http://127.0.0.1:11434", help="URL Ollama API")
+    p.add_argument("--ollama-model", default="gpt-oss:20b", help="Имя модели в Ollama")
+    p.add_argument("--ollama-timeout", type=int, default=300, help="HTTP timeout для Ollama")
+    p.add_argument("--ollama-temperature", type=float, default=0.1, help="temperature для Ollama")
+    p.add_argument("--ollama-max-attempts", type=int, default=8, help="Максимум попыток LLM")
 
     p.add_argument(
         "--modes",
