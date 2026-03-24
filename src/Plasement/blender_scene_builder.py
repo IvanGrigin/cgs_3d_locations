@@ -1620,6 +1620,26 @@ def _make_glass_material(name: str, image_path: Optional[str]) -> bpy.types.Mate
 # Room spec mesh building
 # ============================================================
 
+def _synthesize_walls_from_floor_polygon(room_dict: dict) -> list[dict]:
+    """
+    Если в room-spec нет room["walls"], строим их автоматически
+    по соседним вершинам floor_polygon:
+        0->1, 1->2, ..., n-1->0
+    """
+    poly = room_dict.get("floor_polygon") or []
+    if not isinstance(poly, list) or len(poly) < 3:
+        return []
+
+    walls = []
+    n = len(poly)
+    for i in range(n):
+        walls.append({
+            "id": f"w{i}",
+            "from_vertex": i,
+            "to_vertex": (i + 1) % n,
+        })
+    return walls
+
 def _poly_signed_area_xy(pts: List[Tuple[float, float]]) -> float:
     a = 0.0
     n = len(pts)
@@ -1752,6 +1772,54 @@ def _make_decal_on_wall(
     faces = [(0, 1, 2, 3)]
     return _make_mesh_object(name, verts, faces, coll)
 
+def _make_double_sided_decal_on_wall(
+    name: str,
+    wall_p0,
+    wall_p1,
+    inward_n,
+    s0: float,
+    width: float,
+    z0: float,
+    height: float,
+    coll,
+    offset: float = 0.003,
+):
+    """
+    Создаёт две тонкие декали на стене:
+    - со стороны комнаты
+    - со внешней стороны
+
+    inward_n — нормаль, направленная внутрь комнаты.
+    """
+    nx, ny = inward_n
+
+    obj_in = _make_decal_on_wall(
+        name=f"{name}_Inner",
+        wall_p0=wall_p0,
+        wall_p1=wall_p1,
+        inward_n=(nx, ny),
+        s0=s0,
+        width=width,
+        z0=z0,
+        height=height,
+        coll=coll,
+        offset=offset,
+    )
+
+    obj_out = _make_decal_on_wall(
+        name=f"{name}_Outer",
+        wall_p0=wall_p0,
+        wall_p1=wall_p1,
+        inward_n=(-nx, -ny),
+        s0=s0,
+        width=width,
+        z0=z0,
+        height=height,
+        coll=coll,
+        offset=offset,
+    )
+
+    return [obj_in, obj_out]
 
 def build_room_from_spec(
     room_json: dict,
@@ -1773,7 +1841,9 @@ def build_room_from_spec(
     floor_tex = wall_tex = door_tex = window_tex = None
     if env_textures_dir and os.path.isdir(env_textures_dir):
         tex = _list_env_textures(env_textures_dir)
-        rng = random.Random(int(seed) if int(seed) != 0 else (hash(json.dumps(r, sort_keys=True)) & 0xFFFFFFFF))
+        rng = random.Random(
+            int(seed) if int(seed) != 0 else (hash(json.dumps(r, sort_keys=True)) & 0xFFFFFFFF)
+        )
 
         floor_tex = _choose_texture("floor", tex.get("floor", []), style_text, rng)
         wall_tex = _choose_texture("wall", tex.get("wall", []), style_text, rng)
@@ -1801,31 +1871,57 @@ def build_room_from_spec(
     out_objs.append(floor_obj)
 
     walls = r.get("walls", [])
+    if not walls:
+        walls = _synthesize_walls_from_floor_polygon(r)
+        if verbose:
+            print(f"[RoomSpec] walls missing -> synthesized {len(walls)} walls from floor_polygon")
+
     wall_by_id = {}
 
     for w in walls:
-        wid = w["id"]
+        wid = str(w.get("id", f"w{len(wall_by_id)}"))
         i0 = int(w["from_vertex"])
         i1 = int(w["to_vertex"])
+
+        if i0 < 0 or i0 >= len(poly_xy) or i1 < 0 or i1 >= len(poly_xy):
+            if verbose:
+                print(f"[RoomSpec] skip invalid wall {wid}: from={i0} to={i1}")
+            continue
+
         p0 = poly_xy[i0]
         p1 = poly_xy[i1]
 
         ex, ey = (p1[0] - p0[0], p1[1] - p0[1])
         ex, ey = _normalize2(ex, ey)
 
+        if abs(ex) < 1e-12 and abs(ey) < 1e-12:
+            if verbose:
+                print(f"[RoomSpec] skip degenerate wall {wid}")
+            continue
+
         if ccw:
             nx, ny = (-ey, ex)
         else:
             nx, ny = (ey, -ex)
 
-        wall_obj = _make_wall_quad(f"Room_Wall_{wid}", p0, p1, z0=0.0, z1=H, coll=coll_room)
+        wall_obj = _make_wall_quad(
+            f"Room_Wall_{wid}",
+            p0,
+            p1,
+            z0=0.0,
+            z1=H,
+            coll=coll_room,
+        )
         _set_uvs_wall_sz(wall_obj, origin_xy=p0, dir_xy=(ex, ey), uv_scale=1.0)
+
         if wall_mat:
             _assign_material_to_object(wall_obj, wall_mat)
+
         out_objs.append(wall_obj)
 
         wall_by_id[wid] = {
-            "p0": p0, "p1": p1,
+            "p0": p0,
+            "p1": p1,
             "dir": (ex, ey),
             "in": (nx, ny),
         }
@@ -1841,7 +1937,7 @@ def build_room_from_spec(
         z0 = float(d.get("z0", 0.0))
         height = float(d.get("height", 2.0))
 
-        door_obj = _make_decal_on_wall(
+        door_objs = _make_double_sided_decal_on_wall(
             name=f"Room_Door_{d['id']}",
             wall_p0=info["p0"],
             wall_p1=info["p1"],
@@ -1853,10 +1949,12 @@ def build_room_from_spec(
             coll=coll_room,
             offset=0.003,
         )
-        _set_uvs_wall_sz(door_obj, origin_xy=info["p0"], dir_xy=info["dir"], uv_scale=1.0)
-        if door_mat:
-            _assign_material_to_object(door_obj, door_mat)
-        out_objs.append(door_obj)
+
+        for door_obj in door_objs:
+            _set_uvs_wall_sz(door_obj, origin_xy=info["p0"], dir_xy=info["dir"], uv_scale=1.0)
+            if door_mat:
+                _assign_material_to_object(door_obj, door_mat)
+            out_objs.append(door_obj)
 
     for w in r.get("windows", []):
         wid = w["wall_id"]
@@ -1869,7 +1967,7 @@ def build_room_from_spec(
         z0 = float(w.get("z0", 0.9))
         height = float(w.get("height", 1.2))
 
-        win_obj = _make_decal_on_wall(
+        win_objs = _make_double_sided_decal_on_wall(
             name=f"Room_Window_{w['id']}",
             wall_p0=info["p0"],
             wall_p1=info["p1"],
@@ -1881,15 +1979,15 @@ def build_room_from_spec(
             coll=coll_room,
             offset=0.004,
         )
-        _set_uvs_wall_sz(win_obj, origin_xy=info["p0"], dir_xy=info["dir"], uv_scale=1.0)
-        if win_mat:
-            _assign_material_to_object(win_obj, win_mat)
-        out_objs.append(win_obj)
+
+        for win_obj in win_objs:
+            _set_uvs_wall_sz(win_obj, origin_xy=info["p0"], dir_xy=info["dir"], uv_scale=1.0)
+            if win_mat:
+                _assign_material_to_object(win_obj, win_mat)
+            out_objs.append(win_obj)
 
     bmin, bmax = _world_bounds_mesh_objects(out_objs)
     return out_objs, bmin, bmax
-
-
 # ============================================================
 # Placement
 # ============================================================
