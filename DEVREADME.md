@@ -28,7 +28,7 @@ python3 src/run_pipeline.py кровать шкаф кресло стол сту
 
 python3 src/run_pipeline.py \
   --placer cube \
-  --prompt "Нужно разместить кровать, шкаф, кресло, стол и стул" \
+  --prompt "classic cozy bedroom with small bed, nightstands, wardrobe and lamp" \
   --room data/input/room_rec.json \
   --save-blend out/interior.blend \
   --render out/interior.png
@@ -42,6 +42,7 @@ python3 src/run_pipeline.py кровать шкаф кресло стол сту
 
 ssh -p 32172 root@1.208.108.242
 
+Запустить туннель на сервер 
 ssh -p 32172 -N -L 11435:127.0.0.1:11434 root@1.208.108.242
 curl http://127.0.0.1:11435/api/tags
 
@@ -55,3 +56,13 @@ python3 src/run_pipeline.py кровать шкаф кресло стол сту
   --ollama-max-attempts 8 \
   --save-blend out/ollama_llm.blend \
   --render out/ollama_llm.png
+
+python src/Appraiser/appraiser.py \                                                                       
+  --scene data/output/scene.v1.json \
+  --prompt "cozy master bedroom with king-size bed, 2 nightstands, wardrobe, ceiling lamp" \
+  --mode hybrid \
+  --llm-base-url http://127.0.0.1:11434 \
+  --judge-model qwen3:30b \
+  --judge-model gpt-oss:20b \
+  --chief-model mistral-small3.2:24b \
+  --out out/appraisal.json

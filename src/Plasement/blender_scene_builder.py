@@ -2071,6 +2071,16 @@ def place_in_aabb(
 # Main build
 # ============================================================
 
+def _has_room_spec(data: dict) -> bool:
+    if not isinstance(data, dict):
+        return False
+    room = data.get("room")
+    if not isinstance(room, dict):
+        return False
+    poly = room.get("floor_polygon")
+    return isinstance(poly, list) and len(poly) >= 3
+
+
 def build_scene(
     glb_path: str,
     json_path: str,
@@ -2092,26 +2102,21 @@ def build_scene(
     with open(str(json_file), "r", encoding="utf-8") as f:
         data = json.load(f)
 
-    is_room_spec = False
-    try:
-        is_room_spec = (
-            isinstance(data, dict)
-            and "room" in data
-            and isinstance(data["room"], dict)
-            and "floor_polygon" in data["room"]
-            and "walls" in data["room"]
-        )
-    except Exception:
-        is_room_spec = False
+    room_spec_available = _has_room_spec(data)
 
     coll_room = ensure_collection("Room")
     coll_items = ensure_collection("Items")
 
     room_ok = False
+    room_mode = "none"
     room_objs: List[bpy.types.Object] = []
-    glb_bb_min: Optional[mathutils.Vector] = None
-    glb_bb_max: Optional[mathutils.Vector] = None
     room_meshes: List[bpy.types.Object] = []
+
+    bb_min = mathutils.Vector((0.0, 0.0, 0.0))
+    bb_max = mathutils.Vector((5.0, 5.0, 3.0))
+
+    room_bb_min: Optional[mathutils.Vector] = None
+    room_bb_max: Optional[mathutils.Vector] = None
 
     if "items" in data:
         room_engine = data.get("room") or {}
@@ -2120,9 +2125,44 @@ def build_scene(
         room_engine = data.get("room") or data.get("room_spec") or {}
         items = data.get("placements") or data.get("items") or []
 
-    if is_room_spec:
+    # ============================================================
+    # 1. Сначала пытаемся использовать ИМЕННО GLB комнаты
+    # ============================================================
+    if import_glb and os.path.isfile(glb_path):
         try:
-            room_objs, bb_min, bb_max = build_room_from_spec(
+            room_objs = import_glb_into_collection(glb_path, coll_room)
+            room_meshes = [o for o in room_objs if o.type == "MESH"]
+
+            if room_meshes:
+                room_bb_min, room_bb_max = _world_bounds_mesh_objects(room_meshes)
+                room_ok = True
+                room_mode = "glb"
+            elif room_objs:
+                room_bb_min, room_bb_max = _world_bounds_mesh_objects(room_objs)
+                room_ok = True
+                room_mode = "glb"
+
+            if room_ok and room_bb_min is not None and room_bb_max is not None:
+                bb_min = room_bb_min.copy()
+                bb_max = room_bb_max.copy()
+                _log(verbose, f"[Room] using original GLB room: {glb_path}")
+                _log(verbose, f"[Room] imported objects: {len(room_objs)}")
+                _log(verbose, f"[Room] bounds: min={tuple(bb_min)}, max={tuple(bb_max)}")
+        except Exception as e:
+            _log(verbose, f"[Room] GLB import failed: {e}")
+            room_ok = False
+            room_mode = "none"
+            room_objs = []
+            room_meshes = []
+            room_bb_min = None
+            room_bb_max = None
+
+    # ============================================================
+    # 2. Если GLB не удалось использовать — строим комнату из room-spec
+    # ============================================================
+    if (not room_ok) and room_spec_available:
+        try:
+            room_objs, room_bb_min, room_bb_max = build_room_from_spec(
                 room_json=data,
                 coll_room=coll_room,
                 env_textures_dir=env_textures_dir,
@@ -2131,37 +2171,25 @@ def build_scene(
                 verbose=verbose,
             )
             room_ok = True
-            glb_bb_min = bb_min.copy()
-            glb_bb_max = bb_max.copy()
-            z_floor = float(bb_min.z)
-            z_ceil = float(bb_max.z)
+            room_mode = "room_spec"
+            bb_min = room_bb_min.copy()
+            bb_max = room_bb_max.copy()
+
+            _log(verbose, "[Room] GLB unavailable -> built room from room-spec")
+            _log(verbose, f"[Room] bounds: min={tuple(bb_min)}, max={tuple(bb_max)}")
         except Exception as e:
-            room_ok = False
-            room_objs = []
-            bb_min = mathutils.Vector((0.0, 0.0, 0.0))
-            bb_max = mathutils.Vector((5.0, 5.0, 3.0))
-            z_floor = float(bb_min.z)
-            z_ceil = float(bb_max.z)
             _log(verbose, f"[RoomSpec] build failed: {e}")
-    else:
-        if import_glb and os.path.isfile(glb_path):
-            try:
-                room_objs = import_glb_into_collection(glb_path, coll_room)
-                room_ok = len(room_objs) > 0
-                _log(verbose, f"[Room] Imported GLB objects: {len(room_objs)}")
-            except Exception as e:
-                print("Импорт GLB комнаты не удался:", e)
-                room_ok = False
-                room_objs = []
+            room_ok = False
+            room_mode = "none"
+            room_objs = []
+            room_bb_min = None
+            room_bb_max = None
 
-        if room_ok:
-            room_meshes = [o for o in room_objs if o.type == "MESH"]
-            glb_bb_min, glb_bb_max = _world_bounds_mesh_objects(room_meshes if room_meshes else room_objs)
-
-        if room_ok and glb_bb_min is not None and glb_bb_max is not None:
-            bb_min = glb_bb_min.copy()
-            bb_max = glb_bb_max.copy()
-        elif room_engine and all(k in room_engine for k in ["x_min", "x_max", "y_min", "y_max", "z_min", "z_max"]):
+    # ============================================================
+    # 3. Аварийный fallback: только bbox / preview room
+    # ============================================================
+    if not room_ok:
+        if room_engine and all(k in room_engine for k in ["x_min", "x_max", "y_min", "y_max", "z_min", "z_max"]):
             x1, x2 = float(room_engine["x_min"]), float(room_engine["x_max"])
             y1, y2 = float(room_engine["y_min"]), float(room_engine["y_max"])
             z1, z2 = float(room_engine["z_min"]), float(room_engine["z_max"])
@@ -2171,12 +2199,9 @@ def build_scene(
             bb_min = mathutils.Vector((0.0, 0.0, 0.0))
             bb_max = mathutils.Vector((5.0, 5.0, 3.0))
 
-        z_floor = float(bb_min.z)
-        z_ceil = float(bb_max.z)
-
+        seed_eff = (hash(str(json_file)) & 0xFFFFFFFF) if int(seed) == 0 else int(seed)
         floor_mat = None
         wall_mat = None
-        seed_eff = (hash(str(json_file)) & 0xFFFFFFFF) if int(seed) == 0 else int(seed)
 
         if env_textures_dir and os.path.isdir(env_textures_dir):
             try:
@@ -2188,13 +2213,9 @@ def build_scene(
 
                 floor_mat = _make_image_material("MAT_ENV_FLOOR", floor_path, uv_scale=1.0) if floor_path else None
                 wall_mat = _make_image_material("MAT_ENV_WALL", wall_path, uv_scale=1.0) if wall_path else None
-
-                _log(verbose, f"[EnvTextures] floor={floor_path}")
-                _log(verbose, f"[EnvTextures] wall ={wall_path}")
             except Exception as e:
-                _log(verbose, f"[EnvTextures] selection/materials failed: {e}")
+                _log(verbose, f"[PreviewRoom] texture setup failed: {e}")
 
-        preview_created = False
         try:
             dx = float(bb_max.x - bb_min.x)
             dy = float(bb_max.y - bb_min.y)
@@ -2239,19 +2260,13 @@ def build_scene(
             if wall_mat:
                 _assign_material_to_object(front, wall_mat)
 
-            preview_created = True
+            room_mode = "preview"
+            _log(verbose, "[Room] fallback preview room created")
         except Exception as e:
             _log(verbose, f"[PreviewRoom] failed: {e}")
 
-        if room_ok and preview_created:
-            for o in room_meshes:
-                try:
-                    o.hide_viewport = True
-                    o.hide_render = True
-                except Exception:
-                    pass
-        elif (not room_ok) and draw_aabb and room_engine:
-            _add_aabb_box(room_engine, "Room", coll_room)
+    z_floor = float(bb_min.z)
+    z_ceil = float(bb_max.z)
 
     def _quantize_rot_0_90_180_270(deg: float) -> float:
         a = float(deg or 0.0) % 360.0
@@ -2284,9 +2299,10 @@ def build_scene(
             or (not is_ceiling_item)
         )
 
-        if glb_bb_min is not None and glb_bb_max is not None:
+        # Клампим в реальную комнату: GLB или room-spec
+        if room_bb_min is not None and room_bb_max is not None:
             try:
-                aabb_eng = clamp_item_aabb_to_room_glb(aabb_eng, glb_bb_min, glb_bb_max, margin=0.05)
+                aabb_eng = clamp_item_aabb_to_room_glb(aabb_eng, room_bb_min, room_bb_max, margin=0.05)
             except Exception as e:
                 _log(verbose, f"[Clamp] failed for {name}: {e}")
 
@@ -2331,6 +2347,7 @@ def build_scene(
         if mesh_path and os.path.isfile(mesh_path):
             print(f"[DBG] placement name={name}")
             print(f"[DBG] mesh_path={mesh_path}")
+
             ext = os.path.splitext(mesh_path)[1].lower()
             if ext != ".obj":
                 print(f"⚠️ {name}: mesh_path не OBJ ({ext}). Сейчас поддерживается только .obj: {mesh_path}")
@@ -2396,10 +2413,11 @@ def build_scene(
         if (not placed_ok) and draw_aabb:
             _add_aabb_box(aabb_eng, name, coll_items)
 
+    _log(verbose, f"[Room] final room mode = {room_mode}")
+
     _frame_camera_on_bounds(bb_min, bb_max)
     _add_basic_lights(bb_min, bb_max)
     _force_material_preview_if_ui()
-
 
 # ============================================================
 # RUN
