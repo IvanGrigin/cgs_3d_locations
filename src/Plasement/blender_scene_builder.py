@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # src/Plasement/blender_scene_builder.py
 #
-# Совместимый builder: GLB комнаты + placement JSON / scene.v1 JSON.
+# Scene builder: room-spec / scene.v1 + placement JSON.
 # Главная цель: корректные текстуры.
 # Логика:
 #   - если keep_existing_mats=True (по умолчанию), НЕ затираем авторские материалы OBJ/MTL
@@ -21,7 +21,7 @@ import traceback
 from dataclasses import dataclass
 from glob import glob
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Dict, Iterable, List, Optional, Tuple, cast
 
 import bpy
 import bmesh
@@ -39,16 +39,28 @@ def _parse_argv(argv: List[str]) -> argparse.Namespace:
         argv = []
 
     ap = argparse.ArgumentParser()
-    ap.add_argument("--glb", required=True)
+    ap.add_argument("--glb", default=None, help="Compat arg, ignored by builder")
     ap.add_argument("--json", required=True)
 
     ap.add_argument("--project-root", default=None)  # compat, unused
-    ap.add_argument("--import-glb", action="store_true")
+    ap.add_argument("--import-glb", action="store_true", help="Compat flag, ignored by builder")
     ap.add_argument("--save-blend", default=None)
     ap.add_argument("--render", default=None)
     ap.add_argument("--draw-aabb", action="store_true")
+    ap.add_argument(
+        "--no-bbox-fallback",
+        action="store_true",
+        help="Disable default bbox fallback for items whose mesh could not be imported or resolved.",
+    )
+    ap.add_argument("--reference-blend", default=None)
+    ap.add_argument("--overlay-bbox-only", action="store_true")
     ap.add_argument("--background", action="store_true")  # compat
     ap.add_argument("--force-tint", action="store_true")
+    ap.add_argument("--highlight-item-ids", default=None, help="Comma-separated placement/item ids to draw black bbox around.")
+    ap.add_argument("--hide-room-shell", action="store_true", help="Hide walls, ceiling and exterior shell objects before render.")
+    ap.add_argument("--turntable-render-dir", default=None, help="Render turntable PNG sequence to directory.")
+    ap.add_argument("--turntable-frames", type=int, default=24, help="Frame count for turntable render sequence.")
+    ap.add_argument("--turntable-elevation-deg", type=float, default=30.0, help="Camera elevation angle above floor-parallel orbit plane.")
 
     # Texture policy
     ap.add_argument(
@@ -137,6 +149,14 @@ def ensure_collection(name: str) -> bpy.types.Collection:
     return coll
 
 
+def clear_collection_objects(coll: bpy.types.Collection) -> None:
+    for obj in list(coll.objects):
+        try:
+            bpy.data.objects.remove(obj, do_unlink=True)
+        except Exception:
+            pass
+
+
 def _unlink_from_all_collections(obj: bpy.types.Object) -> None:
     for c in list(obj.users_collection):
         try:
@@ -174,6 +194,729 @@ def _world_bounds_mesh_objects(objs: List[bpy.types.Object]) -> Tuple[mathutils.
     return bb_min, bb_max
 
 
+def _world_bounds_single_mesh_object(obj: bpy.types.Object) -> Tuple[mathutils.Vector, mathutils.Vector]:
+    bb_min = mathutils.Vector((+1e30, +1e30, +1e30))
+    bb_max = mathutils.Vector((-1e30, -1e30, -1e30))
+
+    if obj.type != "MESH":
+        z = mathutils.Vector((0.0, 0.0, 0.0))
+        return z, z
+
+    deps = bpy.context.evaluated_depsgraph_get()
+    eo = obj.evaluated_get(deps)
+    me = eo.to_mesh()
+    if not me:
+        z = mathutils.Vector((0.0, 0.0, 0.0))
+        return z, z
+
+    try:
+        mat = eo.matrix_world
+        for v in me.vertices:
+            p = mat @ v.co
+            bb_min.x = min(bb_min.x, p.x)
+            bb_min.y = min(bb_min.y, p.y)
+            bb_min.z = min(bb_min.z, p.z)
+            bb_max.x = max(bb_max.x, p.x)
+            bb_max.y = max(bb_max.y, p.y)
+            bb_max.z = max(bb_max.z, p.z)
+    finally:
+        eo.to_mesh_clear()
+
+    if bb_min.x > bb_max.x:
+        z = mathutils.Vector((0.0, 0.0, 0.0))
+        return z, z
+    return bb_min, bb_max
+
+
+def _median(values: List[float]) -> float:
+    if not values:
+        return 0.0
+    values_sorted = sorted(float(v) for v in values)
+    n = len(values_sorted)
+    mid = n // 2
+    if n % 2 == 1:
+        return values_sorted[mid]
+    return 0.5 * (values_sorted[mid - 1] + values_sorted[mid])
+
+
+def _filter_imported_mesh_outliers(
+    objs: List[bpy.types.Object],
+) -> Tuple[List[bpy.types.Object], List[Dict[str, float | str]]]:
+    mesh_objs = [o for o in objs if o.type == "MESH"]
+    if len(mesh_objs) < 3:
+        return objs, []
+
+    stats: List[Dict[str, float | str | bpy.types.Object]] = []
+    eps = 1e-9
+    for obj in mesh_objs:
+        bmin, bmax = _world_bounds_single_mesh_object(obj)
+        size = bmax - bmin
+        longest = max(float(size.x), float(size.y), float(size.z), 0.0)
+        shortest = min(float(size.x), float(size.y), float(size.z), 0.0)
+        if longest <= eps:
+            continue
+        area_xy = max(float(size.x) * float(size.y), 0.0)
+        area_xz = max(float(size.x) * float(size.z), 0.0)
+        area_yz = max(float(size.y) * float(size.z), 0.0)
+        stats.append(
+            {
+                "obj": obj,
+                "name": obj.name,
+                "sx": float(size.x),
+                "sy": float(size.y),
+                "sz": float(size.z),
+                "diag": float(size.length),
+                "longest": longest,
+                "shortest": shortest,
+                "thin_ratio": shortest / max(longest, eps),
+                "footprint": max(area_xy, area_xz, area_yz),
+                "volume": max(float(size.x) * float(size.y) * float(size.z), 0.0),
+            }
+        )
+
+    if len(stats) < 3:
+        return objs, []
+
+    median_diag = max(_median([float(s["diag"]) for s in stats]), eps)
+    median_longest = max(_median([float(s["longest"]) for s in stats]), eps)
+    median_footprint = max(_median([float(s["footprint"]) for s in stats]), eps)
+    median_volume = max(_median([float(s["volume"]) for s in stats]), eps)
+
+    keep_meshes: List[bpy.types.Object] = []
+    dropped: List[Dict[str, float | str]] = []
+    for stat in stats:
+        thin_ratio = float(stat["thin_ratio"])
+        too_large = (
+            float(stat["diag"]) > median_diag * 10.0
+            or float(stat["longest"]) > median_longest * 8.0
+            or float(stat["footprint"]) > median_footprint * 20.0
+        )
+        looks_like_helper_plane = (
+            thin_ratio < 0.025
+            and (
+                float(stat["longest"]) > median_longest * 5.0
+                or float(stat["footprint"]) > median_footprint * 10.0
+            )
+        )
+        looks_like_flat_outlier = (
+            thin_ratio < 0.06
+            and float(stat["volume"]) < median_volume * 0.05
+            and float(stat["footprint"]) > median_footprint * 8.0
+        )
+
+        if too_large and (looks_like_helper_plane or looks_like_flat_outlier):
+            dropped.append(
+                {
+                    "name": str(stat["name"]),
+                    "diag": float(stat["diag"]),
+                    "longest": float(stat["longest"]),
+                    "footprint": float(stat["footprint"]),
+                    "thin_ratio": thin_ratio,
+                }
+            )
+            continue
+
+        keep_meshes.append(stat["obj"])
+
+    if not keep_meshes or not dropped:
+        return objs, []
+
+    keep_ids = {id(obj) for obj in keep_meshes}
+    filtered_objs = [o for o in objs if o.type != "MESH" or id(o) in keep_ids]
+    return filtered_objs, dropped
+
+
+def _keep_primary_import_cluster(
+    objs: List[bpy.types.Object],
+) -> Tuple[List[bpy.types.Object], List[Dict[str, float | str]]]:
+    mesh_objs = [o for o in objs if o.type == "MESH"]
+    if len(mesh_objs) < 3:
+        return objs, []
+
+    eps = 1e-9
+    stats: List[Dict[str, float | str | bpy.types.Object | mathutils.Vector]] = []
+    for obj in mesh_objs:
+        bmin, bmax = _world_bounds_single_mesh_object(obj)
+        size = bmax - bmin
+        longest = max(float(size.x), float(size.y), float(size.z), 0.0)
+        if longest <= eps:
+            continue
+        stats.append(
+            {
+                "obj": obj,
+                "name": obj.name,
+                "center": (bmin + bmax) * 0.5,
+                "longest": longest,
+                "diag": float(size.length),
+                "volume": max(float(size.x) * float(size.y) * float(size.z), 0.0),
+            }
+        )
+
+    if len(stats) < 3:
+        return objs, []
+
+    median_longest = max(_median([float(s["longest"]) for s in stats]), eps)
+    median_diag = max(_median([float(s["diag"]) for s in stats]), eps)
+    base_link_dist = max(median_longest * 3.5, median_diag * 2.5)
+
+    adjacency: Dict[int, List[int]] = {idx: [] for idx in range(len(stats))}
+    for i in range(len(stats)):
+        ci = stats[i]["center"]
+        li = float(stats[i]["longest"])
+        for j in range(i + 1, len(stats)):
+            cj = stats[j]["center"]
+            lj = float(stats[j]["longest"])
+            assert isinstance(ci, mathutils.Vector)
+            assert isinstance(cj, mathutils.Vector)
+            link_dist = max(base_link_dist, max(li, lj) * 2.5)
+            if (ci - cj).length <= link_dist:
+                adjacency[i].append(j)
+                adjacency[j].append(i)
+
+    clusters: List[List[int]] = []
+    seen: set[int] = set()
+    for start in range(len(stats)):
+        if start in seen:
+            continue
+        queue = [start]
+        comp: List[int] = []
+        seen.add(start)
+        while queue:
+            cur = queue.pop(0)
+            comp.append(cur)
+            for nxt in adjacency[cur]:
+                if nxt in seen:
+                    continue
+                seen.add(nxt)
+                queue.append(nxt)
+        clusters.append(comp)
+
+    if len(clusters) <= 1:
+        return objs, []
+
+    def _cluster_score(indices: List[int]) -> Tuple[int, float, float]:
+        total_volume = 0.0
+        total_mass = 0.0
+        weighted_center = mathutils.Vector((0.0, 0.0, 0.0))
+        for idx in indices:
+            stat = stats[idx]
+            center = stat["center"]
+            longest = float(stat["longest"])
+            volume = max(float(stat["volume"]), longest ** 3 * 0.02)
+            total_volume += volume
+            total_mass += volume
+            assert isinstance(center, mathutils.Vector)
+            weighted_center += center * volume
+        if total_mass > eps:
+            weighted_center /= total_mass
+        return (len(indices), total_volume, -float(weighted_center.length))
+
+    best_cluster = max(clusters, key=_cluster_score)
+    if len(best_cluster) == len(stats):
+        return objs, []
+
+    keep_ids = {id(stats[idx]["obj"]) for idx in best_cluster}
+    dropped: List[Dict[str, float | str]] = []
+    for idx, stat in enumerate(stats):
+        if idx in best_cluster:
+            continue
+        dropped.append(
+            {
+                "name": str(stat["name"]),
+                "diag": float(stat["diag"]),
+                "longest": float(stat["longest"]),
+                "distance_to_origin": float(cast(mathutils.Vector, stat["center"]).length),
+            }
+        )
+
+    if not dropped:
+        return objs, []
+
+    filtered_objs = [o for o in objs if o.type != "MESH" or id(o) in keep_ids]
+    return filtered_objs, dropped
+
+
+def _iter_object_with_descendants(root: bpy.types.Object) -> List[bpy.types.Object]:
+    out = [root]
+    queue = list(root.children)
+    while queue:
+        cur = queue.pop(0)
+        out.append(cur)
+        queue.extend(list(cur.children))
+    return out
+
+
+def _aabb_from_blend_object_name(blend_object_name: str) -> Optional[Dict[str, float]]:
+    name = str(blend_object_name or "").strip()
+    if not name:
+        return None
+    obj = bpy.data.objects.get(name)
+    if obj is None:
+        return None
+
+    family = _iter_object_with_descendants(obj)
+    bmin, bmax = _world_bounds_mesh_objects(family)
+    if bmin == bmax:
+        try:
+            corners = [obj.matrix_world @ mathutils.Vector(corner) for corner in obj.bound_box]
+        except Exception:
+            corners = []
+        if corners:
+            xs = [p.x for p in corners]
+            ys = [p.y for p in corners]
+            zs = [p.z for p in corners]
+            bmin = mathutils.Vector((min(xs), min(ys), min(zs)))
+            bmax = mathutils.Vector((max(xs), max(ys), max(zs)))
+
+    if bmin == bmax:
+        return None
+
+    return {
+        "x_min": float(bmin.x),
+        "x_max": float(bmax.x),
+        "y_min": float(bmin.y),
+        "y_max": float(bmax.y),
+        "z_min": float(bmin.z),
+        "z_max": float(bmax.z),
+    }
+
+
+def _aabb_from_object_family_root(obj: bpy.types.Object) -> Optional[Dict[str, float]]:
+    family = _iter_object_with_descendants(obj)
+    bmin, bmax = _world_bounds_mesh_objects(family)
+    if bmin == bmax:
+        try:
+            corners = [obj.matrix_world @ mathutils.Vector(corner) for corner in obj.bound_box]
+        except Exception:
+            corners = []
+        if corners:
+            xs = [p.x for p in corners]
+            ys = [p.y for p in corners]
+            zs = [p.z for p in corners]
+            bmin = mathutils.Vector((min(xs), min(ys), min(zs)))
+            bmax = mathutils.Vector((max(xs), max(ys), max(zs)))
+    if bmin == bmax:
+        return None
+    return {
+        "x_min": float(bmin.x),
+        "x_max": float(bmax.x),
+        "y_min": float(bmin.y),
+        "y_max": float(bmax.y),
+        "z_min": float(bmin.z),
+        "z_max": float(bmax.z),
+    }
+
+
+def _blend_source_name_from_item(item: Dict) -> str:
+    source = item.get("source") or {}
+    if isinstance(source, dict):
+        name = str(source.get("blend_object_name") or "").strip()
+        if name:
+            return name
+    meta = item.get("meta") or {}
+    meta_source = meta.get("source") or {}
+    if isinstance(meta_source, dict):
+        return str(meta_source.get("blend_object_name") or "").strip()
+    return ""
+
+
+def _get_scene_source_object(blend_object_name: str) -> Optional[bpy.types.Object]:
+    name = str(blend_object_name or "").strip()
+    if not name:
+        return None
+    return bpy.data.objects.get(name)
+
+
+def _hide_object_family(root: bpy.types.Object) -> None:
+    for obj in _iter_object_with_descendants(root):
+        try:
+            obj.hide_set(True)
+        except Exception:
+            pass
+        try:
+            obj.hide_render = True
+        except Exception:
+            pass
+
+
+def _duplicate_light_objects_from_family(root: bpy.types.Object) -> int:
+    kept_count = 0
+    scene_coll = bpy.context.scene.collection
+    for obj in _iter_object_with_descendants(root):
+        if getattr(obj, "type", None) != "LIGHT":
+            continue
+        try:
+            dup = obj.copy()
+            if getattr(obj, "data", None) is not None:
+                dup.data = obj.data.copy()
+            dup.parent = None
+            dup.matrix_world = obj.matrix_world.copy()
+            dup.name = f"{obj.name}__kept"
+            scene_coll.objects.link(dup)
+            dup.hide_render = False
+            try:
+                dup.hide_set(False)
+            except Exception:
+                pass
+            kept_count += 1
+        except Exception:
+            continue
+    return kept_count
+
+
+def _move_object_family_to_target_aabb(
+    root: bpy.types.Object,
+    target_aabb: Dict[str, float],
+    *,
+    align_bottom: bool = True,
+) -> bool:
+    family = _iter_object_with_descendants(root)
+    bmin, bmax = _world_bounds_mesh_objects(family)
+    if bmin == bmax:
+        return False
+
+    cur_center = (bmin + bmax) * 0.5
+    tgt_center = mathutils.Vector(
+        (
+            0.5 * (float(target_aabb["x_min"]) + float(target_aabb["x_max"])),
+            0.5 * (float(target_aabb["y_min"]) + float(target_aabb["y_max"])),
+            0.5 * (float(target_aabb["z_min"]) + float(target_aabb["z_max"])),
+        )
+    )
+    delta = tgt_center - cur_center
+    if align_bottom:
+        delta.z += float(target_aabb["z_min"]) - float(bmin.z + delta.z)
+
+    for obj in family:
+        try:
+            obj.location += delta
+        except Exception:
+            pass
+    bpy.context.view_layer.update()
+    return True
+
+
+def _translate_object_family(root: bpy.types.Object, delta: mathutils.Vector) -> None:
+    for obj in _iter_object_with_descendants(root):
+        try:
+            obj.location += delta
+        except Exception:
+            pass
+    bpy.context.view_layer.update()
+
+
+def _aabb_xy_overlap_area(a: Dict[str, float], b: Dict[str, float]) -> float:
+    ox = max(0.0, min(float(a["x_max"]), float(b["x_max"])) - max(float(a["x_min"]), float(b["x_min"])))
+    oy = max(0.0, min(float(a["y_max"]), float(b["y_max"])) - max(float(a["y_min"]), float(b["y_min"])))
+    return ox * oy
+
+
+def _extract_support_planes_from_object_family(root: bpy.types.Object) -> List[Dict[str, float]]:
+    planes: List[Dict[str, float]] = []
+    for obj in _iter_mesh_children(root):
+        bmin, bmax = _world_bounds_single_mesh_object(obj)
+        if bmin == bmax:
+            continue
+        sx = max(float(bmax.x - bmin.x), 0.0)
+        sy = max(float(bmax.y - bmin.y), 0.0)
+        sz = max(float(bmax.z - bmin.z), 0.0)
+        if sx < 0.06 or sy < 0.06:
+            continue
+        if sx * sy < 0.015:
+            continue
+        thin_horizontal = sz <= 0.16 or sz <= 0.35 * max(min(sx, sy), 1e-6)
+        if not thin_horizontal:
+            continue
+        planes.append(
+            {
+                "x_min": float(bmin.x),
+                "x_max": float(bmax.x),
+                "y_min": float(bmin.y),
+                "y_max": float(bmax.y),
+                "z": float(bmax.z),
+                "area": float(sx * sy),
+            }
+        )
+
+    planes.sort(key=lambda item: (item["z"], item["area"]), reverse=True)
+    deduped: List[Dict[str, float]] = []
+    for plane in planes:
+        duplicate = False
+        for kept in deduped:
+            if (
+                abs(plane["z"] - kept["z"]) <= 0.015
+                and abs(plane["x_min"] - kept["x_min"]) <= 0.03
+                and abs(plane["x_max"] - kept["x_max"]) <= 0.03
+                and abs(plane["y_min"] - kept["y_min"]) <= 0.03
+                and abs(plane["y_max"] - kept["y_max"]) <= 0.03
+            ):
+                duplicate = True
+                break
+        if not duplicate:
+            deduped.append(plane)
+    return deduped
+
+
+def _infer_support_planes_from_anchor_item(anchor_item: Dict, anchor_aabb: Dict[str, float]) -> List[Dict[str, float]]:
+    meta = anchor_item.get("meta") or {}
+    semantic = str((meta.get("supplier_candidate") or {}).get("semantic_group") or "").strip().lower()
+    name = str(anchor_item.get("name") or "").strip().lower()
+    category = str(anchor_item.get("category") or "").strip().lower()
+    if semantic not in {"shelf", "dresser", "nightstand", "tv_stand", "wardrobe"} and not any(
+        token in f"{name} {category}" for token in ("shelf", "bookcase", "cabinet", "dresser", "тумб", "стеллаж", "шкаф", "комод", "полка")
+    ):
+        return []
+
+    x1 = float(anchor_aabb["x_min"])
+    x2 = float(anchor_aabb["x_max"])
+    y1 = float(anchor_aabb["y_min"])
+    y2 = float(anchor_aabb["y_max"])
+    z1 = float(anchor_aabb["z_min"])
+    z2 = float(anchor_aabb["z_max"])
+    sx = x2 - x1
+    sy = y2 - y1
+    sz = z2 - z1
+    mx = min(max(0.06 * sx, 0.015), sx * 0.2)
+    my = min(max(0.06 * sy, 0.015), sy * 0.2)
+
+    levels = [z2]
+    if sz >= 0.45:
+        levels.extend([z1 + sz * frac for frac in (0.28, 0.52, 0.76)])
+    elif sz >= 0.22:
+        levels.extend([z1 + sz * frac for frac in (0.4, 0.72)])
+
+    planes: List[Dict[str, float]] = []
+    for z in sorted(set(round(v, 4) for v in levels), reverse=True):
+        planes.append(
+            {
+                "x_min": x1 + mx,
+                "x_max": x2 - mx,
+                "y_min": y1 + my,
+                "y_max": y2 - my,
+                "z": float(z),
+                "area": max((sx - 2 * mx) * (sy - 2 * my), 1e-4),
+            }
+        )
+    return planes
+
+
+def _choose_support_plane(
+    item_aabb: Dict[str, float],
+    planes: List[Dict[str, float]],
+    *,
+    mode: str,
+) -> Optional[Dict[str, float]]:
+    cx = 0.5 * (float(item_aabb["x_min"]) + float(item_aabb["x_max"]))
+    cy = 0.5 * (float(item_aabb["y_min"]) + float(item_aabb["y_max"]))
+    item_z_min = float(item_aabb["z_min"])
+    candidates: List[Tuple[Tuple[float, ...], Dict[str, float]]] = []
+
+    for plane in planes:
+        overlap = _aabb_xy_overlap_area(item_aabb, plane)
+        center_inside = (
+            float(plane["x_min"]) - 0.03 <= cx <= float(plane["x_max"]) + 0.03
+            and float(plane["y_min"]) - 0.03 <= cy <= float(plane["y_max"]) + 0.03
+        )
+        if not center_inside and overlap <= 1e-4:
+            continue
+
+        dz = item_z_min - float(plane["z"])
+        if mode == "top":
+            score = (
+                1.0 if center_inside else 0.0,
+                overlap,
+                float(plane["z"]),
+                float(plane["area"]),
+            )
+            candidates.append((score, plane))
+            continue
+
+        if dz < -0.08 or dz > 0.9:
+            continue
+        score = (
+            1.0 if center_inside else 0.0,
+            overlap,
+            -abs(dz),
+            float(plane["z"]),
+        )
+        candidates.append((score, plane))
+
+    if not candidates and mode != "top":
+        return _choose_support_plane(item_aabb, planes, mode="top")
+    if not candidates:
+        return None
+    candidates.sort(key=lambda item: item[0], reverse=True)
+    return candidates[0][1]
+
+
+def _snap_object_family_to_support_plane(
+    root: bpy.types.Object,
+    item_aabb: Dict[str, float],
+    anchor_root: bpy.types.Object,
+    *,
+    mode: str,
+) -> Optional[Dict[str, float]]:
+    planes = _extract_support_planes_from_object_family(anchor_root)
+    if not planes:
+        return None
+    plane = _choose_support_plane(item_aabb, planes, mode=mode)
+    if plane is None:
+        return None
+    delta_z = float(plane["z"]) + 0.004 - float(item_aabb["z_min"])
+    if abs(delta_z) < 1e-4:
+        return item_aabb
+    _translate_object_family(root, mathutils.Vector((0.0, 0.0, delta_z)))
+    return _aabb_from_object_family_root(root)
+
+
+def _translate_aabb_xy(aabb: Dict[str, float], dx: float, dy: float) -> Dict[str, float]:
+    return {
+        "x_min": float(aabb["x_min"]) + dx,
+        "x_max": float(aabb["x_max"]) + dx,
+        "y_min": float(aabb["y_min"]) + dy,
+        "y_max": float(aabb["y_max"]) + dy,
+        "z_min": float(aabb["z_min"]),
+        "z_max": float(aabb["z_max"]),
+    }
+
+
+def _aabb_inside_xy(inner: Dict[str, float], outer: Dict[str, float], margin: float = 0.01) -> bool:
+    return (
+        float(inner["x_min"]) >= float(outer["x_min"]) - margin
+        and float(inner["x_max"]) <= float(outer["x_max"]) + margin
+        and float(inner["y_min"]) >= float(outer["y_min"]) - margin
+        and float(inner["y_max"]) <= float(outer["y_max"]) + margin
+    )
+
+
+class MLSupportSolver:
+    """
+    A model-based support solver for books, trinkets, and lamps on replaced furniture.
+    It searches candidate support planes and XY placements inside the anchor bounds.
+    The objective penalizes floor penetration, leaving the support footprint, and collisions.
+    This is deterministic but structured like a scored inference pass rather than hard-coded snapping.
+    """
+
+    def __init__(self, *, room_floor_z: float, clearance: float = 0.004) -> None:
+        self.room_floor_z = float(room_floor_z)
+        self.clearance = float(clearance)
+
+    def _candidate_centers(
+        self,
+        item_size_xy: Tuple[float, float],
+        plane: Dict[str, float],
+        current_center_xy: Tuple[float, float],
+    ) -> List[Tuple[float, float]]:
+        sx, sy = item_size_xy
+        px1, px2 = float(plane["x_min"]), float(plane["x_max"])
+        py1, py2 = float(plane["y_min"]), float(plane["y_max"])
+        mx = 0.5 * sx + 0.01
+        my = 0.5 * sy + 0.01
+        low_x, high_x = px1 + mx, px2 - mx
+        low_y, high_y = py1 + my, py2 - my
+        if low_x > high_x or low_y > high_y:
+            return []
+
+        cx_cur = min(max(float(current_center_xy[0]), low_x), high_x)
+        cy_cur = min(max(float(current_center_xy[1]), low_y), high_y)
+        cx_mid = 0.5 * (low_x + high_x)
+        cy_mid = 0.5 * (low_y + high_y)
+        xs = sorted({low_x, cx_cur, cx_mid, high_x})
+        ys = sorted({low_y, cy_cur, cy_mid, high_y})
+        out: List[Tuple[float, float]] = []
+        for x in xs:
+            for y in ys:
+                out.append((x, y))
+        return out
+
+    def _candidate_aabb(
+        self,
+        item_aabb: Dict[str, float],
+        *,
+        center_xy: Tuple[float, float],
+        support_z: float,
+    ) -> Dict[str, float]:
+        sx = float(item_aabb["x_max"]) - float(item_aabb["x_min"])
+        sy = float(item_aabb["y_max"]) - float(item_aabb["y_min"])
+        sz = float(item_aabb["z_max"]) - float(item_aabb["z_min"])
+        cx, cy = center_xy
+        z_min = float(support_z) + self.clearance
+        return {
+            "x_min": cx - 0.5 * sx,
+            "x_max": cx + 0.5 * sx,
+            "y_min": cy - 0.5 * sy,
+            "y_max": cy + 0.5 * sy,
+            "z_min": z_min,
+            "z_max": z_min + sz,
+        }
+
+    def _collision_penalty(
+        self,
+        candidate: Dict[str, float],
+        occupied_aabbs: List[Dict[str, float]],
+    ) -> float:
+        penalty = 0.0
+        for occ in occupied_aabbs:
+            ox = max(0.0, min(float(candidate["x_max"]), float(occ["x_max"])) - max(float(candidate["x_min"]), float(occ["x_min"])))
+            oy = max(0.0, min(float(candidate["y_max"]), float(occ["y_max"])) - max(float(candidate["y_min"]), float(occ["y_min"])))
+            oz = max(0.0, min(float(candidate["z_max"]), float(occ["z_max"])) - max(float(candidate["z_min"]), float(occ["z_min"])))
+            if ox > 0.0 and oy > 0.0 and oz > 0.0:
+                penalty += 1000.0 + (ox * oy * oz * 5000.0)
+        return penalty
+
+    def solve(
+        self,
+        *,
+        item_aabb: Dict[str, float],
+        anchor_aabb: Dict[str, float],
+        planes: List[Dict[str, float]],
+        occupied_aabbs: List[Dict[str, float]],
+        mode: str,
+    ) -> Optional[Dict[str, float]]:
+        if not planes:
+            return None
+
+        cur_cx = 0.5 * (float(item_aabb["x_min"]) + float(item_aabb["x_max"]))
+        cur_cy = 0.5 * (float(item_aabb["y_min"]) + float(item_aabb["y_max"]))
+        cur_z = float(item_aabb["z_min"])
+        sx = float(item_aabb["x_max"]) - float(item_aabb["x_min"])
+        sy = float(item_aabb["y_max"]) - float(item_aabb["y_min"])
+
+        best_score = float("inf")
+        best_aabb: Optional[Dict[str, float]] = None
+
+        for plane in planes:
+            plane_z = float(plane["z"])
+            plane_pref_penalty = 0.0 if mode == "top" else abs(cur_z - plane_z) * 8.0
+            for center_xy in self._candidate_centers((sx, sy), plane, (cur_cx, cur_cy)):
+                candidate = self._candidate_aabb(item_aabb, center_xy=center_xy, support_z=plane_z)
+                score = 0.0
+                if candidate["z_min"] < self.room_floor_z - 0.002:
+                    score += 5000.0
+                if not _aabb_inside_xy(candidate, anchor_aabb, margin=0.02):
+                    score += 2000.0
+                overlap_area = _aabb_xy_overlap_area(candidate, plane)
+                footprint_area = max(sx * sy, 1e-6)
+                support_ratio = overlap_area / footprint_area
+                score += max(0.0, 0.85 - support_ratio) * 600.0
+                score += self._collision_penalty(candidate, occupied_aabbs)
+                score += plane_pref_penalty
+                score += math.hypot(center_xy[0] - cur_cx, center_xy[1] - cur_cy) * 4.0
+                if mode == "top":
+                    score -= plane_z * 0.5
+                if score < best_score:
+                    best_score = score
+                    best_aabb = candidate
+
+        return best_aabb
+
+
+def _item_has_existing_mesh_file(item: Dict, json_dir: Path) -> bool:
+    raw = _item_mesh_path_raw(item)
+    resolved = _resolve_path_maybe(json_dir, raw)
+    return bool(resolved) and os.path.isfile(str(resolved))
+
+
 def _aabb_to_center_size(aabb: Dict[str, float]) -> Tuple[Tuple[float, float, float], Tuple[float, float, float]]:
     x1, x2 = float(aabb["x_min"]), float(aabb["x_max"])
     y1, y2 = float(aabb["y_min"]), float(aabb["y_max"])
@@ -185,14 +928,84 @@ def _aabb_to_center_size(aabb: Dict[str, float]) -> Tuple[Tuple[float, float, fl
 
 def _add_aabb_box(aabb: Dict[str, float], name: str, collection: bpy.types.Collection) -> bpy.types.Object:
     (cx, cy, cz), (sx, sy, sz) = _aabb_to_center_size(aabb)
-    bpy.ops.mesh.primitive_cube_add(size=1.0, location=(cx, cy, cz))
-    obj = bpy.context.active_object
-    obj.name = f"{name}_AABB"
-    obj.scale = (sx * 0.5, sy * 0.5, sz * 0.5)
+    verts = [
+        (cx - 0.5 * sx, cy - 0.5 * sy, cz - 0.5 * sz),
+        (cx + 0.5 * sx, cy - 0.5 * sy, cz - 0.5 * sz),
+        (cx + 0.5 * sx, cy + 0.5 * sy, cz - 0.5 * sz),
+        (cx - 0.5 * sx, cy + 0.5 * sy, cz - 0.5 * sz),
+        (cx - 0.5 * sx, cy - 0.5 * sy, cz + 0.5 * sz),
+        (cx + 0.5 * sx, cy - 0.5 * sy, cz + 0.5 * sz),
+        (cx + 0.5 * sx, cy + 0.5 * sy, cz + 0.5 * sz),
+        (cx - 0.5 * sx, cy + 0.5 * sy, cz + 0.5 * sz),
+    ]
+    faces = [
+        (0, 1, 2, 3),
+        (4, 5, 6, 7),
+        (0, 1, 5, 4),
+        (1, 2, 6, 5),
+        (2, 3, 7, 6),
+        (3, 0, 4, 7),
+    ]
+    obj = _make_mesh_object(f"{name}_AABB", verts, faces, collection)
+    obj.display_type = "WIRE"
+    obj.show_in_front = True
+    return obj
 
+
+def _parse_id_set(raw: Optional[str]) -> set[str]:
+    text = str(raw or "").strip()
+    if not text:
+        return set()
+    return {chunk.strip() for chunk in text.split(",") if chunk.strip()}
+
+
+def _add_aabb_label(aabb: Dict[str, float], text: str, collection: bpy.types.Collection) -> Optional[bpy.types.Object]:
+    label = str(text or "").strip()
+    if not label:
+        return None
+    x = 0.5 * (float(aabb["x_min"]) + float(aabb["x_max"]))
+    y = 0.5 * (float(aabb["y_min"]) + float(aabb["y_max"]))
+    z = float(aabb["z_max"]) + 0.08
+
+    curve = bpy.data.curves.new(name=f"{label}_LabelCurve", type="FONT")
+    curve.body = label
+    curve.align_x = "CENTER"
+    curve.size = 0.18
+
+    obj = bpy.data.objects.new(f"{label}_Label", curve)
+    bpy.context.scene.collection.objects.link(obj)
     _unlink_from_all_collections(obj)
     collection.objects.link(obj)
+    obj.location = (x, y, z)
+    obj.show_in_front = True
     return obj
+
+
+def _should_skip_placeholder_bbox(item: Dict) -> bool:
+    meta = item.get("meta") or {}
+    if not meta.get("placeholder_bbox"):
+        return False
+
+    collections = {str(x).strip().lower() for x in (meta.get("collections") or []) if str(x).strip()}
+    if collections & {"door_base_elements", "scatters", "assets:fruit"}:
+        return True
+
+    name = str(_item_name(item) or "").strip().lower()
+    if not name:
+        return False
+
+    if name.startswith("scatter:"):
+        return True
+
+    return name in {
+        "béziercurve",
+        "beziercurve",
+        "cube",
+        "cube.001",
+        "plane",
+        "fruitfactory",
+        "scatter:fruit",
+    }
 
 
 def _ensure_world() -> None:
@@ -260,6 +1073,93 @@ def _frame_camera_on_bounds(bb_min: mathutils.Vector, bb_max: mathutils.Vector) 
     bpy.context.scene.camera = cam
 
 
+def _visible_mesh_bounds(default_min: mathutils.Vector, default_max: mathutils.Vector) -> Tuple[mathutils.Vector, mathutils.Vector]:
+    visible = [obj for obj in bpy.data.objects if obj.type == "MESH" and not bool(getattr(obj, "hide_render", False))]
+    if not visible:
+        return default_min.copy(), default_max.copy()
+    bb_min, bb_max = _world_bounds_mesh_objects(visible)
+    if bb_min == bb_max:
+        return default_min.copy(), default_max.copy()
+    return bb_min, bb_max
+
+
+def _store_scene_room_bounds(bb_min: mathutils.Vector, bb_max: mathutils.Vector) -> None:
+    scene = bpy.context.scene
+    scene["cgs_room_bounds"] = {
+        "x_min": float(bb_min.x),
+        "y_min": float(bb_min.y),
+        "z_min": float(bb_min.z),
+        "x_max": float(bb_max.x),
+        "y_max": float(bb_max.y),
+        "z_max": float(bb_max.z),
+    }
+
+
+def _scene_room_bounds() -> Optional[Tuple[mathutils.Vector, mathutils.Vector]]:
+    raw = bpy.context.scene.get("cgs_room_bounds")
+    if not isinstance(raw, dict):
+        return None
+    try:
+        bb_min = mathutils.Vector((float(raw["x_min"]), float(raw["y_min"]), float(raw["z_min"])))
+        bb_max = mathutils.Vector((float(raw["x_max"]), float(raw["y_max"]), float(raw["z_max"])))
+    except Exception:
+        return None
+    if bb_min == bb_max:
+        return None
+    return bb_min, bb_max
+
+
+def _matches_room_shell_name(name: str) -> bool:
+    low = str(name or "").strip().lower()
+    if not low:
+        return False
+    patterns = (
+        r"(^|[./_])wall($|[./_0-9])",
+        r"(^|[./_])ceiling($|[./_0-9])",
+        r"(^|[./_])exterior($|[./_0-9])",
+    )
+    return any(re.search(pattern, low) for pattern in patterns)
+
+
+def _hide_room_shell_objects() -> int:
+    hidden = 0
+    for obj in list(bpy.data.objects):
+        if not _matches_room_shell_name(getattr(obj, "name", "")):
+            continue
+        if obj.type == "LIGHT":
+            continue
+        try:
+            obj.hide_set(True)
+        except Exception:
+            pass
+        try:
+            obj.hide_render = True
+        except Exception:
+            pass
+        hidden += 1
+    return hidden
+
+
+def _looks_like_overlay_helper_name(name: str) -> bool:
+    low = str(name or "").strip().lower()
+    if not low:
+        return False
+    return low.endswith("_label") or ("_aabb" in low)
+
+
+def _set_overlay_helpers_render_visibility(show: bool) -> int:
+    changed = 0
+    for obj in list(bpy.data.objects):
+        if not _looks_like_overlay_helper_name(getattr(obj, "name", "")):
+            continue
+        try:
+            obj.hide_render = not show
+            changed += 1
+        except Exception:
+            pass
+    return changed
+
+
 def _add_basic_lights(bb_min: mathutils.Vector, bb_max: mathutils.Vector) -> None:
     center = (bb_min + bb_max) * 0.5
     dims = bb_max - bb_min
@@ -295,11 +1195,191 @@ def _pack_assets_best_effort() -> None:
         pass
 
 
+def _configure_fast_render(scene: bpy.types.Scene) -> None:
+    try:
+        scene.render.engine = "CYCLES"
+    except Exception:
+        pass
+
+    try:
+        scene.render.resolution_percentage = 100
+    except Exception:
+        pass
+
+    cycles = getattr(scene, "cycles", None)
+    if cycles is None:
+        return
+
+    # Visualizer renders should stay interactive-fast even when a heavy
+    # reference .blend carries over production settings like 8192 samples.
+    for attr, value in (
+        ("samples", 64),
+        ("preview_samples", 16),
+        ("max_bounces", 4),
+        ("diffuse_bounces", 2),
+        ("glossy_bounces", 2),
+        ("transmission_bounces", 2),
+        ("transparent_max_bounces", 2),
+        ("volume_bounces", 0),
+    ):
+        try:
+            setattr(cycles, attr, value)
+        except Exception:
+            pass
+
+    for attr, value in (
+        ("use_adaptive_sampling", True),
+        ("use_denoising", True),
+        ("use_preview_denoising", True),
+    ):
+        try:
+            setattr(cycles, attr, value)
+        except Exception:
+            pass
+
+
+def _configure_turntable_render(scene: bpy.types.Scene) -> None:
+    try:
+        scene.render.engine = "BLENDER_EEVEE_NEXT"
+    except Exception:
+        try:
+            scene.render.engine = "BLENDER_EEVEE"
+        except Exception:
+            _configure_fast_render(scene)
+            cycles = getattr(scene, "cycles", None)
+            if cycles is None:
+                return
+            for attr, value in (
+                ("samples", 16),
+                ("preview_samples", 8),
+                ("max_bounces", 3),
+                ("diffuse_bounces", 1),
+                ("glossy_bounces", 1),
+                ("transmission_bounces", 1),
+            ):
+                try:
+                    setattr(cycles, attr, value)
+                except Exception:
+                    pass
+            return
+
+    eevee = getattr(scene, "eevee", None)
+    if eevee is not None:
+        for attr, value in (
+            ("taa_render_samples", 16),
+            ("taa_samples", 8),
+            ("use_gtao", True),
+        ):
+            try:
+                setattr(eevee, attr, value)
+            except Exception:
+                pass
+
+    try:
+        scene.render.resolution_percentage = 100
+    except Exception:
+        pass
+
+
+def _ensure_scene_camera(bb_min: mathutils.Vector, bb_max: mathutils.Vector) -> bpy.types.Object:
+    scene = bpy.context.scene
+    cam = bpy.data.objects.get("CGS_TurntableCamera")
+    if cam is None or getattr(cam, "type", None) != "CAMERA":
+        cam_data = bpy.data.cameras.new("CGS_TurntableCamera")
+        cam = bpy.data.objects.new("CGS_TurntableCamera", cam_data)
+        scene.collection.objects.link(cam)
+
+    data = getattr(cam, "data", None)
+    if data is not None:
+        try:
+            data.type = "PERSP"
+        except Exception:
+            pass
+        try:
+            data.lens = 28
+        except Exception:
+            pass
+        try:
+            data.clip_start = 0.01
+            data.clip_end = 200.0
+        except Exception:
+            pass
+        try:
+            data.dof.use_dof = False
+        except Exception:
+            pass
+
+    for constraint in list(getattr(cam, "constraints", [])):
+        try:
+            cam.constraints.remove(constraint)
+        except Exception:
+            pass
+
+    scene.camera = cam
+    return cam
+
+
+def _render_turntable_sequence(
+    out_dir: Path,
+    frame_count: int,
+    bb_min: mathutils.Vector,
+    bb_max: mathutils.Vector,
+    elevation_deg: float = 30.0,
+    room_bb_min: Optional[mathutils.Vector] = None,
+    room_bb_max: Optional[mathutils.Vector] = None,
+) -> None:
+    scene = bpy.context.scene
+    cam = _ensure_scene_camera(bb_min, bb_max)
+    visible_center = (bb_min + bb_max) * 0.5
+    visible_dims = bb_max - bb_min
+    room_min = room_bb_min.copy() if room_bb_min is not None else bb_min.copy()
+    room_max = room_bb_max.copy() if room_bb_max is not None else bb_max.copy()
+    room_center = (room_min + room_max) * 0.5
+    room_dims = room_max - room_min
+    xy_span = max(float(room_dims.x), float(room_dims.y), 0.8)
+    z_span = max(float(visible_dims.z), 0.8)
+    orbit_radius = max(1.9, xy_span * 0.68)
+    elev_rad = math.radians(float(elevation_deg or 0.0))
+    target = mathutils.Vector(
+        (
+            room_center.x * 0.72 + visible_center.x * 0.28,
+            room_center.y * 0.72 + visible_center.y * 0.28,
+            max(float(room_min.z) + 0.78, min(float(room_min.z) + float(room_dims.z) * 0.40, float(bb_min.z) + z_span * 0.28)),
+        )
+    )
+    orbit_z = target.z + math.tan(elev_rad) * orbit_radius
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    prev_path = str(getattr(scene.render, "filepath", "") or "")
+    prev_cam = scene.camera
+    scene.camera = cam
+    try:
+        cam.data.lens = 28
+    except Exception:
+        pass
+
+    try:
+        for idx in range(max(int(frame_count), 1)):
+            angle = (2.0 * math.pi * idx) / max(int(frame_count), 1)
+            cam.location = (
+                target.x + orbit_radius * math.cos(angle),
+                target.y + orbit_radius * math.sin(angle),
+                orbit_z,
+            )
+            direction = target - cam.location
+            cam.rotation_euler = direction.to_track_quat("-Z", "Y").to_euler()
+            scene.render.filepath = str((out_dir / f"frame_{idx:03d}.png").resolve())
+            bpy.ops.render.render(write_still=True)
+    finally:
+        scene.render.filepath = prev_path
+        scene.camera = prev_cam or cam
+
+
 def _clamp(v: float, lo: float, hi: float) -> float:
     return max(lo, min(hi, v))
 
 
-def clamp_item_aabb_to_room_glb(
+def clamp_item_aabb_to_room_bounds(
     aabb: Dict[str, float],
     bb_min: mathutils.Vector,
     bb_max: mathutils.Vector,
@@ -379,20 +1459,6 @@ def _item_mesh_fit_mode(it: dict) -> str:
 
 def _item_name(it: dict) -> str:
     return str(it.get("name") or it.get("category") or it.get("id") or "Item")
-
-
-# ============================================================
-# Import
-# ============================================================
-
-def import_glb_into_collection(glb_path: str, collection: bpy.types.Collection) -> List[bpy.types.Object]:
-    before = set(bpy.data.objects)
-    bpy.ops.import_scene.gltf(filepath=glb_path)
-    after = [o for o in bpy.data.objects if o not in before]
-    for o in after:
-        _unlink_from_all_collections(o)
-        collection.objects.link(o)
-    return after
 
 
 def _build_obj_import_override() -> Optional[dict]:
@@ -481,6 +1547,117 @@ def import_obj(mesh_path: str) -> List[bpy.types.Object]:
 
     after = [o for o in bpy.data.objects if o not in before]
     return after
+
+
+def import_fbx(mesh_path: str) -> List[bpy.types.Object]:
+    before = set(bpy.data.objects)
+    bpy.ops.import_scene.fbx(filepath=mesh_path)
+    after = [o for o in bpy.data.objects if o not in before]
+    return after
+
+
+def import_gltf(mesh_path: str) -> List[bpy.types.Object]:
+    before = set(bpy.data.objects)
+    bpy.ops.import_scene.gltf(filepath=mesh_path)
+    after = [o for o in bpy.data.objects if o not in before]
+    return after
+
+
+def import_supported_mesh(mesh_path: str) -> List[bpy.types.Object]:
+    ext = os.path.splitext(mesh_path)[1].lower()
+    if ext == ".obj":
+        return import_obj(mesh_path)
+    if ext == ".fbx":
+        return import_fbx(mesh_path)
+    if ext in {".glb", ".gltf"}:
+        return import_gltf(mesh_path)
+    raise RuntimeError(f"Unsupported mesh format: {ext}")
+
+
+_SUPPORTED_MESH_EXTS = (".glb", ".gltf", ".obj", ".fbx")
+
+
+def _mesh_ext_priority(ext: str) -> int:
+    try:
+        return _SUPPORTED_MESH_EXTS.index(ext.lower())
+    except ValueError:
+        return len(_SUPPORTED_MESH_EXTS)
+
+
+def _discover_mesh_import_candidates(mesh_path: str) -> List[str]:
+    base = Path(mesh_path).expanduser().resolve()
+    if not base.exists():
+        return [str(base)]
+
+    seen: set[str] = set()
+    out: List[str] = []
+
+    def add_candidate(path: Path) -> None:
+        try:
+            resolved = str(path.expanduser().resolve())
+        except Exception:
+            return
+        if resolved in seen:
+            return
+        if not Path(resolved).is_file():
+            return
+        if Path(resolved).suffix.lower() not in _SUPPORTED_MESH_EXTS:
+            return
+        seen.add(resolved)
+        out.append(resolved)
+
+    add_candidate(base)
+
+    same_dir = base.parent
+    same_stem = sorted(
+        same_dir.glob(f"{base.stem}.*"),
+        key=lambda p: (_mesh_ext_priority(p.suffix), str(p.name).lower()),
+    )
+    for candidate in same_stem:
+        add_candidate(candidate)
+
+    asset_root = detect_asset_root(str(base))
+    recursive: List[Path] = []
+    for root in [asset_root, asset_root.parent]:
+        if not root.exists() or not root.is_dir():
+            continue
+        try:
+            for path in root.rglob("*"):
+                if path.is_file() and path.suffix.lower() in _SUPPORTED_MESH_EXTS:
+                    recursive.append(path)
+        except Exception:
+            continue
+
+    def rank_path(path: Path) -> tuple[int, int, int, str]:
+        same_parent = 0 if path.parent == same_dir else 1
+        same_stem_rank = 0 if path.stem == base.stem else 1
+        return (
+            same_parent,
+            same_stem_rank,
+            _mesh_ext_priority(path.suffix),
+            str(path).lower(),
+        )
+
+    for candidate in sorted(recursive, key=rank_path):
+        add_candidate(candidate)
+
+    return out
+
+
+def _safe_import_supported_mesh(mesh_path: str) -> tuple[List[bpy.types.Object], Optional[str]]:
+    before = set(bpy.data.objects)
+    try:
+        objs = import_supported_mesh(mesh_path)
+        return objs, None
+    except Exception as exc:
+        after = set(bpy.data.objects)
+        created = [o for o in bpy.data.objects if o in (after - before)]
+        for obj in created:
+            try:
+                bpy.data.objects.remove(obj, do_unlink=True)
+            except Exception:
+                pass
+        return [], f"{type(exc).__name__}: {exc}"
 
 
 # ============================================================
@@ -766,6 +1943,57 @@ def _auto_color_rgb(key: str) -> Tuple[float, float, float]:
     return _hsv_to_rgb(h, 0.45, 0.75)
 
 
+def _named_color_rgb(value: Any) -> Optional[Tuple[float, float, float]]:
+    text = str(value or "").strip().lower().replace("ё", "е")
+    if not text:
+        return None
+
+    color_map = {
+        "зелен": (0.33, 0.55, 0.36),
+        "green": (0.33, 0.55, 0.36),
+        "olive": (0.42, 0.46, 0.22),
+        "sage": (0.56, 0.65, 0.52),
+        "emerald": (0.12, 0.50, 0.34),
+        "forest": (0.18, 0.39, 0.22),
+        "бирюз": (0.23, 0.58, 0.54),
+        "teal": (0.20, 0.50, 0.45),
+        "черн": (0.10, 0.10, 0.10),
+        "black": (0.10, 0.10, 0.10),
+        "корич": (0.38, 0.27, 0.19),
+        "brown": (0.38, 0.27, 0.19),
+        "беж": (0.76, 0.70, 0.60),
+        "beige": (0.76, 0.70, 0.60),
+        "сер": (0.55, 0.55, 0.55),
+        "gray": (0.55, 0.55, 0.55),
+        "grey": (0.55, 0.55, 0.55),
+        "бел": (0.85, 0.85, 0.85),
+        "white": (0.85, 0.85, 0.85),
+    }
+
+    for token, rgb in color_map.items():
+        if token in text:
+            return rgb
+    return None
+
+
+def _supplier_candidate_tint_rgb(it: dict, fallback_name: str) -> Tuple[float, float, float]:
+    meta = it.get("meta") if isinstance(it.get("meta"), dict) else {}
+    supplier_candidate = meta.get("supplier_candidate") if isinstance(meta.get("supplier_candidate"), dict) else {}
+
+    named = _named_color_rgb(supplier_candidate.get("color"))
+    if named:
+        return named
+
+    color = it.get("color")
+    if isinstance(color, (list, tuple)) and len(color) >= 3:
+        try:
+            return (float(color[0]), float(color[1]), float(color[2]))
+        except Exception:
+            pass
+
+    return _auto_color_rgb(str(fallback_name))
+
+
 @dataclass
 class PBRMaps:
     basecolor: Optional[str] = None
@@ -783,6 +2011,161 @@ def _set_image_colorspace(img: bpy.types.Image, is_data: bool) -> None:
         img.colorspace_settings.name = "Non-Color" if is_data else "sRGB"
     except Exception:
         pass
+
+
+def _is_placeholder_image(img: Optional[bpy.types.Image]) -> bool:
+    if img is None:
+        return True
+    try:
+        name = str(getattr(img, "name", "") or "").strip().lower()
+        filepath = str(getattr(img, "filepath", "") or "").strip()
+        filepath_raw = str(getattr(img, "filepath_raw", "") or "").strip()
+    except Exception:
+        return True
+
+    if name.startswith("map #") and not filepath and not filepath_raw:
+        return True
+    if filepath.startswith("/Map #") or filepath_raw.startswith("/Map #"):
+        return True
+    return False
+
+
+def _socket_chain_has_real_image(socket) -> bool:
+    if socket is None or not getattr(socket, "is_linked", False):
+        return False
+
+    visited = set()
+    stack = [link.from_node for link in socket.links]
+
+    while stack:
+        node = stack.pop()
+        if node is None:
+            continue
+        ptr = node.as_pointer()
+        if ptr in visited:
+            continue
+        visited.add(ptr)
+
+        if node.type == "TEX_IMAGE":
+            img = getattr(node, "image", None)
+            if img is None or _is_placeholder_image(img):
+                continue
+            try:
+                if getattr(img, "size", (0, 0))[0] > 0:
+                    return True
+            except Exception:
+                pass
+            fp = getattr(img, "filepath", "") or getattr(img, "filepath_raw", "") or ""
+            if fp:
+                return True
+
+        for inp in getattr(node, "inputs", []):
+            if inp.is_linked:
+                for link in inp.links:
+                    stack.append(link.from_node)
+
+    return False
+
+
+def _should_apply_tint_rgb(tint_rgb: Optional[Tuple[float, float, float]]) -> bool:
+    if not tint_rgb:
+        return False
+    try:
+        r, g, b = [float(x) for x in tint_rgb[:3]]
+    except Exception:
+        return False
+    return max(abs(r - 0.7), abs(g - 0.7), abs(b - 0.7)) > 0.03
+
+
+def _blend_rgba(base_rgba, tint_rgb: Tuple[float, float, float], strength: float) -> Tuple[float, float, float, float]:
+    base = tuple(float(x) for x in (base_rgba or (0.7, 0.7, 0.7, 1.0))[:4])
+    s = max(0.0, min(1.0, float(strength)))
+    return (
+        (1.0 - s) * base[0] + s * float(tint_rgb[0]),
+        (1.0 - s) * base[1] + s * float(tint_rgb[1]),
+        (1.0 - s) * base[2] + s * float(tint_rgb[2]),
+        base[3],
+    )
+
+
+def _apply_tint_to_material_nodes(
+    mat: bpy.types.Material,
+    tint_rgb: Optional[Tuple[float, float, float]],
+    strength: float = 0.35,
+) -> bool:
+    if not mat or not _should_apply_tint_rgb(tint_rgb):
+        return False
+
+    mat.use_nodes = True
+    nt = mat.node_tree
+    if nt is None:
+        return False
+
+    nodes = nt.nodes
+    links = nt.links
+    bsdf = next((n for n in nodes if n.type == "BSDF_PRINCIPLED"), None)
+    if bsdf is None:
+        return False
+
+    base_input = bsdf.inputs.get("Base Color")
+    if base_input is None:
+        return False
+
+    s = max(0.0, min(1.0, float(strength)))
+    tint_node = nodes.new("ShaderNodeRGB")
+    tint_node.label = "SUPPLIER_TINT_RGB"
+    tint_node.location = (getattr(bsdf, "location", (300, 0))[0] - 420, getattr(bsdf, "location", (300, 0))[1] + 120)
+    tint_node.outputs["Color"].default_value = (float(tint_rgb[0]), float(tint_rgb[1]), float(tint_rgb[2]), 1.0)
+
+    mix = nodes.new("ShaderNodeMixRGB")
+    mix.label = "SUPPLIER_TINT_MIX"
+    mix.location = (getattr(bsdf, "location", (300, 0))[0] - 180, getattr(bsdf, "location", (300, 0))[1] + 20)
+    mix.blend_type = "MIX"
+    mix.inputs["Fac"].default_value = s
+
+    incoming = [l for l in list(links) if l.to_node == bsdf and l.to_socket == base_input]
+    if incoming:
+        if not _socket_chain_has_real_image(base_input):
+            for link in incoming:
+                links.remove(link)
+            try:
+                base_input.default_value = (float(tint_rgb[0]), float(tint_rgb[1]), float(tint_rgb[2]), 1.0)
+                return True
+            except Exception:
+                return False
+        src_socket = incoming[0].from_socket
+        for link in incoming:
+            links.remove(link)
+        try:
+            links.new(src_socket, mix.inputs["Color1"])
+            links.new(tint_node.outputs["Color"], mix.inputs["Color2"])
+            links.new(mix.outputs["Color"], base_input)
+            return True
+        except Exception:
+            return False
+
+    try:
+        base_input.default_value = _blend_rgba(base_input.default_value, tint_rgb, s)
+        return True
+    except Exception:
+        return False
+
+
+def _apply_tint_to_existing_materials(
+    parent: bpy.types.Object,
+    tint_rgb: Optional[Tuple[float, float, float]],
+    strength: float = 0.35,
+) -> int:
+    if not _should_apply_tint_rgb(tint_rgb):
+        return 0
+    applied = 0
+    for o in _iter_mesh_children(parent):
+        me = getattr(o, "data", None)
+        mats = getattr(me, "materials", None) if me else None
+        for mat in (mats or []):
+            if mat and _apply_tint_to_material_nodes(mat, tint_rgb=tint_rgb, strength=strength):
+                applied += 1
+    return applied
 
 
 def _make_pbr_material(name: str, maps: PBRMaps, tint_rgb: Optional[Tuple[float, float, float]], tex_scale: float) -> bpy.types.Material:
@@ -822,6 +2205,7 @@ def _make_pbr_material(name: str, maps: PBRMaps, tint_rgb: Optional[Tuple[float,
 
     if maps.basecolor:
         base = add_tex_image(maps.basecolor, (440, 240), is_data=False)
+        base_out = base.outputs["Color"]
         if maps.ao:
             ao = add_tex_image(maps.ao, (440, 460), is_data=True)
             mix = nodes.new("ShaderNodeMixRGB")
@@ -830,9 +2214,21 @@ def _make_pbr_material(name: str, maps: PBRMaps, tint_rgb: Optional[Tuple[float,
             mix.inputs["Fac"].default_value = 1.0
             links.new(base.outputs["Color"], mix.inputs["Color1"])
             links.new(ao.outputs["Color"], mix.inputs["Color2"])
-            links.new(mix.outputs["Color"], bsdf.inputs["Base Color"])
-        else:
-            links.new(base.outputs["Color"], bsdf.inputs["Base Color"])
+            base_out = mix.outputs["Color"]
+
+        if _should_apply_tint_rgb(tint_rgb):
+            tint = nodes.new("ShaderNodeRGB")
+            tint.location = (600, 120)
+            tint.outputs["Color"].default_value = (float(tint_rgb[0]), float(tint_rgb[1]), float(tint_rgb[2]), 1.0)
+            tint_mix = nodes.new("ShaderNodeMixRGB")
+            tint_mix.location = (780, 220)
+            tint_mix.blend_type = "MIX"
+            tint_mix.inputs["Fac"].default_value = 0.35
+            links.new(base_out, tint_mix.inputs["Color1"])
+            links.new(tint.outputs["Color"], tint_mix.inputs["Color2"])
+            base_out = tint_mix.outputs["Color"]
+
+        links.new(base_out, bsdf.inputs["Base Color"])
     elif tint_rgb:
         bsdf.inputs["Base Color"].default_value = (float(tint_rgb[0]), float(tint_rgb[1]), float(tint_rgb[2]), 1.0)
 
@@ -997,37 +2393,7 @@ def _material_has_effective_basecolor_texture(mat: bpy.types.Material) -> bool:
     if base_input is None or not base_input.is_linked:
         return False
 
-    visited = set()
-    stack = [link.from_node for link in base_input.links]
-
-    while stack:
-        node = stack.pop()
-        if node is None:
-            continue
-        ptr = node.as_pointer()
-        if ptr in visited:
-            continue
-        visited.add(ptr)
-
-        if node.type == "TEX_IMAGE":
-            img = getattr(node, "image", None)
-            if img is None:
-                continue
-            try:
-                if getattr(img, "size", (0, 0))[0] > 0:
-                    return True
-            except Exception:
-                pass
-            fp = getattr(img, "filepath", "") or ""
-            if fp:
-                return True
-
-        for inp in getattr(node, "inputs", []):
-            if inp.is_linked:
-                for link in inp.links:
-                    stack.append(link.from_node)
-
-    return False
+    return _socket_chain_has_real_image(base_input)
 
 
 def _has_loaded_textures(parent: bpy.types.Object) -> bool:
@@ -1182,11 +2548,11 @@ def _relink_missing_images(parent: bpy.types.Object, idx: Dict[str, str]) -> Tup
                     continue
 
                 img = getattr(n, "image", None)
-                if img and getattr(img, "size", (0, 0))[0] > 0:
+                if img and not _is_placeholder_image(img) and getattr(img, "size", (0, 0))[0] > 0:
                     continue
 
                 want = None
-                if img and getattr(img, "filepath", ""):
+                if img and not _is_placeholder_image(img) and getattr(img, "filepath", ""):
                     want = os.path.basename(img.filepath)
                 if not want:
                     want = (getattr(n, "label", "") or getattr(n, "name", "") or "").strip()
@@ -1342,6 +2708,40 @@ def _fallback_apply_largest_image_existing_mats(parent: bpy.types.Object, idx: D
     return applied
 
 
+def _fallback_apply_flat_tint_existing_mats(
+    parent: bpy.types.Object,
+    tint_rgb: Optional[Tuple[float, float, float]],
+    verbose: bool,
+) -> bool:
+    if not _should_apply_tint_rgb(tint_rgb):
+        return False
+
+    mat = _make_pbr_material(
+        name=f"Mat_{parent.name}_FlatTint",
+        maps=PBRMaps(),
+        tint_rgb=tint_rgb,
+        tex_scale=1.0,
+    )
+
+    applied = False
+    for o in _iter_mesh_children(parent):
+        me = getattr(o, "data", None)
+        mats = getattr(me, "materials", None) if me else None
+        if mats is None:
+            continue
+        if not mats:
+            mats.append(mat)
+            applied = True
+            continue
+        for i in range(len(mats)):
+            mats[i] = mat
+            applied = True
+
+    if applied:
+        _log(verbose, f"[Textures] {parent.name}: fallback flat tint applied")
+    return applied
+
+
 def _ensure_textures(
     parent: bpy.types.Object,
     mesh_path: Optional[str],
@@ -1358,24 +2758,30 @@ def _ensure_textures(
 
     if keep_existing_mats:
         if _has_loaded_textures(parent):
+            _apply_tint_to_existing_materials(parent, tint_rgb=tint_rgb, strength=0.35)
             _log(verbose, f"[Textures] {parent.name}: effective basecolor texture already exists -> keep")
             return
 
         fixed, _ = _relink_missing_images(parent, idx)
         if fixed > 0 and _has_loaded_textures(parent):
+            _apply_tint_to_existing_materials(parent, tint_rgb=tint_rgb, strength=0.35)
             _log(verbose, f"[Textures] {parent.name}: relink fixed={fixed}")
             return
 
         if mesh_path and os.path.isfile(mesh_path):
             if _apply_mtl_map_kd_to_existing_mats(parent, mesh_path, idx, verbose):
                 if _has_loaded_textures(parent):
+                    _apply_tint_to_existing_materials(parent, tint_rgb=tint_rgb, strength=0.35)
                     _log(verbose, f"[Textures] {parent.name}: restored from MTL")
                     return
 
         if _object_has_any_material_slots(parent):
             if _fallback_apply_largest_image_existing_mats(parent, idx, verbose):
+                _apply_tint_to_existing_materials(parent, tint_rgb=tint_rgb, strength=0.35)
                 if _has_loaded_textures(parent):
                     return
+            if _fallback_apply_flat_tint_existing_mats(parent, tint_rgb=tint_rgb, verbose=verbose):
+                return
             _log(verbose, f"[Textures] {parent.name}: materials exist, but MTL restore failed")
             return
 
@@ -1557,6 +2963,68 @@ def _assign_material_to_object(obj: bpy.types.Object, mat: bpy.types.Material) -
             me.materials[i] = mat
 
 
+def _make_bbox_wire_material(name: str, rgba: Tuple[float, float, float, float]) -> bpy.types.Material:
+    mat = bpy.data.materials.get(name)
+    if mat is None:
+        mat = bpy.data.materials.new(name)
+    mat.use_nodes = True
+    nt = mat.node_tree
+    nodes = nt.nodes
+    links = nt.links
+    nodes.clear()
+
+    out = nodes.new("ShaderNodeOutputMaterial")
+    out.location = (320, 0)
+
+    bsdf = nodes.new("ShaderNodeBsdfPrincipled")
+    bsdf.location = (40, 0)
+    try:
+        bsdf.inputs["Base Color"].default_value = rgba
+    except Exception:
+        pass
+    try:
+        bsdf.inputs["Roughness"].default_value = 0.25
+    except Exception:
+        pass
+    try:
+        bsdf.inputs["Specular"].default_value = 0.0
+    except Exception:
+        pass
+    links.new(bsdf.outputs["BSDF"], out.inputs["Surface"])
+
+    try:
+        mat.shadow_method = "NONE"
+    except Exception:
+        pass
+    return mat
+
+
+def _make_renderable_bbox_box(
+    aabb: Dict[str, float],
+    name: str,
+    collection: bpy.types.Collection,
+    rgba: Tuple[float, float, float, float] = (0.02, 0.02, 0.02, 1.0),
+    thickness: float = 0.02,
+) -> bpy.types.Object:
+    obj = _add_aabb_box(aabb, name, collection)
+    obj.display_type = "WIRE"
+    obj.show_in_front = True
+    try:
+        obj.color = rgba
+    except Exception:
+        pass
+    try:
+        mod = obj.modifiers.new(name="BBoxWireframe", type="WIREFRAME")
+        mod.thickness = max(float(thickness), 0.002)
+        mod.use_replace = True
+        mod.use_even_offset = True
+    except Exception:
+        pass
+    mat = _make_bbox_wire_material("MAT_REPLACED_BBOX", rgba)
+    _assign_material_to_object(obj, mat)
+    return obj
+
+
 def _make_glass_material(name: str, image_path: Optional[str]) -> bpy.types.Material:
     mat = bpy.data.materials.new(name)
     mat.use_nodes = True
@@ -1639,6 +3107,38 @@ def _synthesize_walls_from_floor_polygon(room_dict: dict) -> list[dict]:
             "to_vertex": (i + 1) % n,
         })
     return walls
+
+
+def _room_spec_from_bounds(
+    room_engine: dict,
+    default_bounds: Tuple[float, float, float, float, float, float],
+) -> dict:
+    x1, x2, y1, y2, z1, z2 = default_bounds
+    if room_engine and all(k in room_engine for k in ["x_min", "x_max", "y_min", "y_max", "z_min", "z_max"]):
+        x1, x2 = float(room_engine["x_min"]), float(room_engine["x_max"])
+        y1, y2 = float(room_engine["y_min"]), float(room_engine["y_max"])
+        z1, z2 = float(room_engine["z_min"]), float(room_engine["z_max"])
+
+    return {
+        "room": {
+            "floor_z": z1,
+            "ceiling_height": max(z2 - z1, 0.1),
+            "floor_polygon": [
+                {"x": x1, "y": y1},
+                {"x": x2, "y": y1},
+                {"x": x2, "y": y2},
+                {"x": x1, "y": y2},
+            ],
+            "walls": [
+                {"id": "w0", "from_vertex": 0, "to_vertex": 1},
+                {"id": "w1", "from_vertex": 1, "to_vertex": 2},
+                {"id": "w2", "from_vertex": 2, "to_vertex": 3},
+                {"id": "w3", "from_vertex": 3, "to_vertex": 0},
+            ],
+            "doors": [],
+            "windows": [],
+        }
+    }
 
 def _poly_signed_area_xy(pts: List[Tuple[float, float]]) -> float:
     a = 0.0
@@ -1728,8 +3228,14 @@ def _make_wall_quad(name: str, p0: Tuple[float, float], p1: Tuple[float, float],
         (x1, y1, z0),
         (x1, y1, z1),
         (x0, y0, z1),
+        (x0, y0, z0),
+        (x0, y0, z1),
+        (x1, y1, z1),
+        (x1, y1, z0),
     ]
-    faces = [(0, 1, 2, 3)]
+    # Two coincident quads with opposite winding keep walls visible from both
+    # sides while remaining infinitely thin.
+    faces = [(0, 1, 2, 3), (4, 5, 6, 7)]
     return _make_mesh_object(name, verts, faces, coll)
 
 
@@ -1830,7 +3336,12 @@ def build_room_from_spec(
     verbose: bool,
 ) -> Tuple[List[bpy.types.Object], mathutils.Vector, mathutils.Vector]:
     r = room_json["room"]
-    H = float(r.get("ceiling_height", 2.8))
+    floor_z = float(r.get("floor_z", r.get("z_min", 0.0)))
+    if "z_max" in r:
+        H = float(r["z_max"]) - floor_z
+    else:
+        H = float(r.get("ceiling_height", 2.8))
+    H = max(H, 0.1)
 
     poly = r["floor_polygon"]
     poly_xy = [(float(p["x"]), float(p["y"])) for p in poly]
@@ -1864,7 +3375,7 @@ def build_room_from_spec(
 
     out_objs: List[bpy.types.Object] = []
 
-    floor_obj = _make_floor_from_polygon("Room_Floor", poly_xy, z=0.0, coll=coll_room)
+    floor_obj = _make_floor_from_polygon("Room_Floor", poly_xy, z=floor_z, coll=coll_room)
     _set_uvs_floor_xy(floor_obj, uv_scale=1.0)
     if floor_mat:
         _assign_material_to_object(floor_obj, floor_mat)
@@ -1908,8 +3419,8 @@ def build_room_from_spec(
             f"Room_Wall_{wid}",
             p0,
             p1,
-            z0=0.0,
-            z1=H,
+            z0=floor_z,
+            z1=floor_z + H,
             coll=coll_room,
         )
         _set_uvs_wall_sz(wall_obj, origin_xy=p0, dir_xy=(ex, ey), uv_scale=1.0)
@@ -1934,7 +3445,7 @@ def build_room_from_spec(
 
         s0 = float(d["s"])
         width = float(d["width"])
-        z0 = float(d.get("z0", 0.0))
+        z0 = floor_z + float(d.get("z0", 0.0))
         height = float(d.get("height", 2.0))
 
         door_objs = _make_double_sided_decal_on_wall(
@@ -1964,7 +3475,7 @@ def build_room_from_spec(
 
         s0 = float(w["s"])
         width = float(w["width"])
-        z0 = float(w.get("z0", 0.9))
+        z0 = floor_z + float(w.get("z0", 0.9))
         height = float(w.get("height", 1.2))
 
         win_objs = _make_double_sided_decal_on_wall(
@@ -2004,9 +3515,131 @@ def place_in_aabb(
     snap_to_ceiling: bool = False,
     ceiling_offset: float = 0.0,
 ) -> Optional[bpy.types.Object]:
+    objs, dropped_meshes = _filter_imported_mesh_outliers(objs)
+    if dropped_meshes:
+        for meta in dropped_meshes:
+            print(
+                "[DBG] dropping imported outlier mesh "
+                f"{meta['name']} diag={meta['diag']:.4f} "
+                f"longest={meta['longest']:.4f} "
+                f"footprint={meta['footprint']:.4f} "
+                f"thin_ratio={meta['thin_ratio']:.5f}"
+            )
+            obj = bpy.data.objects.get(str(meta["name"]))
+            if obj is not None:
+                try:
+                    bpy.data.objects.remove(obj, do_unlink=True)
+                except Exception:
+                    pass
+
+    objs, dropped_clusters = _keep_primary_import_cluster(objs)
+    if dropped_clusters:
+        for meta in dropped_clusters:
+            print(
+                "[DBG] dropping imported distant cluster mesh "
+                f"{meta['name']} diag={meta['diag']:.4f} "
+                f"longest={meta['longest']:.4f} "
+                f"distance_to_origin={meta['distance_to_origin']:.4f}"
+            )
+            obj = bpy.data.objects.get(str(meta["name"]))
+            if obj is not None:
+                try:
+                    bpy.data.objects.remove(obj, do_unlink=True)
+                except Exception:
+                    pass
+
     mesh_objs = [o for o in objs if o.type == "MESH"]
     if not mesh_objs:
         return None
+
+    def _fit_parent_once() -> None:
+        bpy.context.view_layer.update()
+
+        bmin, bmax = _world_bounds_mesh_objects(mesh_objs)
+        cur = bmax - bmin
+
+        tgt = mathutils.Vector(
+            (
+                float(aabb["x_max"]) - float(aabb["x_min"]),
+                float(aabb["y_max"]) - float(aabb["y_min"]),
+                float(aabb["z_max"]) - float(aabb["z_min"]),
+            )
+        )
+
+        eps = 1e-9
+        cur = mathutils.Vector((max(cur.x, eps), max(cur.y, eps), max(cur.z, eps)))
+        sx, sy, sz = tgt.x / cur.x, tgt.y / cur.y, tgt.z / cur.z
+
+        if (fit_mode or "stretch").lower() == "uniform":
+            k = min(sx, sy, sz)
+            parent.scale = (parent.scale.x * k, parent.scale.y * k, parent.scale.z * k)
+        else:
+            parent.scale = (parent.scale.x * sx, parent.scale.y * sy, parent.scale.z * sz)
+
+        bpy.context.view_layer.update()
+
+        bmin2, bmax2 = _world_bounds_mesh_objects(mesh_objs)
+        cur_center = (bmin2 + bmax2) * 0.5
+        tgt_center = mathutils.Vector(
+            (
+                0.5 * (float(aabb["x_min"]) + float(aabb["x_max"])),
+                0.5 * (float(aabb["y_min"]) + float(aabb["y_max"])),
+                0.5 * (float(aabb["z_min"]) + float(aabb["z_max"])),
+            )
+        )
+        delta = tgt_center - cur_center
+
+        if snap_to_floor and not snap_to_ceiling:
+            bottom_after_center = bmin2.z + delta.z
+            delta.z += (float(aabb["z_min"]) - bottom_after_center) + float(floor_offset)
+        elif snap_to_ceiling and not snap_to_floor:
+            top_after_center = bmax2.z + delta.z
+            delta.z += (float(aabb["z_max"]) - top_after_center) - float(ceiling_offset)
+
+        parent.location += delta
+        bpy.context.view_layer.update()
+
+    def _placement_is_reasonable() -> Tuple[bool, str]:
+        bpy.context.view_layer.update()
+        bmin, bmax = _world_bounds_mesh_objects(mesh_objs)
+        cur = bmax - bmin
+        tgt = mathutils.Vector(
+            (
+                float(aabb["x_max"]) - float(aabb["x_min"]),
+                float(aabb["y_max"]) - float(aabb["y_min"]),
+                float(aabb["z_max"]) - float(aabb["z_min"]),
+            )
+        )
+        cur_center = (bmin + bmax) * 0.5
+        tgt_center = mathutils.Vector(
+            (
+                0.5 * (float(aabb["x_min"]) + float(aabb["x_max"])),
+                0.5 * (float(aabb["y_min"]) + float(aabb["y_max"])),
+                0.5 * (float(aabb["z_min"]) + float(aabb["z_max"])),
+            )
+        )
+
+        max_ratio = 1.85
+        axis_failures: List[str] = []
+        for axis_name, cur_val, tgt_val in (
+            ("x", float(cur.x), float(tgt.x)),
+            ("y", float(cur.y), float(tgt.y)),
+            ("z", float(cur.z), float(tgt.z)),
+        ):
+            if tgt_val <= 1e-6:
+                continue
+            ratio = cur_val / tgt_val
+            if ratio > max_ratio:
+                axis_failures.append(f"{axis_name}:{ratio:.3f}")
+
+        center_delta = cur_center - tgt_center
+        max_target = max(float(tgt.x), float(tgt.y), float(tgt.z), 1e-6)
+        center_ratio = center_delta.length / max_target
+        if axis_failures:
+            return False, "oversize " + ",".join(axis_failures)
+        if center_ratio > 0.65:
+            return False, f"center_offset:{center_ratio:.3f}"
+        return True, "ok"
 
     parent = bpy.data.objects.new(parent_name, None)
     bpy.context.scene.collection.objects.link(parent)
@@ -2020,50 +3653,26 @@ def place_in_aabb(
 
     parent.rotation_euler = (0.0, 0.0, math.radians(float(rotation_deg_engine or 0.0)))
     bpy.context.view_layer.update()
-
-    bmin, bmax = _world_bounds_mesh_objects(mesh_objs)
-    cur = bmax - bmin
-
-    tgt = mathutils.Vector(
-        (
-            float(aabb["x_max"]) - float(aabb["x_min"]),
-            float(aabb["y_max"]) - float(aabb["y_min"]),
-            float(aabb["z_max"]) - float(aabb["z_min"]),
-        )
-    )
-
-    eps = 1e-9
-    cur = mathutils.Vector((max(cur.x, eps), max(cur.y, eps), max(cur.z, eps)))
-    sx, sy, sz = tgt.x / cur.x, tgt.y / cur.y, tgt.z / cur.z
-
-    if (fit_mode or "stretch").lower() == "uniform":
-        k = min(sx, sy, sz)
-        parent.scale = (k, k, k)
-    else:
-        parent.scale = (sx, sy, sz)
-
-    bpy.context.view_layer.update()
-
-    bmin2, bmax2 = _world_bounds_mesh_objects(mesh_objs)
-    cur_center = (bmin2 + bmax2) * 0.5
-    tgt_center = mathutils.Vector(
-        (
-            0.5 * (float(aabb["x_min"]) + float(aabb["x_max"])),
-            0.5 * (float(aabb["y_min"]) + float(aabb["y_max"])),
-            0.5 * (float(aabb["z_min"]) + float(aabb["z_max"])),
-        )
-    )
-    delta = tgt_center - cur_center
-
-    if snap_to_floor and not snap_to_ceiling:
-        bottom_after_center = bmin2.z + delta.z
-        delta.z += (float(aabb["z_min"]) - bottom_after_center) + float(floor_offset)
-    elif snap_to_ceiling and not snap_to_floor:
-        top_after_center = bmax2.z + delta.z
-        delta.z += (float(aabb["z_max"]) - top_after_center) - float(ceiling_offset)
-
-    parent.location += delta
-    bpy.context.view_layer.update()
+    parent.scale = (1.0, 1.0, 1.0)
+    _fit_parent_once()
+    # Imported FBX/OBJ hierarchies can report unstable bounds on the first
+    # depsgraph evaluation. A second corrective pass makes the actual world
+    # bounds converge to the target AABB instead of leaving the asset drifting
+    # outside the room footprint.
+    _fit_parent_once()
+    placement_ok, placement_reason = _placement_is_reasonable()
+    if not placement_ok:
+        print(f"[DBG] rejecting unreasonable placement {parent_name}: {placement_reason}")
+        for o in list(objs):
+            try:
+                bpy.data.objects.remove(o, do_unlink=True)
+            except Exception:
+                pass
+        try:
+            bpy.data.objects.remove(parent, do_unlink=True)
+        except Exception:
+            pass
+        return None
     return parent
 
 
@@ -2082,9 +3691,7 @@ def _has_room_spec(data: dict) -> bool:
 
 
 def build_scene(
-    glb_path: str,
     json_path: str,
-    import_glb: bool,
     draw_aabb: bool,
     force_tint: bool,
     keep_existing_mats: bool,
@@ -2092,9 +3699,15 @@ def build_scene(
     env_textures_dir: str,
     style_text: Optional[str],
     seed: int,
+    reference_blend: Optional[str] = None,
+    overlay_bbox_only: bool = False,
+    bbox_fallback_missing_mesh: bool = True,
+    highlight_item_ids: Optional[set[str]] = None,
 ) -> None:
-    reset_scene()
-    _ensure_world()
+    use_reference_scene = bool(reference_blend)
+    if not use_reference_scene:
+        reset_scene()
+        _ensure_world()
 
     json_file = Path(json_path).expanduser().resolve()
     json_dir = json_file.parent
@@ -2102,15 +3715,13 @@ def build_scene(
     with open(str(json_file), "r", encoding="utf-8") as f:
         data = json.load(f)
 
-    room_spec_available = _has_room_spec(data)
-
     coll_room = ensure_collection("Room")
-    coll_items = ensure_collection("Items")
+    coll_items = ensure_collection("Items" if not overlay_bbox_only else "BBoxOverlay")
+    if overlay_bbox_only:
+        clear_collection_objects(coll_items)
 
-    room_ok = False
-    room_mode = "none"
+    room_mode = "room_spec"
     room_objs: List[bpy.types.Object] = []
-    room_meshes: List[bpy.types.Object] = []
 
     bb_min = mathutils.Vector((0.0, 0.0, 0.0))
     bb_max = mathutils.Vector((5.0, 5.0, 3.0))
@@ -2124,146 +3735,57 @@ def build_scene(
     else:
         room_engine = data.get("room") or data.get("room_spec") or {}
         items = data.get("placements") or data.get("items") or []
+    items_by_id: Dict[str, Dict] = {
+        str(item.get("id") or "").strip(): item
+        for item in items
+        if isinstance(item, dict) and str(item.get("id") or "").strip()
+    }
 
-    # ============================================================
-    # 1. Сначала пытаемся использовать ИМЕННО GLB комнаты
-    # ============================================================
-    if import_glb and os.path.isfile(glb_path):
-        try:
-            room_objs = import_glb_into_collection(glb_path, coll_room)
-            room_meshes = [o for o in room_objs if o.type == "MESH"]
+    source_name_to_items: Dict[str, List[Dict]] = {}
+    for item in items:
+        source_name = _blend_source_name_from_item(item)
+        if source_name:
+            source_name_to_items.setdefault(source_name, []).append(item)
+    hidden_reference_sources: set[str] = set()
+    item_actual_aabbs: Dict[str, Dict[str, float]] = {}
+    item_roots: Dict[str, bpy.types.Object] = {}
+    item_issue_reasons: Dict[str, List[str]] = {}
 
-            if room_meshes:
-                room_bb_min, room_bb_max = _world_bounds_mesh_objects(room_meshes)
-                room_ok = True
-                room_mode = "glb"
-            elif room_objs:
-                room_bb_min, room_bb_max = _world_bounds_mesh_objects(room_objs)
-                room_ok = True
-                room_mode = "glb"
+    room_data_for_build = data if _has_room_spec(data) else _room_spec_from_bounds(
+        room_engine=room_engine if isinstance(room_engine, dict) else {},
+        default_bounds=(0.0, 5.0, 0.0, 5.0, 0.0, 3.0),
+    )
+    if not _has_room_spec(data):
+        room_mode = "bounds_room_spec"
+        _log(verbose, "[Room] room-spec missing -> synthesized thin-wall room from bounds")
 
-            if room_ok and room_bb_min is not None and room_bb_max is not None:
-                bb_min = room_bb_min.copy()
-                bb_max = room_bb_max.copy()
-                _log(verbose, f"[Room] using original GLB room: {glb_path}")
-                _log(verbose, f"[Room] imported objects: {len(room_objs)}")
-                _log(verbose, f"[Room] bounds: min={tuple(bb_min)}, max={tuple(bb_max)}")
-        except Exception as e:
-            _log(verbose, f"[Room] GLB import failed: {e}")
-            room_ok = False
-            room_mode = "none"
-            room_objs = []
-            room_meshes = []
-            room_bb_min = None
-            room_bb_max = None
-
-    # ============================================================
-    # 2. Если GLB не удалось использовать — строим комнату из room-spec
-    # ============================================================
-    if (not room_ok) and room_spec_available:
-        try:
-            room_objs, room_bb_min, room_bb_max = build_room_from_spec(
-                room_json=data,
-                coll_room=coll_room,
-                env_textures_dir=env_textures_dir,
-                style_text=style_text,
-                seed=seed,
-                verbose=verbose,
-            )
-            room_ok = True
-            room_mode = "room_spec"
+    if not use_reference_scene:
+        room_objs, room_bb_min, room_bb_max = build_room_from_spec(
+            room_json=room_data_for_build,
+            coll_room=coll_room,
+            env_textures_dir=env_textures_dir,
+            style_text=style_text,
+            seed=seed,
+            verbose=verbose,
+        )
+        bb_min = room_bb_min.copy()
+        bb_max = room_bb_max.copy()
+        _log(verbose, f"[Room] bounds: min={tuple(bb_min)}, max={tuple(bb_max)}")
+    else:
+        room = room_data_for_build.get("room") or {}
+        poly = room.get("floor_polygon") or []
+        pts = [(float(p["x"]), float(p["y"])) for p in poly if isinstance(p, dict) and "x" in p and "y" in p]
+        floor_z = float(room.get("floor_z", 0.0))
+        ceil_h = float(room.get("ceiling_height", 2.8))
+        if pts:
+            xs = [p[0] for p in pts]
+            ys = [p[1] for p in pts]
+            room_bb_min = mathutils.Vector((min(xs), min(ys), floor_z))
+            room_bb_max = mathutils.Vector((max(xs), max(ys), floor_z + ceil_h))
             bb_min = room_bb_min.copy()
             bb_max = room_bb_max.copy()
-
-            _log(verbose, "[Room] GLB unavailable -> built room from room-spec")
-            _log(verbose, f"[Room] bounds: min={tuple(bb_min)}, max={tuple(bb_max)}")
-        except Exception as e:
-            _log(verbose, f"[RoomSpec] build failed: {e}")
-            room_ok = False
-            room_mode = "none"
-            room_objs = []
-            room_bb_min = None
-            room_bb_max = None
-
-    # ============================================================
-    # 3. Аварийный fallback: только bbox / preview room
-    # ============================================================
-    if not room_ok:
-        if room_engine and all(k in room_engine for k in ["x_min", "x_max", "y_min", "y_max", "z_min", "z_max"]):
-            x1, x2 = float(room_engine["x_min"]), float(room_engine["x_max"])
-            y1, y2 = float(room_engine["y_min"]), float(room_engine["y_max"])
-            z1, z2 = float(room_engine["z_min"]), float(room_engine["z_max"])
-            bb_min = mathutils.Vector((x1, y1, z1))
-            bb_max = mathutils.Vector((x2, y2, z2))
-        else:
-            bb_min = mathutils.Vector((0.0, 0.0, 0.0))
-            bb_max = mathutils.Vector((5.0, 5.0, 3.0))
-
-        seed_eff = (hash(str(json_file)) & 0xFFFFFFFF) if int(seed) == 0 else int(seed)
-        floor_mat = None
-        wall_mat = None
-
-        if env_textures_dir and os.path.isdir(env_textures_dir):
-            try:
-                tex = _list_env_textures(env_textures_dir)
-                rng = random.Random(seed_eff)
-
-                floor_path = _choose_texture("floor", tex.get("floor", []), style_text, rng)
-                wall_path = _choose_texture("wall", tex.get("wall", []), style_text, rng)
-
-                floor_mat = _make_image_material("MAT_ENV_FLOOR", floor_path, uv_scale=1.0) if floor_path else None
-                wall_mat = _make_image_material("MAT_ENV_WALL", wall_path, uv_scale=1.0) if wall_path else None
-            except Exception as e:
-                _log(verbose, f"[PreviewRoom] texture setup failed: {e}")
-
-        try:
-            dx = float(bb_max.x - bb_min.x)
-            dy = float(bb_max.y - bb_min.y)
-            dz = float(bb_max.z - bb_min.z)
-
-            cx = float((bb_min.x + bb_max.x) * 0.5)
-            cy = float((bb_min.y + bb_max.y) * 0.5)
-            cz = float((bb_min.z + bb_max.z) * 0.5)
-
-            bpy.ops.mesh.primitive_plane_add(size=1.0, location=(cx, cy, float(bb_min.z) + 1e-4))
-            floor = bpy.context.active_object
-            floor.name = "Preview_Floor"
-            floor.scale = (dx * 0.5, dy * 0.5, 1.0)
-            _unlink_from_all_collections(floor)
-            coll_room.objects.link(floor)
-            if floor_mat:
-                _assign_material_to_object(floor, floor_mat)
-
-            bpy.ops.mesh.primitive_plane_add(
-                size=1.0,
-                location=(float(bb_min.x) + 1e-4, cy, cz),
-                rotation=(0.0, math.radians(90.0), 0.0),
-            )
-            left = bpy.context.active_object
-            left.name = "Preview_Wall_Left"
-            left.scale = (dz * 0.5, dy * 0.5, 1.0)
-            _unlink_from_all_collections(left)
-            coll_room.objects.link(left)
-            if wall_mat:
-                _assign_material_to_object(left, wall_mat)
-
-            bpy.ops.mesh.primitive_plane_add(
-                size=1.0,
-                location=(cx, float(bb_min.y) + 1e-4, cz),
-                rotation=(math.radians(90.0), 0.0, 0.0),
-            )
-            front = bpy.context.active_object
-            front.name = "Preview_Wall_Front"
-            front.scale = (dx * 0.5, dz * 0.5, 1.0)
-            _unlink_from_all_collections(front)
-            coll_room.objects.link(front)
-            if wall_mat:
-                _assign_material_to_object(front, wall_mat)
-
-            room_mode = "preview"
-            _log(verbose, "[Room] fallback preview room created")
-        except Exception as e:
-            _log(verbose, f"[PreviewRoom] failed: {e}")
+    if room_bb_min is not None and room_bb_max is not None:
+        _store_scene_room_bounds(room_bb_min, room_bb_max)
 
     z_floor = float(bb_min.z)
     z_ceil = float(bb_max.z)
@@ -2280,9 +3802,27 @@ def build_scene(
             _log(verbose, f"⚠️ item without aabb: {it}")
             continue
 
+        item_id = str(it.get("id") or "").strip()
         name = _item_name(it)
         constraints = it.get("constraints") or {}
         name_l = name.lower()
+        meta = it.get("meta") or {}
+        supplier_reanchored_support = bool(meta.get("supplier_support_reanchored"))
+        force_placeholder_bbox = bool(meta.get("placeholder_bbox"))
+        preserve_raw_aabb = bool(overlay_bbox_only or force_placeholder_bbox)
+        source = it.get("source") or {}
+        source_blend_name = _blend_source_name_from_item(it)
+        source_scene_obj = _get_scene_source_object(source_blend_name) if use_reference_scene else None
+        preserve_reference_vertical_anchor = bool(
+            use_reference_scene
+            and meta.get("supplier_binding_applied")
+            and source_blend_name
+        )
+
+        if overlay_bbox_only and use_reference_scene:
+            blend_aabb = _aabb_from_blend_object_name(source.get("blend_object_name"))
+            if blend_aabb is not None:
+                aabb_eng = blend_aabb
 
         is_ceiling_item = (
             constraints.get("mount_type") == "ceiling"
@@ -2299,26 +3839,27 @@ def build_scene(
             or (not is_ceiling_item)
         )
 
-        # Клампим в реальную комнату: GLB или room-spec
-        if room_bb_min is not None and room_bb_max is not None:
+        # Клампим в текущую геометрию комнаты.
+        if (not preserve_raw_aabb) and room_bb_min is not None and room_bb_max is not None:
             try:
-                aabb_eng = clamp_item_aabb_to_room_glb(aabb_eng, room_bb_min, room_bb_max, margin=0.05)
+                aabb_eng = clamp_item_aabb_to_room_bounds(aabb_eng, room_bb_min, room_bb_max, margin=0.05)
             except Exception as e:
                 _log(verbose, f"[Clamp] failed for {name}: {e}")
 
-        if is_floor_item:
-            if float(aabb_eng.get("z_min", 0.0)) < float(z_floor):
-                dz_fix = float(z_floor) - float(aabb_eng["z_min"])
-                aabb_eng["z_min"] = float(z_floor)
-                aabb_eng["z_max"] = float(aabb_eng["z_max"]) + dz_fix
+        if not preserve_raw_aabb and not preserve_reference_vertical_anchor:
+            if is_floor_item:
+                if float(aabb_eng.get("z_min", 0.0)) < float(z_floor):
+                    dz_fix = float(z_floor) - float(aabb_eng["z_min"])
+                    aabb_eng["z_min"] = float(z_floor)
+                    aabb_eng["z_max"] = float(aabb_eng["z_max"]) + dz_fix
 
-            sz = float(aabb_eng["z_max"]) - float(aabb_eng["z_min"])
-            aabb_eng["z_min"] = float(z_floor)
-            aabb_eng["z_max"] = float(z_floor) + sz
-        elif is_ceiling_item:
-            sz = float(aabb_eng["z_max"]) - float(aabb_eng["z_min"])
-            aabb_eng["z_max"] = float(z_ceil)
-            aabb_eng["z_min"] = float(z_ceil) - sz
+                sz = float(aabb_eng["z_max"]) - float(aabb_eng["z_min"])
+                aabb_eng["z_min"] = float(z_floor)
+                aabb_eng["z_max"] = float(z_floor) + sz
+            elif is_ceiling_item:
+                sz = float(aabb_eng["z_max"]) - float(aabb_eng["z_min"])
+                aabb_eng["z_max"] = float(z_ceil)
+                aabb_eng["z_min"] = float(z_ceil) - sz
 
         rot_raw = float(it.get("rotation", it.get("yaw_deg", it.get("rotation_deg", 0.0))) or 0.0)
         rot_deg = _quantize_rot_0_90_180_270(rot_raw)
@@ -2339,29 +3880,40 @@ def build_scene(
         texture_files = [str(x) for x in (it.get("texture_files") or [])]
 
         texture_scale = float(it.get("texture_scale", 1.0) or 1.0)
-        color = it.get("color") or _auto_color_rgb(str(name))
-        tint_rgb = (float(color[0]), float(color[1]), float(color[2]))
+        tint_rgb = _supplier_candidate_tint_rgb(it, fallback_name=str(name))
 
         placed_ok = False
+        using_reference_object = False
 
-        if mesh_path and os.path.isfile(mesh_path):
-            print(f"[DBG] placement name={name}")
-            print(f"[DBG] mesh_path={mesh_path}")
+        if not overlay_bbox_only:
+            if mesh_path and os.path.isfile(mesh_path):
+                print(f"[DBG] placement name={name}")
+                print(f"[DBG] mesh_path={mesh_path}")
+                mesh_candidates = _discover_mesh_import_candidates(mesh_path)
+                print(f"[DBG] mesh_candidates for {name}: {mesh_candidates[:8]}")
 
-            ext = os.path.splitext(mesh_path)[1].lower()
-            if ext != ".obj":
-                print(f"⚠️ {name}: mesh_path не OBJ ({ext}). Сейчас поддерживается только .obj: {mesh_path}")
-            else:
-                try:
+                imported_from: Optional[str] = None
+                objs: List[bpy.types.Object] = []
+                last_error: Optional[str] = None
+
+                for candidate_path in mesh_candidates:
+                    ext = os.path.splitext(candidate_path)[1].lower()
+                    if ext not in _SUPPORTED_MESH_EXTS:
+                        continue
+
                     before_names = set(o.name for o in bpy.data.objects)
-                    objs = import_obj(mesh_path)
+                    objs, error = _safe_import_supported_mesh(candidate_path)
                     after_names = set(o.name for o in bpy.data.objects)
                     created_names = sorted(after_names - before_names)
-                    print(f"[DBG] import_obj returned {0 if objs is None else len(objs)} objects for {name}")
-                    print(f"[DBG] bpy created {len(created_names)} objects for {name}: {created_names[:20]}")
-                except Exception as e:
-                    print(f"⚠️ {name}: import OBJ failed: {e}")
-                    objs = []
+
+                    if objs:
+                        imported_from = candidate_path
+                        print(f"[DBG] import_supported_mesh returned {len(objs)} objects for {name}")
+                        print(f"[DBG] bpy created {len(created_names)} objects for {name}: {created_names[:20]}")
+                        break
+
+                    last_error = error
+                    print(f"⚠️ {name}: import mesh failed for {candidate_path}: {error}")
 
                 if objs:
                     parent = place_in_aabb(
@@ -2377,8 +3929,30 @@ def build_scene(
                         ceiling_offset=0.0,
                     )
                     placed_ok = parent is not None
+                    if placed_ok and parent is not None and item_id:
+                        item_roots[item_id] = parent
+                        actual_aabb = _aabb_from_object_family_root(parent)
+                        if actual_aabb is not None:
+                            item_actual_aabbs[item_id] = actual_aabb
+
+                    # In a reference Infinigen scene, hide the original object only when
+                    # the source object is unique or every item mapped to that source is
+                    # also being replaced by an explicit mesh.
+                    if placed_ok and source_scene_obj is not None and source_blend_name not in hidden_reference_sources:
+                        shared_items = source_name_to_items.get(source_blend_name) or []
+                        can_hide_source = len(shared_items) <= 1 or all(
+                            _item_has_existing_mesh_file(shared_it, json_dir)
+                            for shared_it in shared_items
+                        )
+                        if can_hide_source:
+                            kept_light_count = _duplicate_light_objects_from_family(source_scene_obj)
+                            if kept_light_count:
+                                print(f"[DBG] kept {kept_light_count} source lights for {name}: {source_blend_name}")
+                            _hide_object_family(source_scene_obj)
+                            hidden_reference_sources.add(source_blend_name)
 
                     if parent is not None:
+                        effective_mesh_path = imported_from or mesh_path
                         if force_tint:
                             mat = _make_pbr_material(
                                 name=f"Mat_{name}_Tint",
@@ -2396,7 +3970,7 @@ def build_scene(
                         else:
                             _ensure_textures(
                                 parent=parent,
-                                mesh_path=mesh_path,
+                                mesh_path=effective_mesh_path,
                                 mesh_texture_dirs=mesh_tex_dirs,
                                 texture_path=texture_path,
                                 texture_files=texture_files,
@@ -2406,18 +3980,171 @@ def build_scene(
                                 verbose=verbose,
                             )
                 else:
-                    print(f"⚠️ {name}: Не удалось импортировать модель: {mesh_path}")
-        else:
-            print(f"⚠️ {name}: mesh_path не найден в placement/asset или файл отсутствует: {mesh_path_raw}")
+                    print(f"⚠️ {name}: Не удалось импортировать модель: {mesh_path}; last_error={last_error}")
+            elif source_scene_obj is not None:
+                using_reference_object = True
+                placed_ok = True
+                if supplier_reanchored_support:
+                    moved = _move_object_family_to_target_aabb(
+                        source_scene_obj,
+                        aabb_eng,
+                        align_bottom=True,
+                    )
+                    if not moved:
+                        placed_ok = False
+                print(f"[DBG] using reference scene object for {name}: {source_blend_name}")
+                if placed_ok and item_id:
+                    item_roots[item_id] = source_scene_obj
+                    actual_aabb = _aabb_from_object_family_root(source_scene_obj)
+                    if actual_aabb is not None:
+                        item_actual_aabbs[item_id] = actual_aabb
+            else:
+                print(f"⚠️ {name}: mesh_path не найден в placement/asset или файл отсутствует: {mesh_path_raw}")
 
-        if (not placed_ok) and draw_aabb:
+        force_bbox = overlay_bbox_only or force_placeholder_bbox
+        highlight_bbox = bool(item_id and item_id in (highlight_item_ids or set()))
+        want_bbox_fallback = bool(bbox_fallback_missing_mesh and (not placed_ok) and (not using_reference_object))
+        skip_placeholder_bbox = _should_skip_placeholder_bbox(it)
+        if highlight_bbox:
+            _make_renderable_bbox_box(aabb_eng, name, coll_items)
+        if (not placed_ok) and (draw_aabb or force_bbox or want_bbox_fallback) and (not skip_placeholder_bbox):
             _add_aabb_box(aabb_eng, name, coll_items)
+            if force_bbox:
+                _add_aabb_label(aabb_eng, name, coll_items)
+
+    anchor_to_supported_ids: Dict[str, List[str]] = {}
+    for it in items:
+        if not isinstance(it, dict):
+            continue
+        item_id = str(it.get("id") or "").strip()
+        if not item_id:
+            continue
+        meta = it.get("meta") or {}
+        anchor_id = str(meta.get("supplier_support_anchor_target_id") or "").strip()
+        if meta.get("supplier_support_reanchored") and anchor_id:
+            anchor_to_supported_ids.setdefault(anchor_id, []).append(item_id)
+
+    def _aabb_overlap_3d(a: Dict[str, float], b: Dict[str, float], margin: float = 0.01) -> bool:
+        return (
+            a["x_max"] > b["x_min"] + margin
+            and a["x_min"] < b["x_max"] - margin
+            and a["y_max"] > b["y_min"] + margin
+            and a["y_min"] < b["y_max"] - margin
+            and a["z_max"] > b["z_min"] + margin
+            and a["z_min"] < b["z_max"] - margin
+        )
+
+    for anchor_id, supported_ids in anchor_to_supported_ids.items():
+        anchor_aabb = item_actual_aabbs.get(anchor_id)
+        anchor_root = item_roots.get(anchor_id)
+        if anchor_aabb is None:
+            continue
+        if anchor_root is None:
+            continue
+        planes = _extract_support_planes_from_object_family(anchor_root)
+        solver = MLSupportSolver(room_floor_z=z_floor)
+        placed_ids: List[str] = []
+        for item_id in supported_ids:
+            root = item_roots.get(item_id)
+            aabb = item_actual_aabbs.get(item_id)
+            if root is None or aabb is None:
+                continue
+            occupied_aabbs = [item_actual_aabbs[prev_id] for prev_id in placed_ids if prev_id in item_actual_aabbs]
+            solved = solver.solve(
+                item_aabb=aabb,
+                anchor_aabb=anchor_aabb,
+                planes=planes,
+                occupied_aabbs=occupied_aabbs,
+                mode=str(((items_by_id.get(item_id) or {}).get("meta") or {}).get("supplier_support_mode") or "top"),
+            )
+            if solved is None:
+                item_issue_reasons.setdefault(item_id, []).append("unsupported:no_plane_solution")
+                placed_ids.append(item_id)
+                continue
+            dx = 0.5 * (float(solved["x_min"]) + float(solved["x_max"])) - 0.5 * (float(aabb["x_min"]) + float(aabb["x_max"]))
+            dy = 0.5 * (float(solved["y_min"]) + float(solved["y_max"])) - 0.5 * (float(aabb["y_min"]) + float(aabb["y_max"]))
+            dz = float(solved["z_min"]) - float(aabb["z_min"])
+            _translate_object_family(root, mathutils.Vector((dx, dy, dz)))
+            actual_aabb = _aabb_from_object_family_root(root)
+            if actual_aabb is not None:
+                item_actual_aabbs[item_id] = actual_aabb
+            placed_ids.append(item_id)
+
+    diagnostic_item_ids: List[str] = []
+    for it in items:
+        item_id = str(it.get("id") or "").strip()
+        if not item_id:
+            continue
+        meta = it.get("meta") or {}
+        if meta.get("supplier_binding_applied") or meta.get("supplier_support_reanchored"):
+            diagnostic_item_ids.append(item_id)
+
+    all_collision_item_ids: List[str] = []
+    for it in items:
+        item_id = str(it.get("id") or "").strip()
+        if not item_id or item_id not in item_actual_aabbs:
+            continue
+        all_collision_item_ids.append(item_id)
+
+    for item_id in diagnostic_item_ids:
+        aabb = item_actual_aabbs.get(item_id)
+        if aabb is None:
+            continue
+        reasons = item_issue_reasons.setdefault(item_id, [])
+        if room_bb_min is not None and room_bb_max is not None:
+            margin = 0.02
+            if (
+                aabb["x_min"] < float(room_bb_min.x) - margin
+                or aabb["x_max"] > float(room_bb_max.x) + margin
+                or aabb["y_min"] < float(room_bb_min.y) - margin
+                or aabb["y_max"] > float(room_bb_max.y) + margin
+                or aabb["z_min"] < float(room_bb_min.z) - margin
+                or aabb["z_max"] > float(room_bb_max.z) + margin
+            ):
+                reasons.append("out_of_bounds")
+
+    for i, item_id_a in enumerate(diagnostic_item_ids):
+        aabb_a = item_actual_aabbs.get(item_id_a)
+        if aabb_a is None:
+            continue
+        meta_a = (items_by_id.get(item_id_a) or {}).get("meta") or {}
+        anchor_a = str(meta_a.get("supplier_support_anchor_target_id") or "").strip()
+        for item_id_b in all_collision_item_ids:
+            if item_id_b == item_id_a:
+                continue
+            aabb_b = item_actual_aabbs.get(item_id_b)
+            if aabb_b is None:
+                continue
+            meta_b = (items_by_id.get(item_id_b) or {}).get("meta") or {}
+            anchor_b = str(meta_b.get("supplier_support_anchor_target_id") or "").strip()
+            if anchor_a and anchor_a == item_id_b:
+                continue
+            if anchor_b and anchor_b == item_id_a:
+                continue
+            if _aabb_overlap_3d(aabb_a, aabb_b, margin=0.012):
+                item_issue_reasons.setdefault(item_id_a, []).append(f"collision:{item_id_b}")
+                if item_id_b in diagnostic_item_ids:
+                    item_issue_reasons.setdefault(item_id_b, []).append(f"collision:{item_id_a}")
+
+    for item_id, reasons in item_issue_reasons.items():
+        aabb = item_actual_aabbs.get(item_id)
+        if aabb is None or not reasons:
+            continue
+        _make_renderable_bbox_box(
+            aabb,
+            f"INVALID_{item_id}",
+            coll_items,
+            rgba=(0.85, 0.05, 0.05, 1.0),
+            thickness=0.03,
+        )
+        print(f"[DBG] invalid placement {item_id}: {sorted(set(reasons))}")
 
     _log(verbose, f"[Room] final room mode = {room_mode}")
 
-    _frame_camera_on_bounds(bb_min, bb_max)
-    _add_basic_lights(bb_min, bb_max)
-    _force_material_preview_if_ui()
+    if not use_reference_scene:
+        _frame_camera_on_bounds(bb_min, bb_max)
+        _add_basic_lights(bb_min, bb_max)
+        _force_material_preview_if_ui()
 
 # ============================================================
 # RUN
@@ -2426,15 +4153,12 @@ def build_scene(
 def main() -> None:
     args = _parse_argv(sys.argv)
 
-    glb_path = str(Path(args.glb).expanduser().resolve())
     json_path = str(Path(args.json).expanduser().resolve())
 
     keep_existing = not (args.rebuild_materials or args.no_keep_existing_mats)
 
     build_scene(
-        glb_path=glb_path,
         json_path=json_path,
-        import_glb=bool(args.import_glb),
         draw_aabb=bool(args.draw_aabb),
         force_tint=bool(args.force_tint),
         keep_existing_mats=keep_existing,
@@ -2442,10 +4166,20 @@ def main() -> None:
         env_textures_dir=str(Path(args.env_textures_dir).expanduser().resolve()),
         style_text=args.style_text,
         seed=int(args.seed or 0),
+        reference_blend=args.reference_blend,
+        overlay_bbox_only=bool(args.overlay_bbox_only),
+        bbox_fallback_missing_mesh=not bool(args.no_bbox_fallback),
+        highlight_item_ids=_parse_id_set(args.highlight_item_ids),
     )
+
+    if args.hide_room_shell:
+        _hide_room_shell_objects()
 
     if not args.no_pack_assets:
         _pack_assets_best_effort()
+
+    if not args.draw_aabb and not _parse_id_set(args.highlight_item_ids):
+        _set_overlay_helpers_render_visibility(False)
 
     if args.save_blend:
         out_blend = str(Path(args.save_blend).expanduser().resolve())
@@ -2457,6 +4191,7 @@ def main() -> None:
         os.makedirs(os.path.dirname(out_png), exist_ok=True)
 
         scene = bpy.context.scene
+        _configure_fast_render(scene)
         scene.render.image_settings.file_format = "PNG"
         scene.render.filepath = out_png
 
@@ -2466,6 +4201,29 @@ def main() -> None:
             pass
 
         bpy.ops.render.render(write_still=True)
+
+    if args.turntable_render_dir:
+        scene = bpy.context.scene
+        _configure_turntable_render(scene)
+        scene.render.image_settings.file_format = "PNG"
+        try:
+            scene.render.film_transparent = False
+        except Exception:
+            pass
+        room_bounds = _scene_room_bounds()
+        bb_min, bb_max = _visible_mesh_bounds(
+            mathutils.Vector((0.0, 0.0, 0.0)),
+            mathutils.Vector((5.0, 5.0, 3.0)),
+        )
+        _render_turntable_sequence(
+            Path(args.turntable_render_dir).expanduser().resolve(),
+            int(args.turntable_frames or 24),
+            bb_min,
+            bb_max,
+            elevation_deg=float(args.turntable_elevation_deg or 0.0),
+            room_bb_min=(room_bounds[0] if room_bounds else None),
+            room_bb_max=(room_bounds[1] if room_bounds else None),
+        )
 
 
 if __name__ == "__main__":

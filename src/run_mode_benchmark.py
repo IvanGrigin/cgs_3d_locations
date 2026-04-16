@@ -20,6 +20,9 @@ from typing import Any, Optional
 
 import yaml
 
+from pipeline_config import PLACER_SPECS
+from pipeline_runners import run_infinigen_clean, run_m3dlayout_clean
+
 
 # ============================================================
 # Конфиг
@@ -31,6 +34,9 @@ MODE_ALIASES: dict[str, tuple[str, str]] = {
     "random": ("cube", "random"),
     "relaxed": ("cube", "relaxed"),
     "llm": ("ollama_llm", "llm"),
+    "m3dlayout_ar": ("m3dlayout_ar", "m3dlayout_ar"),
+    "m3dlayout_diffusion": ("m3dlayout_diffusion", "m3dlayout_diffusion"),
+    "infinigen_clean": ("infinigen_clean", "infinigen_clean"),
 }
 
 DEFAULT_MODES = ["random", "relaxed", "llm"]
@@ -263,6 +269,14 @@ def build_runtime_paths(cfg: dict[str, Any], cfg_base_dir: Path) -> dict[str, st
     runtime["DIFFUSCENE_REMOTE_SCRIPT"] = resolve_local_path(must_get(cfg, "local.scripts.diffuscene_remote"), cfg_base_dir)
     runtime["OLLAMA_LLM_SCRIPT"] = resolve_local_path(must_get(cfg, "local.scripts.ollama_layout"), cfg_base_dir)
     runtime["NORMALIZE_JSON_SCRIPT"] = resolve_local_path(must_get(cfg, "local.scripts.normalize_scene_format"), cfg_base_dir)
+    runtime["M3DLAYOUT_SCRIPT"] = resolve_local_path(
+        get_nested(cfg, "local.scripts.m3dlayout", "src/Plasement/run_m3dlayout.py"),
+        cfg_base_dir,
+    )
+    runtime["INFINIGEN_CLEAN_SCRIPT"] = resolve_local_path(
+        get_nested(cfg, "local.scripts.infinigen_clean", "src/Plasement/run_infinigen_clean.py"),
+        cfg_base_dir,
+    )
 
     evaluate_scene_script = get_nested(cfg, "local.scripts.evaluate_unified_scene", None)
     if evaluate_scene_script is None:
@@ -274,7 +288,6 @@ def build_runtime_paths(cfg: dict[str, Any], cfg_base_dir: Path) -> dict[str, st
         model_info_json = "data/sourse/3D-FRONT/3D-FUTURE-model/model_info.json"
     runtime["MODEL_INFO_JSON"] = resolve_local_path(model_info_json, cfg_base_dir)
 
-    runtime["DEFAULT_ROOM_GLB"] = resolve_local_path(must_get(cfg, "local.room.default_glb"), cfg_base_dir)
     runtime["DEFAULT_ROOM_JSON"] = resolve_local_path(must_get(cfg, "local.room.default_json"), cfg_base_dir)
 
     runtime["LEGACY_OBJECTS_JSON"] = resolve_local_path(must_get(cfg, "local.input.objects_json"), cfg_base_dir)
@@ -282,6 +295,34 @@ def build_runtime_paths(cfg: dict[str, Any], cfg_base_dir: Path) -> dict[str, st
 
     runtime["TMP_ROOT"] = resolve_local_path(must_get(cfg, "local.output.tmp_root"), cfg_base_dir)
     return runtime
+
+
+def derive_effective_args_for_placer(args: argparse.Namespace, placer: str) -> argparse.Namespace:
+    eff = argparse.Namespace(**vars(args))
+    cfg = getattr(args, "_cfg", {})
+    cfg_base_dir = getattr(args, "_cfg_base_dir", None)
+
+    if getattr(eff, "remote_conda_env", None) is None:
+        if placer in {"m3dlayout_ar", "m3dlayout_diffusion"}:
+            cfg_val = get_nested(cfg, "remote.m3dlayout.conda_env", None)
+            if cfg_val is not None:
+                eff.remote_conda_env = str(cfg_val)
+        elif placer == "infinigen_clean":
+            cfg_val = get_nested(cfg, "remote.infinigen.conda_env", None)
+            if cfg_val is not None:
+                eff.remote_conda_env = str(cfg_val)
+
+    if getattr(eff, "infinigen_src", None) is None:
+        cfg_val = get_nested(cfg, "local.infinigen.src", None)
+        if cfg_val is not None and cfg_base_dir is not None:
+            eff.infinigen_src = resolve_local_path(str(cfg_val), cfg_base_dir)
+
+    if getattr(eff, "remote_infinigen_src", None) is None:
+        cfg_val = get_nested(cfg, "remote.infinigen.src", None)
+        if cfg_val is not None:
+            eff.remote_infinigen_src = str(cfg_val)
+
+    return eff
 
 
 # ============================================================
@@ -862,6 +903,9 @@ def run_single_candidate(
 
     chooser_seed = int.from_bytes(secrets.token_bytes(8), "big")
     attempt_seed = int.from_bytes(secrets.token_bytes(8), "big")
+    placer_args = derive_effective_args_for_placer(args, placer)
+    placer_spec = PLACER_SPECS.get(placer)
+    chooser_required = bool(placer_spec.get("requires_object_selection", True)) if placer_spec else True
 
     manifest_path = candidate_dir / "run_manifest.json"
     manifest = {
@@ -877,31 +921,34 @@ def run_single_candidate(
     }
     write_json(manifest_path, manifest)
 
-    # choose
-    t0 = time.perf_counter()
-    objects_path = run_choose_stage(
-        args=args,
-        cfg_runtime=cfg_runtime,
-        room_path=room_path,
-        prompt_text=prompt_text,
-        run_dir=candidate_dir,
-        seed=chooser_seed,
-        logs_dir=logs_dir,
-    )
-    t_choose = time.perf_counter() - t0
+    objects_path: Optional[Path] = None
+    normalized_objects_path: Optional[Path] = None
+    t_choose = 0.0
+    t_norm_objects = 0.0
+    if chooser_required:
+        t0 = time.perf_counter()
+        objects_path = run_choose_stage(
+            args=args,
+            cfg_runtime=cfg_runtime,
+            room_path=room_path,
+            prompt_text=prompt_text,
+            run_dir=candidate_dir,
+            seed=chooser_seed,
+            logs_dir=logs_dir,
+        )
+        t_choose = time.perf_counter() - t0
 
-    # normalize objects
-    normalized_objects_path = candidate_dir / "objects.v1.json"
-    t0 = time.perf_counter()
-    normalize_json_artifact(
-        cfg_runtime=cfg_runtime,
-        input_path=objects_path,
-        output_path=normalized_objects_path,
-        target="objects",
-        logs_dir=logs_dir,
-        tag="normalize_objects",
-    )
-    t_norm_objects = time.perf_counter() - t0
+        normalized_objects_path = candidate_dir / "objects.v1.json"
+        t0 = time.perf_counter()
+        normalize_json_artifact(
+            cfg_runtime=cfg_runtime,
+            input_path=objects_path,
+            output_path=normalized_objects_path,
+            target="objects",
+            logs_dir=logs_dir,
+            tag="normalize_objects",
+        )
+        t_norm_objects = time.perf_counter() - t0
 
     placement_out = candidate_dir / f"placement_{placer}_{mode}.json"
     normalized_placement_path = candidate_dir / "placement.v1.json"
@@ -911,6 +958,8 @@ def run_single_candidate(
     # placement
     t0 = time.perf_counter()
     if placer == "cube":
+        if objects_path is None:
+            raise RuntimeError(f"placer={placer} требует chooser objects")
         run_cube_placer(
             cfg_runtime=cfg_runtime,
             room_path=room_path,
@@ -920,9 +969,11 @@ def run_single_candidate(
             logs_dir=logs_dir,
         )
     elif placer == "diffuscene_remote":
+        if objects_path is None:
+            raise RuntimeError(f"placer={placer} требует chooser objects")
         run_diffuscene_remote_placer(
             cfg_runtime=cfg_runtime,
-            args=args,
+            args=placer_args,
             room_path=room_path,
             objects_path=objects_path,
             mode=mode,
@@ -932,19 +983,55 @@ def run_single_candidate(
             logs_dir=logs_dir,
         )
     elif placer == "ollama_llm":
+        if objects_path is None:
+            raise RuntimeError(f"placer={placer} требует chooser objects")
         run_ollama_llm_placer(
             cfg_runtime=cfg_runtime,
-            args=args,
+            args=placer_args,
             room_path=room_path,
             objects_path=objects_path,
             mode=mode,
             out_path=placement_out,
             logs_dir=logs_dir,
         )
+    elif placer == "m3dlayout_ar":
+        run_m3dlayout_clean(
+            cfg_runtime=cfg_runtime,
+            args=placer_args,
+            room_path=room_path,
+            objects_path=objects_path,
+            prompt_text=prompt_text,
+            seed=attempt_seed,
+            out_path=placement_out,
+            model_type="autoregressive",
+        )
+    elif placer == "m3dlayout_diffusion":
+        run_m3dlayout_clean(
+            cfg_runtime=cfg_runtime,
+            args=placer_args,
+            room_path=room_path,
+            objects_path=objects_path,
+            prompt_text=prompt_text,
+            seed=attempt_seed,
+            out_path=placement_out,
+            model_type="diffusion",
+        )
+    elif placer == "infinigen_clean":
+        run_infinigen_clean(
+            cfg_runtime=cfg_runtime,
+            args=placer_args,
+            room_path=room_path,
+            objects_path=objects_path,
+            seed=attempt_seed,
+            out_path=placement_out,
+            run_dir=candidate_dir,
+        )
     else:
+        if objects_path is None:
+            raise RuntimeError(f"placer={placer} требует chooser objects")
         run_ml_placer(
             cfg_runtime=cfg_runtime,
-            args=args,
+            args=placer_args,
             room_path=room_path,
             objects_path=objects_path,
             placer=placer,
@@ -1010,8 +1097,8 @@ def run_single_candidate(
 
     manifest = load_json(manifest_path)
     manifest.update({
-        "objects_legacy": str(objects_path.resolve()),
-        "objects_v1": str(normalized_objects_path.resolve()),
+        "objects_legacy": str(objects_path.resolve()) if objects_path else None,
+        "objects_v1": str(normalized_objects_path.resolve()) if normalized_objects_path else None,
         "placement_legacy": str(placement_out.resolve()),
         "placement_v1": str(normalized_placement_path.resolve()),
         "scene_v1": str(normalized_scene_path.resolve()),
@@ -1303,7 +1390,7 @@ def build_cli() -> argparse.ArgumentParser:
     p.add_argument(
         "--modes",
         default="random,relaxed,llm",
-        help="Список режимов через запятую: random,relaxed,llm",
+        help="Список режимов через запятую: random,relaxed,llm,m3dlayout_ar,m3dlayout_diffusion,infinigen_clean",
     )
     p.add_argument(
         "--count-per-mode",
@@ -1326,7 +1413,7 @@ def build_cli() -> argparse.ArgumentParser:
     # Blender в этом бенчмарке намеренно не используем
     p.add_argument("--blender", default=None)
     p.add_argument("--headless", action="store_true")
-    p.add_argument("--no-import-glb", action="store_true")
+    p.add_argument("--no-import-glb", action="store_true", help="Compat flag, unused in this benchmark")
     p.add_argument("--save-blend", default=None)
     p.add_argument("--render", default=None)
 
@@ -1339,6 +1426,9 @@ def build_cli() -> argparse.ArgumentParser:
     p.add_argument("--remote-port", type=int, default=None)
     p.add_argument("--remote-user", default=None)
     p.add_argument("--remote-key", default=None)
+    p.add_argument("--remote-conda-env", default=None)
+    p.add_argument("--infinigen-src", default=None)
+    p.add_argument("--remote-infinigen-src", default=None)
 
     p.add_argument("--ollama-url", default=None)
     p.add_argument("--ollama-model", default=None)
