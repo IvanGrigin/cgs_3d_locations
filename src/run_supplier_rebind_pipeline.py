@@ -119,40 +119,6 @@ def _run_blender_render(args: argparse.Namespace, scene_json_path: Path, *, refe
     subprocess.run(cmd, check=True)
 
 
-def _derive_prerepair_scene_path(scene_out_path: Path) -> Path:
-    return scene_out_path.with_name(f"{scene_out_path.stem}.prerepair{scene_out_path.suffix}")
-
-
-def _run_repair_stage(args: argparse.Namespace, scene_json_path: Path, *, output_path: Path) -> Path:
-    repair_mode = str(args.repair_mode or "none").strip().lower()
-    if repair_mode == "none":
-        return scene_json_path
-
-    try:
-        from .ml.scene_repair_solver import repair_scene_file
-    except ImportError:
-        from ml.scene_repair_solver import repair_scene_file
-
-    repaired_path, _ = repair_scene_file(
-        scene_path=scene_json_path,
-        out_path=output_path,
-        mode=repair_mode,
-        scope=str(args.repair_scope or "supplier"),
-        model_path=args.repair_model,
-        meta_path=args.repair_meta,
-        device=str(args.repair_device or "auto"),
-        infer_steps=int(args.repair_infer_steps or 50),
-        local_steps=int(args.repair_local_steps or 7),
-        local_samples_per_step=int(args.repair_local_samples_per_step or 96),
-        rounds=int(args.repair_rounds or 2),
-        max_bad=int(args.repair_max_bad) if args.repair_max_bad is not None else None,
-        room_margin=float(args.repair_room_margin or 0.02),
-        collision_margin=float(args.repair_collision_margin or 0.012),
-        seed=int(args.repair_seed or 0),
-    )
-    return repaired_path
-
-
 def build_cli() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(description="Run the supplier rebind pipeline end to end for a prepared scene.")
     ap.add_argument("--targets", required=True, help="Path to base_layout_targets.json")
@@ -182,19 +148,6 @@ def build_cli() -> argparse.ArgumentParser:
     ap.add_argument("--render", default=None, help="Optional final render path")
     ap.add_argument("--force-tint", action="store_true", help="Pass force tint to Blender scene builder")
     ap.add_argument("--no-pack-assets", action="store_true", help="Do not pack assets when saving .blend")
-    ap.add_argument("--repair-mode", choices=["none", "auto", "trained", "local"], default="none", help="Optional post-replacement scene repair stage; prefer trained for learned diffusion repair")
-    ap.add_argument("--repair-scope", choices=["supplier", "all"], default="supplier", help="Which placements the repair stage may move")
-    ap.add_argument("--repair-model", default=None, help="Optional trained repair checkpoint; defaults to src/ml/models/diffusion_model_20260212.pt when present")
-    ap.add_argument("--repair-meta", default=None, help="Optional repair meta json with cat2id")
-    ap.add_argument("--repair-device", choices=["auto", "cpu", "mps", "cuda"], default="auto", help="Device for trained repair inference")
-    ap.add_argument("--repair-infer-steps", type=int, default=50, help="Denoising steps for trained repair inference")
-    ap.add_argument("--repair-local-steps", type=int, default=7, help="Noise levels for local debug fallback")
-    ap.add_argument("--repair-local-samples-per-step", type=int, default=96, help="Proposal count per local debug fallback step")
-    ap.add_argument("--repair-rounds", type=int, default=2, help="How many repair passes to run")
-    ap.add_argument("--repair-max-bad", type=int, default=None, help="Repair only first K invalid placements per pass")
-    ap.add_argument("--repair-room-margin", type=float, default=0.02, help="Room-boundary tolerance for repair validation")
-    ap.add_argument("--repair-collision-margin", type=float, default=0.012, help="Collision margin for repair validation")
-    ap.add_argument("--repair-seed", type=int, default=0, help="Seed for local repair fallback")
     ap.add_argument("--manifest-out", default=None, help="Optional manifest JSON with all pipeline outputs")
     return ap
 
@@ -223,7 +176,6 @@ def main() -> None:
     bindings_out = Path(args.bindings_out).expanduser().resolve() if args.bindings_out else (run_dir / f"base_supplier_bindings.{suffix}.json")
     assets_bindings_out = Path(args.assets_bindings_out).expanduser().resolve() if args.assets_bindings_out else (run_dir / f"{bindings_out.stem}.assets.json")
     scene_out = Path(args.scene_out).expanduser().resolve() if args.scene_out else (run_dir / f"scene_supplier.{suffix}.v1.json")
-    prerepair_scene_out = _derive_prerepair_scene_path(scene_out) if str(args.repair_mode or "none").strip().lower() != "none" else scene_out
     assets_dir = Path(args.assets_dir).expanduser().resolve() if args.assets_dir else (run_dir / "supplier_assets")
     assets_db = Path(args.assets_db).expanduser().resolve() if args.assets_db else (run_dir / "supplier_scene_assets.db")
 
@@ -248,14 +200,9 @@ def main() -> None:
     final_scene_path = apply_supplier_bindings_to_json(
         input_json_path=input_scene_path,
         bindings_json_path=assets_bindings_path,
-        output_json_path=prerepair_scene_out,
+        output_json_path=scene_out,
         require_local_asset=bool(args.require_local_asset),
     )
-
-    pre_repair_scene_path: Path | None = None
-    if str(args.repair_mode or "none").strip().lower() != "none":
-        pre_repair_scene_path = Path(final_scene_path).expanduser().resolve()
-        final_scene_path = _run_repair_stage(args, pre_repair_scene_path, output_path=scene_out)
 
     reference_blend = _infer_reference_blend(input_scene_path) or _infer_reference_blend(final_scene_path)
     _run_blender_render(args, final_scene_path, reference_blend=reference_blend)
@@ -268,31 +215,14 @@ def main() -> None:
         "bindings_json": str(bindings_out.resolve()),
         "assets_bindings_json": str(Path(assets_bindings_path).resolve()),
         "scene_out_json": str(Path(final_scene_path).resolve()),
-        "scene_pre_repair_json": str(pre_repair_scene_path.resolve()) if pre_repair_scene_path else None,
         "assets_dir": str(assets_dir.resolve()),
         "assets_db": str(assets_db.resolve()),
         "catalog_row_count": len(rows),
         "llm_settings": llm_settings,
         "require_local_asset": bool(args.require_local_asset),
-        "repair_settings": {
-            "mode": str(args.repair_mode or "none"),
-            "scope": str(args.repair_scope or "supplier"),
-            "model": str(args.repair_model or ""),
-            "meta": str(args.repair_meta or ""),
-            "device": str(args.repair_device or "auto"),
-            "infer_steps": int(args.repair_infer_steps or 50),
-            "local_steps": int(args.repair_local_steps or 7),
-            "local_samples_per_step": int(args.repair_local_samples_per_step or 96),
-            "rounds": int(args.repair_rounds or 2),
-            "max_bad": int(args.repair_max_bad) if args.repair_max_bad is not None else None,
-            "room_margin": float(args.repair_room_margin or 0.02),
-            "collision_margin": float(args.repair_collision_margin or 0.012),
-            "seed": int(args.repair_seed or 0),
-        },
         "bindings_meta": (read_json(bindings_out).get("meta") or {}),
         "asset_acquisition_meta": (read_json(assets_bindings_path).get("meta") or {}).get("asset_acquisition"),
         "scene_supplier_summary": (final_scene_data.get("meta") or {}).get("supplier_binding_summary"),
-        "scene_repair_summary": (final_scene_data.get("meta") or {}).get("scene_repair_solver"),
     }
     manifest_out = Path(args.manifest_out).expanduser().resolve() if args.manifest_out else (run_dir / f"supplier_pipeline.{suffix}.manifest.json")
     write_json(manifest_out, manifest)

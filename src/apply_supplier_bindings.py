@@ -189,6 +189,13 @@ def _related_generated_item_actions(
         "BookColumnFactory",
         "NatureShelfTrinketsFactory",
         "DeskLampFactory",
+        "FruitFactory",
+    }
+    strict_top_categories = {
+        "DeskLampFactory",
+        "FruitFactory",
+        "PlantContainerFactory",
+        "LargePlantContainerFactory",
     }
     bed_soft_categories = {
         "BlanketFactory",
@@ -238,13 +245,25 @@ def _related_generated_item_actions(
                         _xy_inside_expanded(anchor_aabb, item_pos[:2], margin=0.14)
                         and anchor_top - 0.08 <= item_aabb["z_min"] <= anchor_top + 0.4
                     )
-                    if inside_or_touching_storage or on_storage_top:
+                    if on_storage_top or (inside_or_touching_storage and category in strict_top_categories):
                         rel_x, rel_y = _normalized_anchor_xy(anchor_aabb, item_pos)
                         actions[item_id] = {
                             "action": "reanchor",
                             "anchor_id": anchor_id,
                             "anchor_group": anchor_group,
-                            "support_mode": "top" if on_storage_top else "volume",
+                            "support_mode": "top",
+                            "anchor_aabb": deepcopy(anchor_aabb),
+                            "rel_x": rel_x,
+                            "rel_y": rel_y,
+                            "rel_z": _normalized_anchor_z(anchor_aabb, item_aabb),
+                        }
+                    elif inside_or_touching_storage:
+                        rel_x, rel_y = _normalized_anchor_xy(anchor_aabb, item_pos)
+                        actions[item_id] = {
+                            "action": "reanchor",
+                            "anchor_id": anchor_id,
+                            "anchor_group": anchor_group,
+                            "support_mode": "volume",
                             "anchor_aabb": deepcopy(anchor_aabb),
                             "rel_x": rel_x,
                             "rel_y": rel_y,
@@ -380,20 +399,6 @@ def _replacement_mesh_fit_mode(binding: dict[str, Any], item: dict[str, Any]) ->
 
 
 def _should_keep_original_scene_item(item: dict[str, Any], binding: dict[str, Any]) -> bool:
-    category = str(item.get("category") or "").strip().lower()
-    semantic_group = str(binding.get("semantic_group") or "").strip().lower()
-    if category in {
-        "ceilinglightfactory",
-        "floorlampfactory",
-        "desklampfactory",
-    }:
-        return True
-    if semantic_group in {
-        "lamp_ceiling",
-        "lamp_floor",
-        "lamp_table",
-    }:
-        return True
     return False
 
 
@@ -615,14 +620,8 @@ def apply_supplier_bindings_to_data(
         cx = anchor_aabb_new["x_min"] + rel_x * new_width
         cy = anchor_aabb_new["y_min"] + rel_y * new_depth
 
-        support_sink = 0.025
-        if anchor_group in {"shelf", "wardrobe"}:
-            support_sink = 0.055
-        elif anchor_group in {"dresser", "tv_stand"}:
-            support_sink = 0.035
-
         if support_mode == "top":
-            z_min = anchor_aabb_new["z_max"] - support_sink
+            z_min = anchor_aabb_new["z_max"] + 0.004
         else:
             usable_height = max(new_height - 0.14, item_size[2] + 0.02)
             z_min = anchor_aabb_new["z_min"] + 0.07 + rel_z * usable_height

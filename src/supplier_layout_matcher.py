@@ -637,14 +637,25 @@ def _same_family(group_a: str, group_b: str) -> bool:
     if group_a == group_b:
         return True
     families = [
-        {"lamp_ceiling", "lamp_floor", "lamp_wall"},
         {"desk", "side_table"},
         {"coffee_table", "side_table"},
         {"chair", "armchair"},
-        {"shelf", "tv_stand", "dresser", "wardrobe"},
-        {"dresser", "wardrobe", "nightstand"},
+        {"dresser", "nightstand"},
+        {"shelf", "tv_stand"},
     ]
     return any(group_a in fam and group_b in fam for fam in families)
+
+
+def _target_requires_exact_group(target_group: str) -> bool:
+    return target_group in {
+        "bed",
+        "desk",
+        "shelf",
+        "wardrobe",
+        "lamp_table",
+        "lamp_floor",
+        "lamp_ceiling",
+    }
 
 
 def _fits_inside_bbox(target_size_m: list[float], candidate_size_m: list[float], tolerance_ratio: float = 0.03) -> tuple[bool, dict[str, Any]]:
@@ -860,9 +871,9 @@ def _axis_distance_info(target: dict[str, Any], row: dict[str, Any], fit_breakdo
 def _min_fill_policy(group: str) -> dict[str, float] | None:
     policies: dict[str, dict[str, float]] = {
         "bed": {
-            "width_min_ratio": 0.75,
-            "depth_min_ratio": 0.75,
-            "height_min_ratio": 0.55,
+            "width_min_ratio": 0.68,
+            "depth_min_ratio": 0.68,
+            "height_min_ratio": 0.45,
         },
         "desk": {
             "width_min_ratio": 0.55,
@@ -880,24 +891,24 @@ def _min_fill_policy(group: str) -> dict[str, float] | None:
             "height_min_ratio": 0.7,
         },
         "dresser": {
-            "width_min_ratio": 0.3,
-            "depth_min_ratio": 0.25,
-            "height_min_ratio": 0.4,
+            "width_min_ratio": 0.45,
+            "depth_min_ratio": 0.35,
+            "height_min_ratio": 0.55,
         },
         "tv_stand": {
-            "width_min_ratio": 0.3,
-            "depth_min_ratio": 0.25,
-            "height_min_ratio": 0.35,
-        },
-        "shelf": {
-            "width_min_ratio": 0.25,
-            "depth_min_ratio": 0.2,
-            "height_min_ratio": 0.3,
-        },
-        "wardrobe": {
-            "width_min_ratio": 0.35,
+            "width_min_ratio": 0.4,
             "depth_min_ratio": 0.3,
             "height_min_ratio": 0.45,
+        },
+        "shelf": {
+            "width_min_ratio": 0.45,
+            "depth_min_ratio": 0.28,
+            "height_min_ratio": 0.55,
+        },
+        "wardrobe": {
+            "width_min_ratio": 0.55,
+            "depth_min_ratio": 0.4,
+            "height_min_ratio": 0.75,
         },
         "lamp_floor": {
             "width_min_ratio": 0.25,
@@ -1038,6 +1049,9 @@ def _category_match_info(target: dict[str, Any], row: dict[str, Any]) -> tuple[i
     if target_group == candidate_group:
         breakdown["category_match"] = "exact_group"
         return 0, breakdown
+    if _target_requires_exact_group(target_group):
+        breakdown["category_match"] = "exact_group_required_mismatch"
+        return 3, breakdown
     if target_group and candidate_group and _same_family(target_group, candidate_group):
         breakdown["category_match"] = "same_family"
         return 1, breakdown
@@ -1333,17 +1347,6 @@ def _llm_candidate_payload(candidate: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _ceiling_title_smallness_rank(title: Any) -> int:
-    text = str(title or "").strip().lower()
-    if "extra small" in text:
-        return 3
-    if re.search(r"\bsmall\b", text):
-        return 2
-    if "medium" in text:
-        return 1
-    return 0
-
-
 def _llm_rerank_candidates(
     *,
     target: dict[str, Any],
@@ -1460,30 +1463,6 @@ def _llm_rerank_candidates(
         ordered_keys = [chosen_key] + [key for key in ordered_keys if key != chosen_key]
     ordered_keys += [key for key in candidate_map if key not in ordered_keys]
 
-    target_group = str(target.get("semantic_group") or "").strip()
-    if target_group == "lamp_ceiling":
-        chosen_candidate = candidate_map.get(chosen_key) or {}
-        chosen_smallness = _ceiling_title_smallness_rank(chosen_candidate.get("title"))
-        if chosen_smallness >= 3:
-            chosen_breakdown = chosen_candidate.get("score_breakdown") if isinstance(chosen_candidate.get("score_breakdown"), dict) else {}
-            chosen_fit = float(chosen_breakdown.get("width_distance") or 999999.0) + float(chosen_breakdown.get("depth_distance") or 999999.0)
-            best_key = chosen_key
-            best_fit = chosen_fit
-            best_smallness = chosen_smallness
-            for key, candidate in candidate_map.items():
-                breakdown = candidate.get("score_breakdown") if isinstance(candidate.get("score_breakdown"), dict) else {}
-                fit = float(breakdown.get("width_distance") or 999999.0) + float(breakdown.get("depth_distance") or 999999.0)
-                smallness = _ceiling_title_smallness_rank(candidate.get("title"))
-                if smallness >= chosen_smallness:
-                    continue
-                if fit + 0.15 < best_fit or (abs(fit - best_fit) <= 0.05 and smallness < best_smallness):
-                    best_key = key
-                    best_fit = fit
-                    best_smallness = smallness
-            if best_key != chosen_key:
-                chosen_key = best_key
-                ordered_keys = [best_key] + [key for key in ordered_keys if key != best_key]
-
     llm_rank_map = {key: index + 1 for index, key in enumerate(ordered_keys)}
     reranked_slice = [dict(candidate_map[key], llm_rank=llm_rank_map[key]) for key in ordered_keys]
     for candidate in top_candidates[top_n:]:
@@ -1544,6 +1523,8 @@ def _rank_candidate(target: dict[str, Any], row: dict[str, Any], context: dict[s
     has_model_link = bool(row.get("model_download_url") or row.get("model_page_url"))
     text_overlap = len(query_breakdown.get("query_overlap_tokens") or [])
     asset_priority = 0 if has_real_asset else 1 if has_downloadable_asset else 2
+    target_group = str(target.get("semantic_group") or "").strip()
+    strict_group_asset_priority = asset_priority if _target_requires_exact_group(target_group) else 0
     effective_size_rank = 1 if relaxed_missing_size else size_rank
     width_distance = round(float(axis_info.get("width_distance") or 999999.0), 6)
     height_distance = round(float(axis_info.get("height_distance") or 999999.0), 6)
@@ -1566,6 +1547,7 @@ def _rank_candidate(target: dict[str, Any], row: dict[str, Any], context: dict[s
 
     rank_key = (
         category_rank,
+        strict_group_asset_priority,
         effective_size_rank,
         asset_priority,
         width_distance,
@@ -1611,6 +1593,7 @@ def _rank_candidate(target: dict[str, Any], row: dict[str, Any], context: dict[s
         "has_real_asset": has_real_asset,
         "has_downloadable_asset": has_downloadable_asset,
         "has_model_url": has_model_link,
+        "strict_group_asset_priority": strict_group_asset_priority,
         "text_overlap_count": text_overlap,
         "price_distance_ratio": round(price_distance_ratio, 6) if price_distance_ratio is not None else None,
         "ranking_order": ["category", "bbox_fit", "asset_ready", "width", "height", "depth", "query_match", "user_preferences", "prompt_color", "design"],

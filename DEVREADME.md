@@ -1,68 +1,124 @@
-## Использование вируального окружения
-### Создать виртуальное окружение
+## Dev Runbook
+
+### Локальное окружение
+```bash
 python3 -m venv .venv
-### Запустить виртуальное окружение
 source .venv/bin/activate
-### Загрузить рабочие библиотеки
 pip install -r requirements.txt
-### Добавить зависимости
-pip install some_libs
-pip freeze > requirements.txt
+```
 
-a01@MacBook-Pro--Ivan ~ % ssh -p 32172 root@1.208.108.242 -L 8080:localhost:8080
-
-
-python3 src/run_pipeline.py кровать шкаф кресло стол стул \
-  --placer cube \
-  --modes random \
-  --room data/input/room_rec.json \
-  --save-blend out/interior.blend \
-  --render out/interior.png
-
-python3 src/run_pipeline.py кровать шкаф кресло стол стул \
-  --placer cube \
-  --modes relaxed \
-  --room data/input/room_rec.json \
-  --save-blend out/interior.blend \
-  --render out/interior.png
-
-python3 src/run_pipeline.py \
-  --placer cube \
-  --prompt "classic cozy bedroom with small bed, nightstands, wardrobe and lamp" \
-  --room data/input/room_rec.json \
-  --save-blend out/interior.blend \
-  --render out/interior.png
-
-python3 src/run_pipeline.py кровать шкаф кресло стол стул \
-  --placer diffuscene_remote \
-  --room data/input/room_rec.json \
-  --remote-runner scripts/run_diffuscene_remote.sh \
-  --save-blend out/diffuscene_remote.blend \
-  --render out/diffuscene_remote.png
-
+### SSH на remote
+```bash
 ssh -p 32172 root@1.208.108.242
+```
 
-Запустить туннель на сервер 
+### Ollama tunnel с remote
+```bash
 ssh -p 32172 -N -L 11435:127.0.0.1:11434 root@1.208.108.242
 curl http://127.0.0.1:11435/api/tags
+```
 
-python3 src/run_pipeline.py кровать шкаф кресло стол стул \
-  --placer ollama_llm \
-  --room data/input/room_rec.json \
+## Основной pipeline
+
+### M3DLayout autoregressive
+```bash
+python3 src/run_pipeline.py \
+  --placer m3dlayout_ar \
+  --room data/input/room.json \
+  --prompt "The room has a double bed and two nightstands." \
+  --remote-host 1.208.108.242 \
+  --remote-port 32172 \
+  --remote-user root \
+  --remote-key ~/.ssh/id_ed25519 \
+  --remote-conda-env m3dlayout \
+  --skip-blender \
+  --keep-tmp
+```
+
+### M3DLayout diffusion
+```bash
+python3 src/run_pipeline.py \
+  --placer m3dlayout_diffusion \
+  --room data/input/room.json \
+  --prompt "The room has a double bed and two nightstands." \
+  --remote-host 1.208.108.242 \
+  --remote-port 32172 \
+  --remote-user root \
+  --remote-key ~/.ssh/id_ed25519 \
+  --remote-conda-env m3dlayout \
+  --skip-blender \
+  --keep-tmp
+```
+
+### Infinigen clean
+```bash
+python3 src/run_pipeline.py \
+  --placer infinigen_clean \
+  --room data/input/room.json \
+  --prompt "placeholder" \
+  --remote-host 1.208.108.242 \
+  --remote-port 32172 \
+  --remote-user root \
+  --remote-key ~/.ssh/id_ed25519 \
+  --remote-conda-env infinigen \
+  --remote-infinigen-src /workspace/infinigen/src \
+  --skip-blender \
+  --keep-tmp
+```
+
+## Benchmark
+
+### Benchmark для M3DLayout и Infinigen
+```bash
+python3 src/run_mode_benchmark.py \
+  --room data/input/room.json \
+  --prompt "The room has a double bed and two nightstands." \
+  --modes m3dlayout_ar,m3dlayout_diffusion,infinigen_clean \
+  --count-per-mode 5 \
+  --remote-host 1.208.108.242 \
+  --remote-port 32172 \
+  --remote-user root \
+  --remote-key ~/.ssh/id_ed25519 \
+  --keep-tmp
+```
+
+## Quality Search
+
+### Quality search по M3DLayout и Infinigen
+```bash
+python3 src/run_quality_search.py \
+  --room data/input/room.json \
+  --prompt "The room has a double bed and two nightstands." \
+  --stage-sequence m3dlayout_ar:m3dlayout_ar,m3dlayout_diffusion:m3dlayout_diffusion,infinigen_clean:infinigen_clean \
+  --remote-host 1.208.108.242 \
+  --remote-port 32172 \
+  --remote-user root \
+  --remote-key ~/.ssh/id_ed25519 \
+  --skip-blender \
+  --keep-tmp
+```
+
+## Примечания
+
+- `run_pipeline.py`, `run_mode_benchmark.py` и `run_quality_search.py` больше не требуют GLB-комнаты для Blender-сборки сцены.
+- `--no-import-glb` и `--glb` оставлены только для совместимости и в рабочих командах не нужны.
+- Если remote defaults уже записаны в `config/paths.yaml`, можно не передавать `--remote-host`, `--remote-port`, `--remote-user`, `--remote-key`, `--remote-conda-env`, `--remote-infinigen-src` вручную.
+- Для `infinigen_clean` prompt сейчас технический и на сам placer не влияет.
+
+
+python3 src/run_pipeline.py \
+  --placer infinigen_clean \
+  --modes infinigen_clean \
+  --room data/input/custom_rooms/bedroom_supplier_fallback_20260416.json \
+  --prompt-file data/input/custom_rooms/bedroom_supplier_fallback_20260416.prompt.txt \
   --ollama-url http://127.0.0.1:11435 \
   --ollama-model gpt-oss:20b \
-  --ollama-timeout 300 \
-  --ollama-temperature 0.1 \
-  --ollama-max-attempts 8 \
-  --save-blend out/ollama_llm.blend \
-  --render out/ollama_llm.png
-
-python src/Appraiser/appraiser.py \                                                                       
-  --scene data/output/scene.v1.json \
-  --prompt "cozy master bedroom with king-size bed, 2 nightstands, wardrobe, ceiling lamp" \
-  --mode hybrid \
-  --llm-base-url http://127.0.0.1:11434 \
-  --judge-model qwen3:30b \
-  --judge-model gpt-oss:20b \
-  --chief-model mistral-small3.2:24b \
-  --out out/appraisal.json
+  --supplier-catalog-json data/sourse/suppliers/supplier_product_full.json \
+  --supplier-top-k 12 \
+  --supplier-llm-provider ollama \
+  --supplier-llm-top-n 6 \
+  --supplier-require-local-asset \
+  --blender /Applications/Blender.app/Contents/MacOS/Blender \
+  --headless \
+  --no-bbox-fallback \
+  --run-dir out/custom_rooms/bedroom_supplier_fallback_20260416/run_01

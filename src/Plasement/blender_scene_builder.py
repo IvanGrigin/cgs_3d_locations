@@ -326,6 +326,34 @@ def _filter_imported_mesh_outliers(
     return filtered_objs, dropped
 
 
+def _drop_material_preview_meshes(
+    objs: List[bpy.types.Object],
+) -> Tuple[List[bpy.types.Object], List[str]]:
+    mesh_objs = [o for o in objs if o.type == "MESH"]
+    if len(mesh_objs) < 2:
+        return objs, []
+
+    non_preview_meshes = []
+    dropped_names: List[str] = []
+    for obj in mesh_objs:
+        name_l = obj.name.lower().strip()
+        if (
+            name_l.startswith("mat_")
+            or name_l.startswith("material")
+            or name_l.startswith("swatch")
+        ):
+            dropped_names.append(obj.name)
+            continue
+        non_preview_meshes.append(obj)
+
+    if not non_preview_meshes or not dropped_names:
+        return objs, []
+
+    keep_ids = {id(obj) for obj in non_preview_meshes}
+    filtered_objs = [o for o in objs if o.type != "MESH" or id(o) in keep_ids]
+    return filtered_objs, dropped_names
+
+
 def _keep_primary_import_cluster(
     objs: List[bpy.types.Object],
 ) -> Tuple[List[bpy.types.Object], List[Dict[str, float | str]]]:
@@ -603,6 +631,29 @@ def _translate_object_family(root: bpy.types.Object, delta: mathutils.Vector) ->
         except Exception:
             pass
     bpy.context.view_layer.update()
+
+
+def _move_object_family_to_exact_aabb(
+    root: bpy.types.Object,
+    current_aabb: Dict[str, float],
+    target_aabb: Dict[str, float],
+) -> Optional[Dict[str, float]]:
+    cur_center = mathutils.Vector(
+        (
+            0.5 * (float(current_aabb["x_min"]) + float(current_aabb["x_max"])),
+            0.5 * (float(current_aabb["y_min"]) + float(current_aabb["y_max"])),
+            float(current_aabb["z_min"]),
+        )
+    )
+    tgt_center = mathutils.Vector(
+        (
+            0.5 * (float(target_aabb["x_min"]) + float(target_aabb["x_max"])),
+            0.5 * (float(target_aabb["y_min"]) + float(target_aabb["y_max"])),
+            float(target_aabb["z_min"]),
+        )
+    )
+    _translate_object_family(root, tgt_center - cur_center)
+    return _aabb_from_object_family_root(root)
 
 
 def _aabb_xy_overlap_area(a: Dict[str, float], b: Dict[str, float]) -> float:
@@ -1107,6 +1158,137 @@ def _scene_room_bounds() -> Optional[Tuple[mathutils.Vector, mathutils.Vector]]:
     if bb_min == bb_max:
         return None
     return bb_min, bb_max
+
+
+def _item_semantic_group(item: Dict) -> str:
+    meta = item.get("meta") or {}
+    supplier_candidate = meta.get("supplier_candidate") if isinstance(meta.get("supplier_candidate"), dict) else {}
+    group = str(
+        supplier_candidate.get("semantic_group")
+        or item.get("semantic_group")
+        or ""
+    ).strip().lower()
+    if group:
+        return group
+
+    category = str(item.get("category") or "").strip().lower()
+    name = str(_item_name(item) or "").strip().lower()
+    text = f"{category} {name}"
+    mapping = (
+        ("desklampfactory", "lamp_table"),
+        ("floorlampfactory", "lamp_floor"),
+        ("ceilinglightfactory", "lamp_ceiling"),
+        ("simpledeskfactory", "desk"),
+        ("singleshelfactory", "shelf"),
+        ("simplebookcasefactory", "shelf"),
+        ("cellshelffactory", "shelf"),
+        ("singlecabinetfactory", "wardrobe"),
+        ("wardrobe", "wardrobe"),
+        ("dresser", "dresser"),
+        ("nightstand", "nightstand"),
+        ("bedfactory", "bed"),
+    )
+    for token, group_name in mapping:
+        if token in text:
+            return group_name
+
+    if "настоль" in text or ("lamp" in text and "desk" in text):
+        return "lamp_table"
+    if "торшер" in text or "floor lamp" in text:
+        return "lamp_floor"
+    if "люстр" in text or "pendant" in text or "chandelier" in text:
+        return "lamp_ceiling"
+    return ""
+
+
+def _item_mount_mode(item: Dict) -> str:
+    constraints = item.get("constraints") or {}
+    mount_type = str((constraints or {}).get("mount_type") or "").strip().lower()
+    if mount_type in {"ceiling", "wall", "floor"}:
+        return mount_type
+
+    semantic_group = _item_semantic_group(item)
+    meta = item.get("meta") or {}
+    if bool(meta.get("supplier_support_reanchored")) or semantic_group == "lamp_table":
+        return "support"
+    if semantic_group == "lamp_ceiling" or bool((constraints or {}).get("under_ceiling")):
+        return "ceiling"
+    if semantic_group in {
+        "lamp_floor",
+        "bed",
+        "desk",
+        "dresser",
+        "nightstand",
+        "side_table",
+        "coffee_table",
+        "shelf",
+        "wardrobe",
+        "tv_stand",
+        "chair",
+        "armchair",
+        "sofa",
+        "mirror",
+        "plant",
+    }:
+        return "floor"
+    if isinstance((constraints or {}).get("touch_floor"), dict) and (constraints["touch_floor"].get("side") == "bottom"):
+        return "floor"
+    return "support"
+
+
+def _rotation_candidates_for_semantic_group(base_deg: float, semantic_group: str) -> List[float]:
+    orientable_groups = {
+        "bed",
+        "desk",
+        "dresser",
+        "nightstand",
+        "side_table",
+        "coffee_table",
+        "shelf",
+        "wardrobe",
+        "tv_stand",
+    }
+    base = float(base_deg or 0.0) % 360.0
+    if semantic_group not in orientable_groups:
+        return [base]
+    candidates: List[float] = []
+    for delta in (0.0, 90.0, 180.0, 270.0):
+        value = (base + delta) % 360.0
+        if all(abs(((value - existing + 180.0) % 360.0) - 180.0) > 1e-4 for existing in candidates):
+            candidates.append(value)
+    return candidates
+
+
+def _nearest_room_wall_context(aabb: Dict[str, float]) -> Optional[Tuple[mathutils.Vector, mathutils.Vector, float]]:
+    room_bounds = _scene_room_bounds()
+    if room_bounds is None:
+        return None
+    room_min, room_max = room_bounds
+    center = mathutils.Vector(
+        (
+            0.5 * (float(aabb["x_min"]) + float(aabb["x_max"])),
+            0.5 * (float(aabb["y_min"]) + float(aabb["y_max"])),
+            0.0,
+        )
+    )
+    room_center = mathutils.Vector(
+        (
+            0.5 * (float(room_min.x) + float(room_max.x)),
+            0.5 * (float(room_min.y) + float(room_max.y)),
+            0.0,
+        )
+    )
+    distances = [
+        (abs(center.x - float(room_min.x)), mathutils.Vector((-1.0, 0.0, 0.0))),
+        (abs(float(room_max.x) - center.x), mathutils.Vector((1.0, 0.0, 0.0))),
+        (abs(center.y - float(room_min.y)), mathutils.Vector((0.0, -1.0, 0.0))),
+        (abs(float(room_max.y) - center.y), mathutils.Vector((0.0, 1.0, 0.0))),
+    ]
+    wall_dist, wall_dir = min(distances, key=lambda item: item[0])
+    room_dir = room_center - center
+    if room_dir.length > 1e-6:
+        room_dir.normalize()
+    return wall_dir, room_dir, float(wall_dist)
 
 
 def _matches_room_shell_name(name: str) -> bool:
@@ -3512,9 +3694,21 @@ def place_in_aabb(
     collection: bpy.types.Collection,
     snap_to_floor: bool,
     floor_offset: float,
+    semantic_group: str = "",
     snap_to_ceiling: bool = False,
     ceiling_offset: float = 0.0,
 ) -> Optional[bpy.types.Object]:
+    objs, dropped_material_previews = _drop_material_preview_meshes(objs)
+    if dropped_material_previews:
+        for name in dropped_material_previews:
+            print(f"[DBG] dropping imported material preview mesh {name}")
+            obj = bpy.data.objects.get(name)
+            if obj is not None:
+                try:
+                    bpy.data.objects.remove(obj, do_unlink=True)
+                except Exception:
+                    pass
+
     objs, dropped_meshes = _filter_imported_mesh_outliers(objs)
     if dropped_meshes:
         for meta in dropped_meshes:
@@ -3599,7 +3793,7 @@ def place_in_aabb(
         parent.location += delta
         bpy.context.view_layer.update()
 
-    def _placement_is_reasonable() -> Tuple[bool, str]:
+    def _placement_metrics(rotation_deg: float) -> Tuple[bool, str, float]:
         bpy.context.view_layer.update()
         bmin, bmax = _world_bounds_mesh_objects(mesh_objs)
         cur = bmax - bmin
@@ -3621,6 +3815,7 @@ def place_in_aabb(
 
         max_ratio = 1.85
         axis_failures: List[str] = []
+        oversize_penalty = 0.0
         for axis_name, cur_val, tgt_val in (
             ("x", float(cur.x), float(tgt.x)),
             ("y", float(cur.y), float(tgt.y)),
@@ -3629,6 +3824,7 @@ def place_in_aabb(
             if tgt_val <= 1e-6:
                 continue
             ratio = cur_val / tgt_val
+            oversize_penalty += abs(ratio - 1.0)
             if ratio > max_ratio:
                 axis_failures.append(f"{axis_name}:{ratio:.3f}")
 
@@ -3636,10 +3832,32 @@ def place_in_aabb(
         max_target = max(float(tgt.x), float(tgt.y), float(tgt.z), 1e-6)
         center_ratio = center_delta.length / max_target
         if axis_failures:
-            return False, "oversize " + ",".join(axis_failures)
+            return False, "oversize " + ",".join(axis_failures), float("inf")
         if center_ratio > 0.65:
-            return False, f"center_offset:{center_ratio:.3f}"
-        return True, "ok"
+            return False, f"center_offset:{center_ratio:.3f}", float("inf")
+
+        wall_penalty = 0.0
+        if semantic_group in {"bed", "desk", "dresser", "nightstand", "side_table", "coffee_table", "shelf", "wardrobe", "tv_stand"}:
+            wall_ctx = _nearest_room_wall_context(aabb)
+            if wall_ctx is not None:
+                wall_dir, room_dir, wall_dist = wall_ctx
+                footprint = max(float(tgt.x), float(tgt.y), 1e-6)
+                proximity = max(0.0, min(1.0, 1.0 - (wall_dist / max(0.6, footprint * 0.9 + 0.35))))
+                if proximity > 1e-6:
+                    rot_mat = mathutils.Matrix.Rotation(math.radians(float(rotation_deg)), 4, "Z")
+                    back_vec = (rot_mat @ mathutils.Vector((0.0, -1.0, 0.0))).to_2d()
+                    front_vec = (-back_vec).copy()
+                    if back_vec.length > 1e-6:
+                        back_vec.normalize()
+                    wall_align = max(-1.0, min(1.0, back_vec.dot(wall_dir.to_2d())))
+                    front_align = 0.0
+                    if room_dir.length > 1e-6 and front_vec.length > 1e-6:
+                        front_vec.normalize()
+                        front_align = max(-1.0, min(1.0, front_vec.dot(room_dir.to_2d())))
+                    wall_penalty = proximity * ((1.0 - wall_align) * 0.75 + (1.0 - front_align) * 0.35)
+
+        fit_penalty = oversize_penalty + center_ratio * 2.5 + wall_penalty
+        return True, "ok", fit_penalty
 
     parent = bpy.data.objects.new(parent_name, None)
     bpy.context.scene.collection.objects.link(parent)
@@ -3651,18 +3869,30 @@ def place_in_aabb(
 
     bpy.context.view_layer.update()
 
-    parent.rotation_euler = (0.0, 0.0, math.radians(float(rotation_deg_engine or 0.0)))
-    bpy.context.view_layer.update()
-    parent.scale = (1.0, 1.0, 1.0)
-    _fit_parent_once()
-    # Imported FBX/OBJ hierarchies can report unstable bounds on the first
-    # depsgraph evaluation. A second corrective pass makes the actual world
-    # bounds converge to the target AABB instead of leaving the asset drifting
-    # outside the room footprint.
-    _fit_parent_once()
-    placement_ok, placement_reason = _placement_is_reasonable()
-    if not placement_ok:
-        print(f"[DBG] rejecting unreasonable placement {parent_name}: {placement_reason}")
+    best_state: Optional[Tuple[float, mathutils.Vector, mathutils.Euler]] = None
+    best_score = float("inf")
+    last_failure_reason = "no_rotation_candidates"
+    for candidate_rotation in _rotation_candidates_for_semantic_group(rotation_deg_engine, semantic_group):
+        parent.location = (0.0, 0.0, 0.0)
+        parent.scale = (1.0, 1.0, 1.0)
+        parent.rotation_euler = (0.0, 0.0, math.radians(float(candidate_rotation or 0.0)))
+        bpy.context.view_layer.update()
+        _fit_parent_once()
+        _fit_parent_once()
+        placement_ok, placement_reason, placement_score = _placement_metrics(candidate_rotation)
+        if not placement_ok:
+            last_failure_reason = placement_reason
+            continue
+        if placement_score < best_score:
+            best_score = placement_score
+            best_state = (
+                float(candidate_rotation),
+                parent.location.copy(),
+                parent.scale.copy(),
+            )
+
+    if best_state is None:
+        print(f"[DBG] rejecting unreasonable placement {parent_name}: {last_failure_reason}")
         for o in list(objs):
             try:
                 bpy.data.objects.remove(o, do_unlink=True)
@@ -3673,6 +3903,12 @@ def place_in_aabb(
         except Exception:
             pass
         return None
+
+    chosen_rotation, chosen_location, chosen_scale = best_state
+    parent.location = chosen_location
+    parent.scale = chosen_scale
+    parent.rotation_euler = (0.0, 0.0, math.radians(chosen_rotation))
+    bpy.context.view_layer.update()
     return parent
 
 
@@ -3818,26 +4054,16 @@ def build_scene(
             and meta.get("supplier_binding_applied")
             and source_blend_name
         )
+        semantic_group = _item_semantic_group(it)
+        mount_mode = _item_mount_mode(it)
 
         if overlay_bbox_only and use_reference_scene:
             blend_aabb = _aabb_from_blend_object_name(source.get("blend_object_name"))
             if blend_aabb is not None:
                 aabb_eng = blend_aabb
 
-        is_ceiling_item = (
-            constraints.get("mount_type") == "ceiling"
-            or constraints.get("under_ceiling")
-            or "lamp" in name_l
-            or "light" in name_l
-            or "люстр" in name_l
-            or "светиль" in name_l
-        )
-
-        is_floor_item = (
-            constraints.get("mount_type") == "floor"
-            or (isinstance(constraints.get("touch_floor"), dict) and constraints["touch_floor"].get("side") == "bottom")
-            or (not is_ceiling_item)
-        )
+        is_ceiling_item = mount_mode == "ceiling"
+        is_floor_item = mount_mode == "floor"
 
         # Клампим в текущую геометрию комнаты.
         if (not preserve_raw_aabb) and room_bb_min is not None and room_bb_max is not None:
@@ -3925,6 +4151,7 @@ def build_scene(
                         collection=coll_items,
                         snap_to_floor=is_floor_item,
                         floor_offset=(-0.001 if is_floor_item else 0.0),
+                        semantic_group=semantic_group,
                         snap_to_ceiling=is_ceiling_item,
                         ceiling_offset=0.0,
                     )
@@ -3981,6 +4208,15 @@ def build_scene(
                             )
                 else:
                     print(f"⚠️ {name}: Не удалось импортировать модель: {mesh_path}; last_error={last_error}")
+                if (not placed_ok) and source_scene_obj is not None and meta.get("supplier_binding_applied"):
+                    using_reference_object = True
+                    placed_ok = True
+                    print(f"[DBG] supplier mesh fallback to reference scene object for {name}: {source_blend_name}")
+                    if item_id:
+                        item_roots[item_id] = source_scene_obj
+                        actual_aabb = _aabb_from_object_family_root(source_scene_obj)
+                        if actual_aabb is not None:
+                            item_actual_aabbs[item_id] = actual_aabb
             elif source_scene_obj is not None:
                 using_reference_object = True
                 placed_ok = True
@@ -4012,132 +4248,67 @@ def build_scene(
             if force_bbox:
                 _add_aabb_label(aabb_eng, name, coll_items)
 
-    anchor_to_supported_ids: Dict[str, List[str]] = {}
-    for it in items:
-        if not isinstance(it, dict):
+    support_solver = MLSupportSolver(room_floor_z=z_floor)
+    support_items: List[Tuple[float, str, Dict]] = []
+    for item in items:
+        if not isinstance(item, dict):
             continue
-        item_id = str(it.get("id") or "").strip()
-        if not item_id:
-            continue
-        meta = it.get("meta") or {}
+        item_id = str(item.get("id") or "").strip()
+        meta = item.get("meta") or {}
         anchor_id = str(meta.get("supplier_support_anchor_target_id") or "").strip()
-        if meta.get("supplier_support_reanchored") and anchor_id:
-            anchor_to_supported_ids.setdefault(anchor_id, []).append(item_id)
-
-    def _aabb_overlap_3d(a: Dict[str, float], b: Dict[str, float], margin: float = 0.01) -> bool:
-        return (
-            a["x_max"] > b["x_min"] + margin
-            and a["x_min"] < b["x_max"] - margin
-            and a["y_max"] > b["y_min"] + margin
-            and a["y_min"] < b["y_max"] - margin
-            and a["z_max"] > b["z_min"] + margin
-            and a["z_min"] < b["z_max"] - margin
+        if not item_id or not meta.get("supplier_support_reanchored") or not anchor_id:
+            continue
+        if item_id not in item_roots or anchor_id not in item_roots:
+            continue
+        item_aabb = item_actual_aabbs.get(item_id)
+        if item_aabb is None:
+            item_aabb = _aabb_from_object_family_root(item_roots[item_id])
+        if item_aabb is None:
+            continue
+        footprint = max(
+            1e-6,
+            (float(item_aabb["x_max"]) - float(item_aabb["x_min"]))
+            * (float(item_aabb["y_max"]) - float(item_aabb["y_min"])),
         )
+        support_items.append((-footprint, item_id, item))
 
-    for anchor_id, supported_ids in anchor_to_supported_ids.items():
-        anchor_aabb = item_actual_aabbs.get(anchor_id)
+    occupied_support_aabbs: Dict[str, List[Dict[str, float]]] = {}
+    for _, item_id, item in sorted(support_items):
+        meta = item.get("meta") or {}
+        anchor_id = str(meta.get("supplier_support_anchor_target_id") or "").strip()
+        support_mode = str(meta.get("supplier_support_mode") or "top").strip().lower()
+        item_root = item_roots.get(item_id)
         anchor_root = item_roots.get(anchor_id)
-        if anchor_aabb is None:
+        if item_root is None or anchor_root is None or item_root == anchor_root:
             continue
-        if anchor_root is None:
+
+        item_aabb = item_actual_aabbs.get(item_id) or _aabb_from_object_family_root(item_root)
+        anchor_aabb = item_actual_aabbs.get(anchor_id) or _aabb_from_object_family_root(anchor_root)
+        if item_aabb is None or anchor_aabb is None:
             continue
+
         planes = _extract_support_planes_from_object_family(anchor_root)
-        solver = MLSupportSolver(room_floor_z=z_floor)
-        placed_ids: List[str] = []
-        for item_id in supported_ids:
-            root = item_roots.get(item_id)
-            aabb = item_actual_aabbs.get(item_id)
-            if root is None or aabb is None:
-                continue
-            occupied_aabbs = [item_actual_aabbs[prev_id] for prev_id in placed_ids if prev_id in item_actual_aabbs]
-            solved = solver.solve(
-                item_aabb=aabb,
-                anchor_aabb=anchor_aabb,
-                planes=planes,
-                occupied_aabbs=occupied_aabbs,
-                mode=str(((items_by_id.get(item_id) or {}).get("meta") or {}).get("supplier_support_mode") or "top"),
-            )
-            if solved is None:
-                item_issue_reasons.setdefault(item_id, []).append("unsupported:no_plane_solution")
-                placed_ids.append(item_id)
-                continue
-            dx = 0.5 * (float(solved["x_min"]) + float(solved["x_max"])) - 0.5 * (float(aabb["x_min"]) + float(aabb["x_max"]))
-            dy = 0.5 * (float(solved["y_min"]) + float(solved["y_max"])) - 0.5 * (float(aabb["y_min"]) + float(aabb["y_max"]))
-            dz = float(solved["z_min"]) - float(aabb["z_min"])
-            _translate_object_family(root, mathutils.Vector((dx, dy, dz)))
-            actual_aabb = _aabb_from_object_family_root(root)
-            if actual_aabb is not None:
-                item_actual_aabbs[item_id] = actual_aabb
-            placed_ids.append(item_id)
-
-    diagnostic_item_ids: List[str] = []
-    for it in items:
-        item_id = str(it.get("id") or "").strip()
-        if not item_id:
+        if not planes:
+            anchor_item = items_by_id.get(anchor_id) or {}
+            planes = _infer_support_planes_from_anchor_item(anchor_item, anchor_aabb)
+        if not planes:
             continue
-        meta = it.get("meta") or {}
-        if meta.get("supplier_binding_applied") or meta.get("supplier_support_reanchored"):
-            diagnostic_item_ids.append(item_id)
 
-    all_collision_item_ids: List[str] = []
-    for it in items:
-        item_id = str(it.get("id") or "").strip()
-        if not item_id or item_id not in item_actual_aabbs:
-            continue
-        all_collision_item_ids.append(item_id)
-
-    for item_id in diagnostic_item_ids:
-        aabb = item_actual_aabbs.get(item_id)
-        if aabb is None:
-            continue
-        reasons = item_issue_reasons.setdefault(item_id, [])
-        if room_bb_min is not None and room_bb_max is not None:
-            margin = 0.02
-            if (
-                aabb["x_min"] < float(room_bb_min.x) - margin
-                or aabb["x_max"] > float(room_bb_max.x) + margin
-                or aabb["y_min"] < float(room_bb_min.y) - margin
-                or aabb["y_max"] > float(room_bb_max.y) + margin
-                or aabb["z_min"] < float(room_bb_min.z) - margin
-                or aabb["z_max"] > float(room_bb_max.z) + margin
-            ):
-                reasons.append("out_of_bounds")
-
-    for i, item_id_a in enumerate(diagnostic_item_ids):
-        aabb_a = item_actual_aabbs.get(item_id_a)
-        if aabb_a is None:
-            continue
-        meta_a = (items_by_id.get(item_id_a) or {}).get("meta") or {}
-        anchor_a = str(meta_a.get("supplier_support_anchor_target_id") or "").strip()
-        for item_id_b in all_collision_item_ids:
-            if item_id_b == item_id_a:
-                continue
-            aabb_b = item_actual_aabbs.get(item_id_b)
-            if aabb_b is None:
-                continue
-            meta_b = (items_by_id.get(item_id_b) or {}).get("meta") or {}
-            anchor_b = str(meta_b.get("supplier_support_anchor_target_id") or "").strip()
-            if anchor_a and anchor_a == item_id_b:
-                continue
-            if anchor_b and anchor_b == item_id_a:
-                continue
-            if _aabb_overlap_3d(aabb_a, aabb_b, margin=0.012):
-                item_issue_reasons.setdefault(item_id_a, []).append(f"collision:{item_id_b}")
-                if item_id_b in diagnostic_item_ids:
-                    item_issue_reasons.setdefault(item_id_b, []).append(f"collision:{item_id_a}")
-
-    for item_id, reasons in item_issue_reasons.items():
-        aabb = item_actual_aabbs.get(item_id)
-        if aabb is None or not reasons:
-            continue
-        _make_renderable_bbox_box(
-            aabb,
-            f"INVALID_{item_id}",
-            coll_items,
-            rgba=(0.85, 0.05, 0.05, 1.0),
-            thickness=0.03,
+        solved_aabb = support_solver.solve(
+            item_aabb=item_aabb,
+            anchor_aabb=anchor_aabb,
+            planes=planes,
+            occupied_aabbs=occupied_support_aabbs.get(anchor_id, []),
+            mode=support_mode,
         )
-        print(f"[DBG] invalid placement {item_id}: {sorted(set(reasons))}")
+        if solved_aabb is None:
+            continue
+
+        moved_aabb = _move_object_family_to_exact_aabb(item_root, item_aabb, solved_aabb)
+        if moved_aabb is None:
+            continue
+        item_actual_aabbs[item_id] = moved_aabb
+        occupied_support_aabbs.setdefault(anchor_id, []).append(moved_aabb)
 
     _log(verbose, f"[Room] final room mode = {room_mode}")
 
