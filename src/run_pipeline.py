@@ -9,6 +9,7 @@ import json
 import os
 import secrets
 import shutil
+from copy import deepcopy
 from pathlib import Path
 from typing import Any, Optional
 
@@ -27,6 +28,7 @@ try:
         normalize_json_artifact,
         run_blender_for_mode,
     )
+    from .pipeline_scene_repair import add_scene_repair_arguments, maybe_repair_scene_json
     from .pipeline_config import (
         DEFAULT_LEGO_GENERATION_PRESETS,
         DEFAULT_PATHS_CONFIG,
@@ -48,6 +50,8 @@ try:
         run_choose_stage,
         run_lego_generate_from_scratch,
     )
+    from .style_profiles import attach_style_hint_to_room_json
+    from .style_prompt_analyzer import analyze_prompt_to_style_profile
 except ImportError:
     from acquire_supplier_bindings_assets import acquire_assets_for_bindings_json
     from apply_supplier_bindings import apply_supplier_bindings_to_json
@@ -63,6 +67,7 @@ except ImportError:
         normalize_json_artifact,
         run_blender_for_mode,
     )
+    from pipeline_scene_repair import add_scene_repair_arguments, maybe_repair_scene_json
     from pipeline_config import (
         DEFAULT_LEGO_GENERATION_PRESETS,
         DEFAULT_PATHS_CONFIG,
@@ -84,6 +89,8 @@ except ImportError:
         run_choose_stage,
         run_lego_generate_from_scratch,
     )
+    from style_profiles import attach_style_hint_to_room_json
+    from style_prompt_analyzer import analyze_prompt_to_style_profile
 
 
 def _build_layout_selection_stub_for_artifacts(
@@ -97,6 +104,15 @@ def _build_layout_selection_stub_for_artifacts(
         source_json_path=source_json_path,
         run_dir=run_dir,
         prefix=prefix,
+    )
+
+
+def _is_fatal_disk_full_error(exc: Exception) -> bool:
+    text = str(exc).lower()
+    return (
+        "remote_disk_full" in text
+        or "no space left on device" in text
+        or "disk full" in text
     )
 
 
@@ -170,6 +186,7 @@ def _resolve_supplier_bindings_json(
     args: argparse.Namespace,
     run_dir: Path,
     layout_targets_json_path: str,
+    supplier_user_preferences_json: str | None = None,
 ) -> Path | None:
     explicit = str(args.supplier_bindings_json or "").strip()
     if explicit:
@@ -187,8 +204,13 @@ def _resolve_supplier_bindings_json(
     )
 
     supplier_user_preferences: dict[str, Any] | None = None
-    if str(getattr(args, "supplier_user_preferences_json", "") or "").strip():
-        raw = read_supplier_matcher_json(str(args.supplier_user_preferences_json).strip())
+    supplier_preferences_path = str(
+        supplier_user_preferences_json
+        or getattr(args, "supplier_user_preferences_json", "")
+        or ""
+    ).strip()
+    if supplier_preferences_path:
+        raw = read_supplier_matcher_json(supplier_preferences_path)
         if not isinstance(raw, dict):
             raise RuntimeError("supplier user preferences JSON must be an object")
         supplier_user_preferences = raw
@@ -223,6 +245,7 @@ def run_pipeline_for_mode(
     run_dir: Path,
     layout_mode: str,
     prompt_text: str,
+    style_profile_template: dict[str, Any],
 ) -> ModeOutputs:
     print(f"\n====== РЕЖИМ {layout_mode.upper()} ======")
     print(f"📁 mode_run_dir: {run_dir}")
@@ -230,8 +253,27 @@ def run_pipeline_for_mode(
     placer_spec = PLACER_SPECS[args.placer]
     chooser_required = bool(placer_spec.get("requires_object_selection", True))
     chooser_seed = int.from_bytes(secrets.token_bytes(8), "big")
-    chooser_prompt_text = prompt_text
+    style_profile = deepcopy(style_profile_template)
+    style_profile_path = run_dir / "style_profile.json"
+    write_json(style_profile_path, style_profile)
+
+    original_room_path = Path(room_path).expanduser().resolve()
+    styled_room_path = run_dir / "room.style.v1.json"
+    room_data = json.loads(original_room_path.read_text(encoding="utf-8"))
+    styled_room_data = attach_style_hint_to_room_json(room_data, style_profile)
+    write_json(styled_room_path, styled_room_data)
+    effective_room_path = str(styled_room_path.resolve())
+
+    chooser_prompt_text = str(style_profile.get("chooser_prompt") or prompt_text).strip() or prompt_text
+    effective_prompt_text = chooser_prompt_text
+    style_supplier_preferences = style_profile.get("supplier_preferences")
+    style_supplier_preferences_path: Optional[Path] = None
+    if isinstance(style_supplier_preferences, dict):
+        style_supplier_preferences_path = run_dir / "style_supplier_preferences.json"
+        write_json(style_supplier_preferences_path, style_supplier_preferences)
+
     (run_dir / "prompt.txt").write_text(prompt_text, encoding="utf-8")
+    (run_dir / "prompt.styled.txt").write_text(effective_prompt_text, encoding="utf-8")
     (run_dir / "chooser_prompt.txt").write_text(chooser_prompt_text, encoding="utf-8")
 
     objects_path: Optional[Path] = None
@@ -240,7 +282,7 @@ def run_pipeline_for_mode(
         objects_path = run_choose_stage(
             args=args,
             cfg_runtime=cfg_runtime,
-            room_path=room_path,
+            room_path=effective_room_path,
             prompt_text=chooser_prompt_text,
             run_dir=run_dir,
             seed=chooser_seed,
@@ -257,13 +299,28 @@ def run_pipeline_for_mode(
         print(f"⏭ Пропуск chooser для placer={args.placer}")
 
     run_manifest = {
-        "room": room_path,
+        "room": effective_room_path,
+        "room_original": str(original_room_path),
         "prompt": prompt_text,
+        "prompt_styled": effective_prompt_text,
         "chooser_prompt": chooser_prompt_text,
         "chooser_seed": chooser_seed,
         "placer": args.placer,
         "layout_mode": layout_mode,
         "run_dir": str(run_dir),
+        "style_profile_json": str(style_profile_path.resolve()),
+        "style_room_json": str(styled_room_path.resolve()),
+        "style": {
+            "style_label": style_profile.get("style_label"),
+            "room_type": style_profile.get("room_type"),
+            "confidence": style_profile.get("confidence"),
+            "style_hint": style_profile.get("style_hint"),
+        },
+        "supplier_preferences_json": (
+            str(Path(args.supplier_user_preferences_json).expanduser().resolve())
+            if str(getattr(args, "supplier_user_preferences_json", "") or "").strip()
+            else str(style_supplier_preferences_path.resolve()) if style_supplier_preferences_path else None
+        ),
         "objects_legacy": str(objects_path.resolve()) if objects_path else None,
         "objects_v1": str(normalized_objects_path.resolve()) if normalized_objects_path else None,
         "chooser_llm": {
@@ -295,7 +352,7 @@ def run_pipeline_for_mode(
         lego_artifacts = run_lego_generate_from_scratch(
             cfg_runtime=cfg_runtime,
             args=args,
-            room_path=room_path,
+            room_path=effective_room_path,
             objects_v1_path=normalized_objects_path,
             run_dir=run_dir,
         )
@@ -322,6 +379,11 @@ def run_pipeline_for_mode(
             args=args,
             run_dir=run_dir,
             layout_targets_json_path=lego_selection_stub["layout_targets_json"],
+            supplier_user_preferences_json=(
+                str(style_supplier_preferences_path.resolve())
+                if style_supplier_preferences_path and not str(getattr(args, "supplier_user_preferences_json", "") or "").strip()
+                else None
+            ),
         )
         if supplier_bindings_path:
             supplier_bindings_path, supplier_assets_info = _acquire_supplier_assets_for_bindings(
@@ -339,6 +401,24 @@ def run_pipeline_for_mode(
             manifest["supplier_assets"] = supplier_assets_info
             if supplier_info.get("scene_v1"):
                 supplier_scene_for_render = Path(str(supplier_info["scene_v1"])).expanduser().resolve()
+        base_scene_for_render = choose_scene_for_render(lego_artifacts)
+        base_scene_for_render, base_repair_info = maybe_repair_scene_json(
+            args=args,
+            scene_json_path=base_scene_for_render,
+            run_dir=run_dir,
+            tag="lego_gen_base",
+        )
+        if base_repair_info is not None:
+            manifest["scene_repair_base"] = base_repair_info
+        if supplier_scene_for_render and supplier_scene_for_render.is_file():
+            supplier_scene_for_render, supplier_repair_info = maybe_repair_scene_json(
+                args=args,
+                scene_json_path=supplier_scene_for_render,
+                run_dir=run_dir,
+                tag="lego_gen_supplier",
+            )
+            if supplier_repair_info is not None:
+                manifest["scene_repair_supplier"] = supplier_repair_info
         write_json(manifest_path, manifest)
 
         if args.skip_blender:
@@ -349,10 +429,10 @@ def run_pipeline_for_mode(
         run_blender_for_mode(
             cfg_runtime=cfg_runtime,
             args=args,
-            room_path=room_path,
+            room_path=effective_room_path,
             run_dir=run_dir,
             layout_mode=layout_mode,
-            scene_json_path=choose_scene_for_render(lego_artifacts),
+            scene_json_path=base_scene_for_render,
             variant_suffix="lego_gen",
         )
 
@@ -360,7 +440,7 @@ def run_pipeline_for_mode(
             run_blender_for_mode(
                 cfg_runtime=cfg_runtime,
                 args=args,
-                room_path=room_path,
+                room_path=effective_room_path,
                 run_dir=run_dir,
                 layout_mode=layout_mode,
                 scene_json_path=supplier_scene_for_render,
@@ -394,18 +474,18 @@ def run_pipeline_for_mode(
             execute_placer(
                 cfg_runtime=cfg_runtime,
                 args=args,
-                room_path=room_path,
+                room_path=effective_room_path,
                 objects_path=objects_path,
                 layout_mode=layout_mode,
                 seed=attempt_seed,
                 out_path=placement_out,
                 run_dir=run_dir,
-                prompt_text=prompt_text,
+                prompt_text=effective_prompt_text,
             )
 
             base_artifacts = build_scene_artifacts(
                 cfg_runtime=cfg_runtime,
-                room_path=room_path,
+                room_path=effective_room_path,
                 run_dir=run_dir,
                 layout_mode=layout_mode,
                 placement_out=placement_out,
@@ -434,6 +514,11 @@ def run_pipeline_for_mode(
 
         except Exception as e:
             print(f"❌ placement stage failed on attempt {attempt}: {e}")
+            if _is_fatal_disk_full_error(e):
+                raise RuntimeError(
+                    "Placement aborted due to full disk on the remote/local worker. "
+                    "Free space and rerun."
+                ) from e
             if attempt >= placement_attempts:
                 raise
 
@@ -445,6 +530,11 @@ def run_pipeline_for_mode(
         args=args,
         run_dir=run_dir,
         layout_targets_json_path=base_selection_stub["layout_targets_json"],
+        supplier_user_preferences_json=(
+            str(style_supplier_preferences_path.resolve())
+            if style_supplier_preferences_path and not str(getattr(args, "supplier_user_preferences_json", "") or "").strip()
+            else None
+        ),
     )
     if supplier_bindings_path:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -461,9 +551,28 @@ def run_pipeline_for_mode(
         )
         manifest["supplier_rebind"] = supplier_info
         manifest["supplier_assets"] = supplier_assets_info
-        write_json(manifest_path, manifest)
         if supplier_info.get("scene_v1"):
             supplier_scene_for_render = Path(str(supplier_info["scene_v1"])).expanduser().resolve()
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    base_scene_for_render = choose_scene_for_render(base_artifacts)
+    base_scene_for_render, base_repair_info = maybe_repair_scene_json(
+        args=args,
+        scene_json_path=base_scene_for_render,
+        run_dir=run_dir,
+        tag="base",
+    )
+    if base_repair_info is not None:
+        manifest["scene_repair_base"] = base_repair_info
+    if supplier_scene_for_render and supplier_scene_for_render.is_file():
+        supplier_scene_for_render, supplier_repair_info = maybe_repair_scene_json(
+            args=args,
+            scene_json_path=supplier_scene_for_render,
+            run_dir=run_dir,
+            tag="supplier",
+        )
+        if supplier_repair_info is not None:
+            manifest["scene_repair_supplier"] = supplier_repair_info
+    write_json(manifest_path, manifest)
 
     if args.skip_blender:
         print(f"⏭ Пропуск Blender для режима {layout_mode}")
@@ -473,10 +582,10 @@ def run_pipeline_for_mode(
     run_blender_for_mode(
         cfg_runtime=cfg_runtime,
         args=args,
-        room_path=room_path,
+        room_path=effective_room_path,
         run_dir=run_dir,
         layout_mode=layout_mode,
-        scene_json_path=choose_scene_for_render(base_artifacts),
+        scene_json_path=base_scene_for_render,
         variant_suffix="",
     )
 
@@ -484,7 +593,7 @@ def run_pipeline_for_mode(
         run_blender_for_mode(
             cfg_runtime=cfg_runtime,
             args=args,
-            room_path=room_path,
+            room_path=effective_room_path,
             run_dir=run_dir,
             layout_mode=layout_mode,
             scene_json_path=supplier_scene_for_render,
@@ -539,6 +648,15 @@ def build_cli() -> argparse.ArgumentParser:
     p.add_argument("--ollama-timeout", type=int, default=None)
     p.add_argument("--ollama-temperature", type=float, default=None)
     p.add_argument("--ollama-max-attempts", type=int, default=None)
+    p.add_argument("--style-llm-provider", choices=["none", "ollama"], default="ollama")
+    p.add_argument("--style-ollama-url", default=None)
+    p.add_argument("--style-ollama-model", default=None)
+    p.add_argument("--style-ollama-models", nargs="*", default=None)
+    p.add_argument("--style-ollama-timeout", type=int, default=None)
+    p.add_argument("--style-ollama-temperature", type=float, default=None)
+    p.add_argument("--style-llm-max-attempts", type=int, default=None)
+    p.add_argument("--style-llm-think", choices=["low", "medium", "high"], default=None)
+    p.add_argument("--style-llm-debug-dir", default=None)
 
     p.add_argument("--plan-model", default=None)
     p.add_argument("--plan-models", nargs="*", default=None)
@@ -594,6 +712,8 @@ def build_cli() -> argparse.ArgumentParser:
     p.add_argument("--lego-init-ang-noise-deg", type=float, default=None)
     p.add_argument("--lego-init-scene-mode", choices=["perturb", "random_full"], default=None)
 
+    add_scene_repair_arguments(p)
+
     return p
 
 
@@ -618,6 +738,17 @@ def main() -> None:
     print(f"🧐 critic ollama models: {', '.join(args.critic_models)}")
     print(f"🧩 plan/critic/json think: {args.plan_think}/{args.critic_think}/{args.llm_think}")
 
+    style_models = [str(x).strip() for x in (getattr(args, "style_ollama_models", None) or args.ollama_models or []) if str(x).strip()]
+    if not style_models:
+        style_models = [str(getattr(args, "style_ollama_model", None) or args.ollama_model or "gpt-oss:20b").strip()]
+    style_think = str(getattr(args, "style_llm_think", None) or "").strip().lower()
+    if style_think not in {"low", "medium", "high"}:
+        style_think = "low"
+    style_temperature = getattr(args, "style_ollama_temperature", None)
+    if style_temperature is None:
+        style_temperature = args.ollama_temperature if args.ollama_temperature is not None else 0.0
+    print(f"🎨 style llm: provider={args.style_llm_provider}, models={', '.join(style_models)}")
+
     if args.lego_postprocess:
         lego_cfg = resolve_lego_generation_params(args)
         print(
@@ -632,6 +763,24 @@ def main() -> None:
         )
 
     prompt_text = read_prompt_from_args(args)
+    style_profile_template = analyze_prompt_to_style_profile(
+        prompt_text=prompt_text,
+        room_path=room_path,
+        provider=str(getattr(args, "style_llm_provider", "ollama") or "ollama"),
+        ollama_url=str(getattr(args, "style_ollama_url", None) or args.ollama_url or "http://127.0.0.1:11434"),
+        ollama_models=style_models,
+        timeout_sec=int(getattr(args, "style_ollama_timeout", None) or args.ollama_timeout or 180),
+        temperature=float(style_temperature),
+        max_attempts=int(getattr(args, "style_llm_max_attempts", None) or args.ollama_max_attempts or 4),
+        think=style_think,
+        debug_dir=str(getattr(args, "style_llm_debug_dir", None) or ""),
+    )
+    print(
+        "🎯 style selected: "
+        f"{style_profile_template.get('style_label')} "
+        f"(room={style_profile_template.get('room_type')}, "
+        f"confidence={float(style_profile_template.get('confidence') or 0.0):.2f})"
+    )
     created_run_dirs: list[Path] = []
 
     try:
@@ -646,6 +795,7 @@ def main() -> None:
                 run_dir=mode_run_dir,
                 layout_mode=layout_mode,
                 prompt_text=prompt_text,
+                style_profile_template=style_profile_template,
             )
 
         print("\n✅ ВСЕ РЕЖИМЫ ОТРАБОТАЛИ УСПЕШНО")

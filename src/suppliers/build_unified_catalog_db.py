@@ -188,6 +188,12 @@ def _table_rows(db_path: Path, sites: set[str] | None) -> list[dict[str, Any]]:
             sp.depth_cm,
             sp.height_cm,
             sp.weight_kg,
+            sp.volume_m3,
+            sp.package_width_cm,
+            sp.package_depth_cm,
+            sp.package_height_cm,
+            sp.packed_weight_kg,
+            sp.scheme_url,
             sp.room,
             sp.materials,
             sp.availability,
@@ -321,6 +327,12 @@ def init_out_db(out_db: Path) -> None:
                 depth_cm REAL,
                 height_cm REAL,
                 weight_kg REAL,
+                volume_m3 REAL,
+                package_width_cm REAL,
+                package_depth_cm REAL,
+                package_height_cm REAL,
+                packed_weight_kg REAL,
+                scheme_url TEXT,
                 room TEXT,
                 materials TEXT,
                 availability TEXT,
@@ -346,6 +358,17 @@ def init_out_db(out_db: Path) -> None:
             );
             """
         )
+        existing = {str(row[1]) for row in con.execute("PRAGMA table_info(supplier_mesh_catalog)").fetchall()}
+        for name, sql_type in {
+            "volume_m3": "REAL",
+            "package_width_cm": "REAL",
+            "package_depth_cm": "REAL",
+            "package_height_cm": "REAL",
+            "packed_weight_kg": "REAL",
+            "scheme_url": "TEXT",
+        }.items():
+            if name not in existing:
+                con.execute(f"ALTER TABLE supplier_mesh_catalog ADD COLUMN {name} {sql_type};")
         con.execute("CREATE INDEX IF NOT EXISTS idx_supplier_mesh_catalog_site ON supplier_mesh_catalog(source_site);")
         con.execute("CREATE INDEX IF NOT EXISTS idx_supplier_mesh_catalog_group ON supplier_mesh_catalog(semantic_group);")
         con.execute("CREATE INDEX IF NOT EXISTS idx_supplier_mesh_catalog_mesh_ready ON supplier_mesh_catalog(mesh_ready);")
@@ -364,13 +387,14 @@ def save_records(out_db: Path, records: list[dict[str, Any]]) -> None:
                     title, brand, collection, category_raw, category_norm, semantic_group, product_url,
                     model_link_type, model_page_url, model_download_url, model_download_landing_url, model_vendor_url,
                     model_extraction_method, model_download_filename, model_format, price_value, price_currency,
-                    old_price_value, style, color, description, width_cm, depth_cm, height_cm, weight_kg, room,
+                    old_price_value, style, color, description, width_cm, depth_cm, height_cm, weight_kg,
+                    volume_m3, package_width_cm, package_depth_cm, package_height_cm, packed_weight_kg, scheme_url, room,
                     materials, availability, country_brand, production_country, tags_json, images_json, related_json,
                     extra_json, asset_status, asset_format, asset_source_url, asset_local_path, preview_local_path,
                     mesh_local_path, mesh_format, mesh_status, mesh_source_url, mesh_ready, mesh_available,
                     merged_unique_keys_json, merged_source_dbs_json
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     canonical_key,
@@ -405,6 +429,12 @@ def save_records(out_db: Path, records: list[dict[str, Any]]) -> None:
                     row.get("depth_cm"),
                     row.get("height_cm"),
                     row.get("weight_kg"),
+                    row.get("volume_m3"),
+                    row.get("package_width_cm"),
+                    row.get("package_depth_cm"),
+                    row.get("package_height_cm"),
+                    row.get("packed_weight_kg"),
+                    row.get("scheme_url"),
                     row.get("room"),
                     row.get("materials"),
                     row.get("availability"),

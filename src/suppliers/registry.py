@@ -12,6 +12,7 @@ from src.suppliers.adapters.base import SupplierAdapter
 from src.suppliers.adapters.homeconcept import HomeConceptAdapter
 from src.suppliers.adapters.imodern import IModernAdapter
 from src.suppliers.adapters.loftdesigne import LoftDesigneAdapter
+from src.suppliers.adapters.sancos import SancosAdapter
 from src.suppliers.adapters.three_ddd import ThreeDDDAdapter
 
 
@@ -19,6 +20,7 @@ ADAPTER_CLASSES = (
     HomeConceptAdapter,
     IModernAdapter,
     LoftDesigneAdapter,
+    SancosAdapter,
     ThreeDDDAdapter,
 )
 

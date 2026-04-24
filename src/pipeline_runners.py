@@ -821,6 +821,9 @@ def run_infinigen_clean(
         "--run-dir",
         str(run_dir.resolve()),
     ]
+    style_profile_path = run_dir / "style_profile.json"
+    if style_profile_path.is_file():
+        cmd += ["--style-profile", str(style_profile_path.resolve())]
     if getattr(args, "infinigen_src", None):
         cmd += ["--infinigen-src", str(Path(args.infinigen_src).expanduser())]
     if getattr(args, "remote_host", None):

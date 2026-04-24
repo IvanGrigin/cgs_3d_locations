@@ -20,6 +20,7 @@ from typing import Any
 try:
     from .acquire_supplier_bindings_assets import acquire_assets_for_bindings_json
     from .apply_supplier_bindings import apply_supplier_bindings_to_json
+    from .pipeline_scene_repair import add_scene_repair_arguments, maybe_repair_scene_json
     from .supplier_layout_matcher import (
         build_bindings_with_candidates,
         load_supplier_catalog,
@@ -30,6 +31,7 @@ try:
 except ImportError:
     from acquire_supplier_bindings_assets import acquire_assets_for_bindings_json
     from apply_supplier_bindings import apply_supplier_bindings_to_json
+    from pipeline_scene_repair import add_scene_repair_arguments, maybe_repair_scene_json
     from supplier_layout_matcher import (
         build_bindings_with_candidates,
         load_supplier_catalog,
@@ -149,6 +151,7 @@ def build_cli() -> argparse.ArgumentParser:
     ap.add_argument("--force-tint", action="store_true", help="Pass force tint to Blender scene builder")
     ap.add_argument("--no-pack-assets", action="store_true", help="Do not pack assets when saving .blend")
     ap.add_argument("--manifest-out", default=None, help="Optional manifest JSON with all pipeline outputs")
+    add_scene_repair_arguments(ap)
     return ap
 
 
@@ -203,11 +206,17 @@ def main() -> None:
         output_json_path=scene_out,
         require_local_asset=bool(args.require_local_asset),
     )
+    repaired_scene_path, scene_repair_info = maybe_repair_scene_json(
+        args=args,
+        scene_json_path=final_scene_path,
+        run_dir=run_dir,
+        tag=f"supplier_{suffix}",
+    )
 
-    reference_blend = _infer_reference_blend(input_scene_path) or _infer_reference_blend(final_scene_path)
-    _run_blender_render(args, final_scene_path, reference_blend=reference_blend)
+    reference_blend = _infer_reference_blend(input_scene_path) or _infer_reference_blend(repaired_scene_path)
+    _run_blender_render(args, repaired_scene_path, reference_blend=reference_blend)
 
-    final_scene_data = read_json(final_scene_path)
+    final_scene_data = read_json(repaired_scene_path)
 
     manifest = {
         "targets_json": str(targets_path.resolve()),
@@ -215,6 +224,7 @@ def main() -> None:
         "bindings_json": str(bindings_out.resolve()),
         "assets_bindings_json": str(Path(assets_bindings_path).resolve()),
         "scene_out_json": str(Path(final_scene_path).resolve()),
+        "scene_render_json": str(Path(repaired_scene_path).resolve()),
         "assets_dir": str(assets_dir.resolve()),
         "assets_db": str(assets_db.resolve()),
         "catalog_row_count": len(rows),
@@ -224,6 +234,8 @@ def main() -> None:
         "asset_acquisition_meta": (read_json(assets_bindings_path).get("meta") or {}).get("asset_acquisition"),
         "scene_supplier_summary": (final_scene_data.get("meta") or {}).get("supplier_binding_summary"),
     }
+    if scene_repair_info is not None:
+        manifest["scene_repair"] = scene_repair_info
     manifest_out = Path(args.manifest_out).expanduser().resolve() if args.manifest_out else (run_dir / f"supplier_pipeline.{suffix}.manifest.json")
     write_json(manifest_out, manifest)
 
@@ -231,6 +243,8 @@ def main() -> None:
     print(f"bindings_json = {bindings_out}")
     print(f"assets_bindings_json = {assets_bindings_path}")
     print(f"scene_out_json = {final_scene_path}")
+    if repaired_scene_path != final_scene_path:
+        print(f"scene_render_json = {repaired_scene_path}")
     print(f"manifest_json = {manifest_out}")
 
 

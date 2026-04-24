@@ -51,6 +51,12 @@ class ProductRecord:
     depth_cm: Optional[float] = None
     height_cm: Optional[float] = None
     weight_kg: Optional[float] = None
+    volume_m3: Optional[float] = None
+    package_width_cm: Optional[float] = None
+    package_depth_cm: Optional[float] = None
+    package_height_cm: Optional[float] = None
+    packed_weight_kg: Optional[float] = None
+    scheme_url: Optional[str] = None
 
     room: Optional[str] = None
     materials: Optional[str] = None

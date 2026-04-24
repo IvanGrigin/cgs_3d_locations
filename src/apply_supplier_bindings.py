@@ -156,6 +156,37 @@ def _binding_has_supported_local_asset(binding: dict[str, Any] | None) -> bool:
     )
 
 
+def _candidate_has_supported_local_asset(candidate: dict[str, Any] | None) -> bool:
+    if not isinstance(candidate, dict):
+        return False
+    local_path = str(candidate.get("asset_local_path") or "").strip()
+    asset_format = str(candidate.get("asset_format") or "").strip().lower()
+    asset_status = str(candidate.get("asset_status") or "").strip().lower()
+    return bool(
+        local_path
+        and Path(local_path).expanduser().is_file()
+        and asset_format in {"obj", "fbx", "glb", "gltf"}
+        and asset_status not in LOW_QUALITY_ASSET_STATUSES
+    )
+
+
+def _compact_candidate_pool(binding: dict[str, Any], *, limit: int = 5) -> list[dict[str, Any]]:
+    pool: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for candidate in [binding.get("chosen_candidate"), *(binding.get("top_candidates") or [])]:
+        if not _candidate_has_supported_local_asset(candidate):
+            continue
+        compact = _compact_candidate(candidate)
+        unique_key = str(compact.get("unique_key") or "").strip()
+        if not unique_key or unique_key in seen:
+            continue
+        seen.add(unique_key)
+        pool.append(compact)
+        if len(pool) >= max(int(limit), 1):
+            break
+    return pool
+
+
 def _normalized_anchor_xy(anchor_aabb: dict[str, float], item_center: list[float]) -> tuple[float, float]:
     width = max(anchor_aabb["x_max"] - anchor_aabb["x_min"], 1e-6)
     depth = max(anchor_aabb["y_max"] - anchor_aabb["y_min"], 1e-6)
@@ -546,6 +577,7 @@ def apply_supplier_bindings_to_data(
         meta["supplier_binding_applied"] = True
         meta["supplier_binding_target_id"] = item_id
         meta["supplier_candidate"] = _compact_candidate(chosen)
+        meta["supplier_candidate_pool"] = _compact_candidate_pool(binding, limit=5)
         meta["supplier_selection_notes"] = deepcopy(binding.get("selection_notes") or [])
         meta["original_generated_item"] = {
             "id": item_id,

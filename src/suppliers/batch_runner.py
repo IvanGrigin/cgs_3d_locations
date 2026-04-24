@@ -113,6 +113,17 @@ SITE_BATCH_PLANS = {
         deny_path_markers=("/users/", "/auth/", "/finance", "/jobs/", "/gallery/", "/blog/", "/forum/"),
         discovery_mode="3ddd_api",
     ),
+    "sancos": SiteBatchPlan(
+        site_name="sancos",
+        root_url="https://sancos.su/",
+        seed_urls=(
+            "https://sancos.su/sitemap.xml",
+        ),
+        product_path_markers=("/catalog/",),
+        category_path_markers=("/catalog/", "/collections/"),
+        deny_path_markers=("/wheretobuy/", "/news/", "/about/", "/contacts/", "/delivery/", "/download/"),
+        discovery_mode="sitemap",
+    ),
 }
 
 
@@ -124,6 +135,7 @@ def log(message: str) -> None:
 def normalize_url(url: str) -> str:
     parsed = urlparse(url.strip())
     path = parsed.path or "/"
+    host = parsed.netloc.lower()
 
     query = ""
     if path.lower() == "/3dmodels":
@@ -132,7 +144,7 @@ def normalize_url(url: str) -> str:
         query = urlencode(filtered_query, doseq=True)
 
     normalized = parsed._replace(query=query, fragment="")
-    if path != "/" and path.endswith("/"):
+    if path != "/" and path.endswith("/") and host not in {"sancos.su", "www.sancos.su"}:
         normalized = normalized._replace(path=path.rstrip("/"))
     return urlunparse(normalized)
 
@@ -823,7 +835,7 @@ def build_adapter_map() -> dict[str, object]:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--sites", default="homeconcept,imodern,loftdesigne,3ddd")
+    ap.add_argument("--sites", default="homeconcept,imodern,loftdesigne,3ddd,sancos")
     ap.add_argument("--limit-per-site", type=int, default=500)
     ap.add_argument("--max-listing-pages", type=int, default=24)
     ap.add_argument("--max-depth", type=int, default=1)

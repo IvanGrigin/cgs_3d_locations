@@ -474,6 +474,16 @@ def _iter_object_with_descendants(root: bpy.types.Object) -> List[bpy.types.Obje
     return out
 
 
+def _remove_object_family(root: Optional[bpy.types.Object]) -> None:
+    if root is None:
+        return
+    for obj in reversed(_iter_object_with_descendants(root)):
+        try:
+            bpy.data.objects.remove(obj, do_unlink=True)
+        except Exception:
+            pass
+
+
 def _aabb_from_blend_object_name(blend_object_name: str) -> Optional[Dict[str, float]]:
     name = str(blend_object_name or "").strip()
     if not name:
@@ -662,32 +672,144 @@ def _aabb_xy_overlap_area(a: Dict[str, float], b: Dict[str, float]) -> float:
     return ox * oy
 
 
-def _extract_support_planes_from_object_family(root: bpy.types.Object) -> List[Dict[str, float]]:
+def _mesh_face_support_plane_candidates(obj: bpy.types.Object) -> List[Dict[str, float]]:
+    deps = bpy.context.evaluated_depsgraph_get()
+    eo = obj.evaluated_get(deps)
+    me = eo.to_mesh()
+    if not me:
+        return []
+
     planes: List[Dict[str, float]] = []
-    for obj in _iter_mesh_children(root):
-        bmin, bmax = _world_bounds_single_mesh_object(obj)
-        if bmin == bmax:
-            continue
-        sx = max(float(bmax.x - bmin.x), 0.0)
-        sy = max(float(bmax.y - bmin.y), 0.0)
-        sz = max(float(bmax.z - bmin.z), 0.0)
+    try:
+        world = eo.matrix_world
+        normal_world = world.to_3x3()
+        verts = me.vertices
+        face_boxes: List[Dict[str, float]] = []
+        for poly in me.polygons:
+            if poly.area <= 5e-4:
+                continue
+            n = normal_world @ poly.normal
+            if n.length <= 1e-6:
+                continue
+            n.normalize()
+            if float(n.z) < 0.82:
+                continue
+
+            points = [world @ verts[idx].co for idx in poly.vertices]
+            if len(points) < 3:
+                continue
+            xs = [float(p.x) for p in points]
+            ys = [float(p.y) for p in points]
+            zs = [float(p.z) for p in points]
+            x_min, x_max = min(xs), max(xs)
+            y_min, y_max = min(ys), max(ys)
+            z_avg = sum(zs) / len(zs)
+            sx = x_max - x_min
+            sy = y_max - y_min
+            if sx < 0.04 or sy < 0.04:
+                continue
+            face_boxes.append(
+                {
+                    "x_min": x_min,
+                    "x_max": x_max,
+                    "y_min": y_min,
+                    "y_max": y_max,
+                    "z": z_avg,
+                    "area": float(poly.area),
+                }
+            )
+
+        for face in sorted(face_boxes, key=lambda item: item["z"], reverse=True):
+            merged = False
+            for plane in planes:
+                same_level = abs(face["z"] - plane["z"]) <= 0.02
+                overlap = _aabb_xy_overlap_area(face, plane)
+                near_xy = overlap > 1e-4 or (
+                    abs(face["x_min"] - plane["x_max"]) <= 0.03
+                    or abs(face["x_max"] - plane["x_min"]) <= 0.03
+                    or abs(face["y_min"] - plane["y_max"]) <= 0.03
+                    or abs(face["y_max"] - plane["y_min"]) <= 0.03
+                )
+                if not (same_level and near_xy):
+                    continue
+                prev_area = max(float(plane["area"]), 1e-6)
+                plane["x_min"] = min(float(plane["x_min"]), float(face["x_min"]))
+                plane["x_max"] = max(float(plane["x_max"]), float(face["x_max"]))
+                plane["y_min"] = min(float(plane["y_min"]), float(face["y_min"]))
+                plane["y_max"] = max(float(plane["y_max"]), float(face["y_max"]))
+                plane["z"] = (float(plane["z"]) * prev_area + float(face["z"]) * float(face["area"])) / (prev_area + float(face["area"]))
+                plane["area"] = prev_area + float(face["area"])
+                merged = True
+                break
+            if not merged:
+                planes.append(dict(face))
+    finally:
+        eo.to_mesh_clear()
+
+    filtered: List[Dict[str, float]] = []
+    for plane in planes:
+        sx = float(plane["x_max"]) - float(plane["x_min"])
+        sy = float(plane["y_max"]) - float(plane["y_min"])
         if sx < 0.06 or sy < 0.06:
             continue
-        if sx * sy < 0.015:
+        coverage = sx * sy
+        if coverage < 0.012:
             continue
-        thin_horizontal = sz <= 0.16 or sz <= 0.35 * max(min(sx, sy), 1e-6)
-        if not thin_horizontal:
-            continue
-        planes.append(
-            {
-                "x_min": float(bmin.x),
-                "x_max": float(bmax.x),
-                "y_min": float(bmin.y),
-                "y_max": float(bmax.y),
-                "z": float(bmax.z),
-                "area": float(sx * sy),
-            }
-        )
+        plane["area"] = float(max(float(plane["area"]), coverage))
+        filtered.append(plane)
+    return filtered
+
+
+def _annotate_support_plane_clearance(planes: List[Dict[str, float]]) -> List[Dict[str, float]]:
+    annotated: List[Dict[str, float]] = []
+    for idx, plane in enumerate(planes):
+        next_gap = 10.0
+        for jdx, other in enumerate(planes):
+            if idx == jdx or float(other["z"]) <= float(plane["z"]) + 0.01:
+                continue
+            overlap = _aabb_xy_overlap_area(plane, other)
+            if overlap <= 0.004:
+                continue
+            gap = float(other["z"]) - float(plane["z"])
+            next_gap = min(next_gap, gap)
+        enriched = dict(plane)
+        enriched["clearance_height"] = float(next_gap)
+        annotated.append(enriched)
+    annotated.sort(key=lambda item: (item["z"], item["area"]), reverse=True)
+    return annotated
+
+
+def _extract_support_planes_from_object_family(root: bpy.types.Object) -> List[Dict[str, float]]:
+    face_planes: List[Dict[str, float]] = []
+    for obj in _iter_mesh_children(root):
+        face_planes.extend(_mesh_face_support_plane_candidates(obj))
+
+    planes = face_planes
+    if not planes:
+        for obj in _iter_mesh_children(root):
+            bmin, bmax = _world_bounds_single_mesh_object(obj)
+            if bmin == bmax:
+                continue
+            sx = max(float(bmax.x - bmin.x), 0.0)
+            sy = max(float(bmax.y - bmin.y), 0.0)
+            sz = max(float(bmax.z - bmin.z), 0.0)
+            if sx < 0.06 or sy < 0.06:
+                continue
+            if sx * sy < 0.015:
+                continue
+            thin_horizontal = sz <= 0.16 or sz <= 0.35 * max(min(sx, sy), 1e-6)
+            if not thin_horizontal:
+                continue
+            planes.append(
+                {
+                    "x_min": float(bmin.x),
+                    "x_max": float(bmax.x),
+                    "y_min": float(bmin.y),
+                    "y_max": float(bmax.y),
+                    "z": float(bmax.z),
+                    "area": float(sx * sy),
+                }
+            )
 
     planes.sort(key=lambda item: (item["z"], item["area"]), reverse=True)
     deduped: List[Dict[str, float]] = []
@@ -705,7 +827,7 @@ def _extract_support_planes_from_object_family(root: bpy.types.Object) -> List[D
                 break
         if not duplicate:
             deduped.append(plane)
-    return deduped
+    return _annotate_support_plane_clearance(deduped)
 
 
 def _infer_support_planes_from_anchor_item(anchor_item: Dict, anchor_aabb: Dict[str, float]) -> List[Dict[str, float]]:
@@ -748,7 +870,7 @@ def _infer_support_planes_from_anchor_item(anchor_item: Dict, anchor_aabb: Dict[
                 "area": max((sx - 2 * mx) * (sy - 2 * my), 1e-4),
             }
         )
-    return planes
+    return _annotate_support_plane_clearance(planes)
 
 
 def _choose_support_plane(
@@ -932,12 +1054,16 @@ class MLSupportSolver:
         cur_z = float(item_aabb["z_min"])
         sx = float(item_aabb["x_max"]) - float(item_aabb["x_min"])
         sy = float(item_aabb["y_max"]) - float(item_aabb["y_min"])
+        sz = float(item_aabb["z_max"]) - float(item_aabb["z_min"])
 
         best_score = float("inf")
         best_aabb: Optional[Dict[str, float]] = None
 
         for plane in planes:
             plane_z = float(plane["z"])
+            clearance_height = float(plane.get("clearance_height") or 10.0)
+            if clearance_height < sz + 0.012:
+                continue
             plane_pref_penalty = 0.0 if mode == "top" else abs(cur_z - plane_z) * 8.0
             for center_xy in self._candidate_centers((sx, sy), plane, (cur_cx, cur_cy)):
                 candidate = self._candidate_aabb(item_aabb, center_xy=center_xy, support_z=plane_z)
@@ -1618,6 +1744,35 @@ def _item_mesh_path_raw(it: dict) -> Optional[str]:
         or it.get("obj_path")
         or asset.get("mesh_path")
         or asset.get("obj_path")
+    )
+
+
+def _item_supplier_candidate_pool(it: dict) -> List[dict]:
+    meta = it.get("meta") or {}
+    raw_pool = meta.get("supplier_candidate_pool")
+    if not isinstance(raw_pool, list):
+        raw_pool = []
+    pool: List[dict] = []
+    seen: set[str] = set()
+    primary = meta.get("supplier_candidate") if isinstance(meta.get("supplier_candidate"), dict) else None
+    for candidate in [primary, *raw_pool]:
+        if not isinstance(candidate, dict):
+            continue
+        unique_key = str(candidate.get("unique_key") or "").strip()
+        if unique_key and unique_key in seen:
+            continue
+        if unique_key:
+            seen.add(unique_key)
+        pool.append(candidate)
+    return pool
+
+
+def _candidate_mesh_path_raw(candidate: dict, fallback_item: dict) -> Optional[str]:
+    return (
+        candidate.get("asset_local_path")
+        or candidate.get("mesh_path")
+        or candidate.get("obj_path")
+        or _item_mesh_path_raw(fallback_item)
     )
 
 
@@ -3869,7 +4024,7 @@ def place_in_aabb(
 
     bpy.context.view_layer.update()
 
-    best_state: Optional[Tuple[float, mathutils.Vector, mathutils.Euler]] = None
+    best_state: Optional[Tuple[float, mathutils.Vector, mathutils.Euler, float]] = None
     best_score = float("inf")
     last_failure_reason = "no_rotation_candidates"
     for candidate_rotation in _rotation_candidates_for_semantic_group(rotation_deg_engine, semantic_group):
@@ -3889,6 +4044,7 @@ def place_in_aabb(
                 float(candidate_rotation),
                 parent.location.copy(),
                 parent.scale.copy(),
+                float(placement_score),
             )
 
     if best_state is None:
@@ -3904,10 +4060,13 @@ def place_in_aabb(
             pass
         return None
 
-    chosen_rotation, chosen_location, chosen_scale = best_state
+    chosen_rotation, chosen_location, chosen_scale, chosen_score = best_state
     parent.location = chosen_location
     parent.scale = chosen_scale
     parent.rotation_euler = (0.0, 0.0, math.radians(chosen_rotation))
+    parent["cgs_placement_score"] = float(chosen_score)
+    parent["cgs_placement_confidence"] = "low" if chosen_score > 1.35 else "medium" if chosen_score > 0.7 else "high"
+    parent["cgs_placement_rotation_deg"] = float(chosen_rotation)
     bpy.context.view_layer.update()
     return parent
 
@@ -4094,6 +4253,7 @@ def build_scene(
 
         mesh_path_raw = _item_mesh_path_raw(it)
         mesh_path = _resolve_path_maybe(json_dir, mesh_path_raw)
+        supplier_candidate_pool = _item_supplier_candidate_pool(it)
 
         mesh_tex_dirs_raw = _item_mesh_texture_dirs_raw(it)
         mesh_tex_dirs: List[str] = []
@@ -4112,36 +4272,63 @@ def build_scene(
         using_reference_object = False
 
         if not overlay_bbox_only:
+            candidate_specs: List[Tuple[int, dict, str]] = []
+            seen_mesh_paths: set[str] = set()
+            for rank_idx, candidate in enumerate(supplier_candidate_pool):
+                candidate_mesh_path = _resolve_path_maybe(json_dir, _candidate_mesh_path_raw(candidate, it))
+                if not candidate_mesh_path or not os.path.isfile(candidate_mesh_path):
+                    continue
+                candidate_key = str(Path(candidate_mesh_path).resolve())
+                if candidate_key in seen_mesh_paths:
+                    continue
+                seen_mesh_paths.add(candidate_key)
+                candidate_specs.append((rank_idx, candidate, candidate_mesh_path))
             if mesh_path and os.path.isfile(mesh_path):
-                print(f"[DBG] placement name={name}")
-                print(f"[DBG] mesh_path={mesh_path}")
-                mesh_candidates = _discover_mesh_import_candidates(mesh_path)
-                print(f"[DBG] mesh_candidates for {name}: {mesh_candidates[:8]}")
+                default_key = str(Path(mesh_path).resolve())
+                if default_key not in seen_mesh_paths:
+                    candidate_specs.append((-1, {}, mesh_path))
+                    seen_mesh_paths.add(default_key)
 
-                imported_from: Optional[str] = None
-                objs: List[bpy.types.Object] = []
+            if candidate_specs:
+                print(f"[DBG] placement name={name}")
+                print(f"[DBG] supplier placement candidates for {name}: {len(candidate_specs)}")
+
+                best_parent: Optional[bpy.types.Object] = None
+                best_mesh_path: Optional[str] = None
+                best_imported_from: Optional[str] = None
+                best_candidate: Optional[dict] = None
+                best_total_score = float("inf")
                 last_error: Optional[str] = None
 
-                for candidate_path in mesh_candidates:
-                    ext = os.path.splitext(candidate_path)[1].lower()
-                    if ext not in _SUPPORTED_MESH_EXTS:
+                for rank_idx, supplier_candidate, candidate_mesh_path in candidate_specs:
+                    print(f"[DBG] trying candidate rank={rank_idx + 1 if rank_idx >= 0 else 1} mesh={candidate_mesh_path}")
+                    mesh_candidates = _discover_mesh_import_candidates(candidate_mesh_path)
+                    print(f"[DBG] mesh_candidates for {name}: {mesh_candidates[:8]}")
+
+                    imported_from: Optional[str] = None
+                    objs: List[bpy.types.Object] = []
+                    for candidate_path in mesh_candidates:
+                        ext = os.path.splitext(candidate_path)[1].lower()
+                        if ext not in _SUPPORTED_MESH_EXTS:
+                            continue
+
+                        before_names = set(o.name for o in bpy.data.objects)
+                        objs, error = _safe_import_supported_mesh(candidate_path)
+                        after_names = set(o.name for o in bpy.data.objects)
+                        created_names = sorted(after_names - before_names)
+
+                        if objs:
+                            imported_from = candidate_path
+                            print(f"[DBG] import_supported_mesh returned {len(objs)} objects for {name}")
+                            print(f"[DBG] bpy created {len(created_names)} objects for {name}: {created_names[:20]}")
+                            break
+
+                        last_error = error
+                        print(f"⚠️ {name}: import mesh failed for {candidate_path}: {error}")
+
+                    if not objs:
                         continue
 
-                    before_names = set(o.name for o in bpy.data.objects)
-                    objs, error = _safe_import_supported_mesh(candidate_path)
-                    after_names = set(o.name for o in bpy.data.objects)
-                    created_names = sorted(after_names - before_names)
-
-                    if objs:
-                        imported_from = candidate_path
-                        print(f"[DBG] import_supported_mesh returned {len(objs)} objects for {name}")
-                        print(f"[DBG] bpy created {len(created_names)} objects for {name}: {created_names[:20]}")
-                        break
-
-                    last_error = error
-                    print(f"⚠️ {name}: import mesh failed for {candidate_path}: {error}")
-
-                if objs:
                     parent = place_in_aabb(
                         objs=objs,
                         aabb=aabb_eng,
@@ -4155,17 +4342,38 @@ def build_scene(
                         snap_to_ceiling=is_ceiling_item,
                         ceiling_offset=0.0,
                     )
-                    placed_ok = parent is not None
-                    if placed_ok and parent is not None and item_id:
+                    if parent is None:
+                        continue
+
+                    placement_score = float(parent.get("cgs_placement_score") or 999999.0)
+                    total_score = placement_score + (max(rank_idx, 0) * 0.08)
+                    if total_score < best_total_score:
+                        _remove_object_family(best_parent)
+                        best_parent = parent
+                        best_mesh_path = candidate_mesh_path
+                        best_imported_from = imported_from
+                        best_candidate = supplier_candidate if isinstance(supplier_candidate, dict) else None
+                        best_total_score = total_score
+                    else:
+                        _remove_object_family(parent)
+
+                if best_parent is not None:
+                    parent = best_parent
+                    placed_ok = True
+                    if item_id:
                         item_roots[item_id] = parent
                         actual_aabb = _aabb_from_object_family_root(parent)
                         if actual_aabb is not None:
                             item_actual_aabbs[item_id] = actual_aabb
+                    if item_id and str(parent.get("cgs_placement_confidence") or "") == "low":
+                        item_issue_reasons.setdefault(item_id, []).append("low_confidence_replacement")
+                    if item_id and best_candidate is not None:
+                        primary_key = str(((meta.get("supplier_candidate") or {}) if isinstance(meta.get("supplier_candidate"), dict) else {}).get("unique_key") or "").strip()
+                        selected_key = str(best_candidate.get("unique_key") or "").strip()
+                        if selected_key and primary_key and selected_key != primary_key:
+                            item_issue_reasons.setdefault(item_id, []).append(f"used_alternative_candidate:{selected_key}")
 
-                    # In a reference Infinigen scene, hide the original object only when
-                    # the source object is unique or every item mapped to that source is
-                    # also being replaced by an explicit mesh.
-                    if placed_ok and source_scene_obj is not None and source_blend_name not in hidden_reference_sources:
+                    if source_scene_obj is not None and source_blend_name not in hidden_reference_sources:
                         shared_items = source_name_to_items.get(source_blend_name) or []
                         can_hide_source = len(shared_items) <= 1 or all(
                             _item_has_existing_mesh_file(shared_it, json_dir)
@@ -4178,8 +4386,8 @@ def build_scene(
                             _hide_object_family(source_scene_obj)
                             hidden_reference_sources.add(source_blend_name)
 
-                    if parent is not None:
-                        effective_mesh_path = imported_from or mesh_path
+                    effective_mesh_path = best_imported_from or best_mesh_path or mesh_path
+                    if effective_mesh_path:
                         if force_tint:
                             mat = _make_pbr_material(
                                 name=f"Mat_{name}_Tint",
@@ -4309,6 +4517,81 @@ def build_scene(
             continue
         item_actual_aabbs[item_id] = moved_aabb
         occupied_support_aabbs.setdefault(anchor_id, []).append(moved_aabb)
+
+    def _aabb_overlap_3d(a: Dict[str, float], b: Dict[str, float], margin: float = 0.01) -> bool:
+        return (
+            float(a["x_max"]) > float(b["x_min"]) + margin
+            and float(a["x_min"]) < float(b["x_max"]) - margin
+            and float(a["y_max"]) > float(b["y_min"]) + margin
+            and float(a["y_min"]) < float(b["y_max"]) - margin
+            and float(a["z_max"]) > float(b["z_min"]) + margin
+            and float(a["z_min"]) < float(b["z_max"]) - margin
+        )
+
+    diagnostic_ids: List[str] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        item_id = str(item.get("id") or "").strip()
+        meta = item.get("meta") or {}
+        if not item_id:
+            continue
+        if meta.get("supplier_binding_applied") or meta.get("supplier_support_reanchored"):
+            diagnostic_ids.append(item_id)
+
+    for item_id in diagnostic_ids:
+        aabb = item_actual_aabbs.get(item_id)
+        if aabb is None:
+            continue
+        if room_bb_min is not None and room_bb_max is not None:
+            margin = 0.02
+            if (
+                float(aabb["x_min"]) < float(room_bb_min.x) - margin
+                or float(aabb["x_max"]) > float(room_bb_max.x) + margin
+                or float(aabb["y_min"]) < float(room_bb_min.y) - margin
+                or float(aabb["y_max"]) > float(room_bb_max.y) + margin
+                or float(aabb["z_min"]) < float(room_bb_min.z) - margin
+                or float(aabb["z_max"]) > float(room_bb_max.z) + margin
+            ):
+                item_issue_reasons.setdefault(item_id, []).append("out_of_bounds")
+
+    for idx, item_id_a in enumerate(diagnostic_ids):
+        aabb_a = item_actual_aabbs.get(item_id_a)
+        if aabb_a is None:
+            continue
+        meta_a = (items_by_id.get(item_id_a) or {}).get("meta") or {}
+        anchor_a = str(meta_a.get("supplier_support_anchor_target_id") or "").strip()
+        for item_id_b in diagnostic_ids[idx + 1 :]:
+            aabb_b = item_actual_aabbs.get(item_id_b)
+            if aabb_b is None:
+                continue
+            meta_b = (items_by_id.get(item_id_b) or {}).get("meta") or {}
+            anchor_b = str(meta_b.get("supplier_support_anchor_target_id") or "").strip()
+            if anchor_a and anchor_a == item_id_b:
+                continue
+            if anchor_b and anchor_b == item_id_a:
+                continue
+            if _aabb_overlap_3d(aabb_a, aabb_b, margin=0.012):
+                item_issue_reasons.setdefault(item_id_a, []).append(f"collision:{item_id_b}")
+                item_issue_reasons.setdefault(item_id_b, []).append(f"collision:{item_id_a}")
+
+    for item_id, reasons in item_issue_reasons.items():
+        if not reasons:
+            continue
+        diagnostic_reasons = [reason for reason in sorted(set(reasons)) if not reason.startswith("used_alternative_candidate:")]
+        if not diagnostic_reasons:
+            continue
+        aabb = item_actual_aabbs.get(item_id)
+        if aabb is None:
+            continue
+        _make_renderable_bbox_box(
+            aabb,
+            f"INVALID_{item_id}",
+            coll_items,
+            rgba=(0.85, 0.05, 0.05, 1.0),
+            thickness=0.03,
+        )
+        print(f"[DBG] invalid placement {item_id}: {diagnostic_reasons}")
 
     _log(verbose, f"[Room] final room mode = {room_mode}")
 

@@ -45,6 +45,12 @@ PRODUCT_COLUMNS = [
     "depth_cm",
     "height_cm",
     "weight_kg",
+    "volume_m3",
+    "package_width_cm",
+    "package_depth_cm",
+    "package_height_cm",
+    "packed_weight_kg",
+    "scheme_url",
     "room",
     "materials",
     "availability",
@@ -56,6 +62,24 @@ PRODUCT_COLUMNS = [
     "extra_json",
     "raw_html",
 ]
+
+
+PRODUCT_EXTRA_COLUMNS = {
+    "volume_m3": "REAL",
+    "package_width_cm": "REAL",
+    "package_depth_cm": "REAL",
+    "package_height_cm": "REAL",
+    "packed_weight_kg": "REAL",
+    "scheme_url": "TEXT",
+}
+
+
+def _ensure_table_columns(con: sqlite3.Connection, table_name: str, columns: dict[str, str]) -> None:
+    existing = {str(row[1]) for row in con.execute(f"PRAGMA table_info({table_name})").fetchall()}
+    for name, sql_type in columns.items():
+        if name in existing:
+            continue
+        con.execute(f"ALTER TABLE {table_name} ADD COLUMN {name} {sql_type};")
 
 
 def init_db(db_path: Path) -> None:
@@ -107,6 +131,12 @@ def init_db(db_path: Path) -> None:
                 depth_cm REAL,
                 height_cm REAL,
                 weight_kg REAL,
+                volume_m3 REAL,
+                package_width_cm REAL,
+                package_depth_cm REAL,
+                package_height_cm REAL,
+                packed_weight_kg REAL,
+                scheme_url TEXT,
 
                 room TEXT,
                 materials TEXT,
@@ -123,6 +153,7 @@ def init_db(db_path: Path) -> None:
             );
             """
         )
+        _ensure_table_columns(con, "supplier_product", PRODUCT_EXTRA_COLUMNS)
 
         con.execute(
             """
