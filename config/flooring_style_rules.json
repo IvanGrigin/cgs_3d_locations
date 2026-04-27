@@ -1,0 +1,86 @@
+{
+  "scandinavian": {
+    "preferred_material_types": ["laminate", "parquet_board", "engineered_wood"],
+    "preferred_decors": ["oak", "ash", "pine", "wood"],
+    "preferred_designs": ["wood"],
+    "preferred_tones": ["light", "natural", "warm", "beige"],
+    "preferred_gloss": ["matte", "semi_matte", null],
+    "avoid_tones": ["black", "red", "very_dark"],
+    "avoid_designs": ["marble", "dark_concrete", "ornamental"],
+    "required_tags": [],
+    "positive_tags": ["wood", "oak", "natural", "light", "warm"],
+    "negative_tags": ["baroque", "glossy", "black"]
+  },
+  "japandi": {
+    "preferred_material_types": ["laminate", "parquet_board", "engineered_wood"],
+    "preferred_decors": ["oak", "ash", "wood"],
+    "preferred_designs": ["wood"],
+    "preferred_tones": ["light", "natural", "warm", "beige"],
+    "preferred_gloss": ["matte", null],
+    "avoid_tones": ["black", "red", "cold_gray"],
+    "avoid_designs": ["ornamental", "glossy_marble"],
+    "required_tags": [],
+    "positive_tags": ["wood", "natural", "warm", "beige", "minimalism"],
+    "negative_tags": ["baroque", "industrial", "glossy"]
+  },
+  "minimalism": {
+    "preferred_material_types": ["laminate", "vinyl_or_spc", "porcelain_tile"],
+    "preferred_decors": ["oak", "ash", "concrete", "stone", "plain"],
+    "preferred_designs": ["wood", "concrete", "stone", "plain"],
+    "preferred_tones": ["light", "gray", "natural", "beige"],
+    "preferred_gloss": ["matte", null],
+    "avoid_tones": ["red", "gold", "very_dark"],
+    "avoid_designs": ["ornamental", "baroque", "high_contrast"],
+    "required_tags": [],
+    "positive_tags": ["plain", "minimalism", "gray", "light", "matte"],
+    "negative_tags": ["baroque", "ornamental", "glossy"]
+  },
+  "loft": {
+    "preferred_material_types": ["laminate", "vinyl_or_spc", "porcelain_tile"],
+    "preferred_decors": ["oak", "walnut", "concrete", "stone", "aged_wood"],
+    "preferred_designs": ["wood", "concrete", "stone"],
+    "preferred_tones": ["gray", "dark", "brown", "natural"],
+    "preferred_gloss": ["matte", null],
+    "avoid_tones": ["pink", "gold", "very_light_beige"],
+    "avoid_designs": ["ornamental", "baroque"],
+    "required_tags": [],
+    "positive_tags": ["loft", "industrial", "concrete", "dark", "gray", "aged_wood"],
+    "negative_tags": ["baroque", "romantic", "pink"]
+  },
+  "classic": {
+    "preferred_material_types": ["parquet_board", "engineered_wood", "laminate"],
+    "preferred_decors": ["oak", "walnut", "wood"],
+    "preferred_designs": ["wood", "marble"],
+    "preferred_tones": ["natural", "warm", "brown", "dark"],
+    "preferred_gloss": ["semi_matte", "satin", null],
+    "avoid_tones": ["cold_gray", "black"],
+    "avoid_designs": ["plain_concrete", "industrial"],
+    "required_tags": [],
+    "positive_tags": ["classic", "wood", "oak", "walnut", "warm", "premium"],
+    "negative_tags": ["industrial", "cheap", "cold"]
+  },
+  "baroque": {
+    "preferred_material_types": ["parquet_board", "engineered_wood", "laminate", "porcelain_tile"],
+    "preferred_decors": ["walnut", "oak", "dark_wood", "marble"],
+    "preferred_designs": ["wood", "marble"],
+    "preferred_tones": ["dark", "warm", "brown", "golden"],
+    "preferred_gloss": ["semi_matte", "satin", "gloss", null],
+    "avoid_tones": ["cold_gray", "plain_white"],
+    "avoid_designs": ["plain_concrete", "industrial"],
+    "required_tags": [],
+    "positive_tags": ["baroque", "classic", "premium", "dark", "walnut", "marble"],
+    "negative_tags": ["industrial", "minimalism", "cheap"]
+  },
+  "contemporary": {
+    "preferred_material_types": ["laminate", "vinyl_or_spc", "parquet_board", "engineered_wood"],
+    "preferred_decors": ["oak", "ash", "stone", "concrete"],
+    "preferred_designs": ["wood", "stone", "concrete", "plain"],
+    "preferred_tones": ["natural", "gray", "beige", "light", "brown"],
+    "preferred_gloss": ["matte", "semi_matte", null],
+    "avoid_tones": ["red", "gold"],
+    "avoid_designs": ["ornamental"],
+    "required_tags": [],
+    "positive_tags": ["contemporary", "neutral", "wood", "gray", "beige"],
+    "negative_tags": ["baroque", "overdecorated"]
+  }
+}

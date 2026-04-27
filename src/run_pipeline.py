@@ -29,6 +29,8 @@ try:
         run_blender_for_mode,
     )
     from .pipeline_scene_repair import add_scene_repair_arguments, maybe_repair_scene_json
+    from .pipeline.flooring_stage import apply_flooring_to_scene, run_flooring_selection, write_json as write_flooring_json
+    from .pipeline.wall_stage import apply_wall_material_to_scene, run_wall_selection, write_json as write_wall_json
     from .pipeline_config import (
         DEFAULT_LEGO_GENERATION_PRESETS,
         DEFAULT_PATHS_CONFIG,
@@ -68,6 +70,8 @@ except ImportError:
         run_blender_for_mode,
     )
     from pipeline_scene_repair import add_scene_repair_arguments, maybe_repair_scene_json
+    from pipeline.flooring_stage import apply_flooring_to_scene, run_flooring_selection, write_json as write_flooring_json
+    from pipeline.wall_stage import apply_wall_material_to_scene, run_wall_selection, write_json as write_wall_json
     from pipeline_config import (
         DEFAULT_LEGO_GENERATION_PRESETS,
         DEFAULT_PATHS_CONFIG,
@@ -236,6 +240,221 @@ def _resolve_supplier_bindings_json(
     )
     write_json(out_path, result)
     return out_path
+
+
+def _flooring_style_label(style_profile: dict[str, Any]) -> str | None:
+    raw = str(style_profile.get("style_label") or "").strip().lower().replace("-", "_")
+    aliases = {
+        "modern": "contemporary",
+        "industrial": "loft",
+        "classicism": "classic",
+        "neoclassical": "classic",
+        "wabi_sabi": "japandi",
+        "mid_century_modern": "contemporary",
+        "art_deco": "classic",
+        "rustic": "classic",
+        "coastal": "scandinavian",
+    }
+    return aliases.get(raw, raw or None)
+
+
+def _flooring_room_type(style_profile: dict[str, Any], scene_json_path: Path) -> str | None:
+    raw = str(style_profile.get("room_type") or "").strip().lower().replace(" ", "_")
+    aliases = {
+        "bedroom": "bedroom",
+        "livingroom": "living_room",
+        "living_room": "living_room",
+        "kitchen": "kitchen",
+        "bathroom": "bathroom",
+        "diningroom": "living_room",
+        "dining_room": "living_room",
+    }
+    if raw in aliases:
+        return aliases[raw]
+    try:
+        data = json.loads(scene_json_path.read_text(encoding="utf-8"))
+        room = data.get("room") if isinstance(data, dict) else {}
+        if isinstance(room, dict):
+            scene_room = str(room.get("room_type") or "").strip().lower()
+            return aliases.get(scene_room, scene_room or None)
+    except Exception:
+        return None
+    return None
+
+
+def _maybe_apply_flooring_to_scene(
+    *,
+    args: argparse.Namespace,
+    run_dir: Path,
+    scene_json_path: Path,
+    prompt_text: str,
+    style_profile: dict[str, Any],
+    room_id: str,
+    suffix: str,
+) -> tuple[Path, dict[str, Any] | None]:
+    if bool(getattr(args, "no_flooring", False)):
+        return scene_json_path, None
+
+    materials_path = Path(str(getattr(args, "flooring_materials", "") or "")).expanduser()
+    style_rules_path = Path(str(getattr(args, "flooring_style_rules", "") or "")).expanduser()
+    if not materials_path.is_absolute():
+        materials_path = (Path.cwd() / materials_path).resolve()
+    if not style_rules_path.is_absolute():
+        style_rules_path = (Path.cwd() / style_rules_path).resolve()
+
+    if not materials_path.is_file():
+        print(f"⏭ flooring: каталог не найден, пропуск: {materials_path}")
+        return scene_json_path, None
+    if not style_rules_path.is_file():
+        print(f"⏭ flooring: правила стилей не найдены, пропуск: {style_rules_path}")
+        return scene_json_path, None
+
+    selection_path = run_dir / f"flooring.selection{suffix}.v1.json"
+    scene_out_path = run_dir / f"{scene_json_path.stem}.flooring.v1.json"
+    style = _flooring_style_label(style_profile)
+    room_type = _flooring_room_type(style_profile, scene_json_path)
+    llm_settings = {
+        "provider": str(getattr(args, "flooring_llm_provider", "ollama") or "ollama"),
+        "ollama_url": str(getattr(args, "flooring_ollama_url", None) or getattr(args, "ollama_url", None) or "http://127.0.0.1:11434"),
+        "ollama_model": str(getattr(args, "flooring_ollama_model", None) or getattr(args, "ollama_model", None) or "gpt-oss:20b"),
+        "ollama_timeout": int(getattr(args, "flooring_ollama_timeout", None) or getattr(args, "ollama_timeout", None) or 180),
+        "ollama_temperature": float(getattr(args, "flooring_ollama_temperature", 0.0) or 0.0),
+        "ollama_num_ctx": int(getattr(args, "flooring_ollama_num_ctx", 8192) or 8192),
+        "top_n": int(getattr(args, "flooring_llm_top_n", 5) or 5),
+    }
+
+    flooring_prompt_text = _flooring_prompt_for_selector(prompt_text, style_profile, run_dir)
+    print("🧱 flooring: подбор покрытия пола")
+    selection = run_flooring_selection(
+        prompt=flooring_prompt_text,
+        style=style,
+        room_type=room_type,
+        room_description=str(style_profile.get("style_hint") or ""),
+        room_id=room_id,
+        materials_path=materials_path,
+        style_rules_path=style_rules_path,
+        out_path=selection_path,
+        top_k=int(getattr(args, "flooring_top_k", 10) or 10),
+        llm_settings=llm_settings,
+    )
+
+    scene = json.loads(scene_json_path.read_text(encoding="utf-8"))
+    scene_with_flooring = apply_flooring_to_scene(scene, selection)
+    write_flooring_json(scene_with_flooring, scene_out_path)
+    selected = selection.get("selected_material") or {}
+    texture = selection.get("texture_candidate") or {}
+    print(
+        "🧱 flooring selected: "
+        f"{selected.get('sku')} | {selected.get('name')} | "
+        f"texture={texture.get('texture_abs_path') or texture.get('texture_path')} | "
+        f"usable={bool(texture.get('usable_in_blender'))}"
+    )
+    return scene_out_path, {
+        "selection_json": str(selection_path.resolve()),
+        "scene_v1": str(scene_out_path.resolve()),
+        "selected_sku": selected.get("sku"),
+        "selected_name": selected.get("name"),
+        "texture_path": texture.get("texture_abs_path") or texture.get("texture_path"),
+        "texture_usable_in_blender": bool(texture.get("usable_in_blender")),
+        "llm_rerank": selection.get("llm_rerank"),
+    }
+
+
+def _maybe_apply_wall_material_to_scene(
+    *,
+    args: argparse.Namespace,
+    run_dir: Path,
+    scene_json_path: Path,
+    prompt_text: str,
+    style_profile: dict[str, Any],
+    room_id: str,
+    suffix: str,
+) -> tuple[Path, dict[str, Any] | None]:
+    if bool(getattr(args, "no_wall_material", False)):
+        return scene_json_path, None
+
+    materials_path = Path(str(getattr(args, "wall_materials", "") or "")).expanduser()
+    if not materials_path.is_absolute():
+        materials_path = (Path.cwd() / materials_path).resolve()
+    if not materials_path.is_file():
+        print(f"⏭ wall material: каталог не найден, пропуск: {materials_path}")
+        return scene_json_path, None
+
+    selection_path = run_dir / f"wall_material.selection{suffix}.v1.json"
+    scene_out_path = run_dir / f"{scene_json_path.stem}.wall_material.v1.json"
+    style = _flooring_style_label(style_profile)
+    room_type = _flooring_room_type(style_profile, scene_json_path)
+    llm_settings = {
+        "provider": str(getattr(args, "wall_llm_provider", "ollama") or "ollama"),
+        "ollama_url": str(getattr(args, "wall_ollama_url", None) or getattr(args, "ollama_url", None) or "http://127.0.0.1:11434"),
+        "ollama_model": str(getattr(args, "wall_ollama_model", None) or getattr(args, "ollama_model", None) or "gpt-oss:20b"),
+        "ollama_timeout": int(getattr(args, "wall_ollama_timeout", None) or getattr(args, "ollama_timeout", None) or 180),
+        "ollama_temperature": float(getattr(args, "wall_ollama_temperature", 0.0) or 0.0),
+        "ollama_num_ctx": int(getattr(args, "wall_ollama_num_ctx", 8192) or 8192),
+        "top_n": int(getattr(args, "wall_llm_top_n", 5) or 5),
+    }
+
+    wall_prompt_text = _flooring_prompt_for_selector(prompt_text, style_profile, run_dir)
+    print("🧱 wall material: подбор покрытия стен")
+    selection = run_wall_selection(
+        prompt=wall_prompt_text,
+        style=style,
+        room_type=room_type,
+        room_description=str(style_profile.get("style_hint") or ""),
+        room_id=room_id,
+        materials_path=materials_path,
+        out_path=selection_path,
+        top_k=int(getattr(args, "wall_top_k", 10) or 10),
+        llm_settings=llm_settings,
+    )
+
+    scene = json.loads(scene_json_path.read_text(encoding="utf-8"))
+    scene_with_wall = apply_wall_material_to_scene(scene, selection)
+    write_wall_json(scene_with_wall, scene_out_path)
+    selected = selection.get("selected_material") or {}
+    print(
+        "🧱 wall material selected: "
+        f"{selected.get('sku')} | {selected.get('name')} | "
+        f"avg={selected.get('average_hex') or selected.get('average_rgb')}"
+    )
+    return scene_out_path, {
+        "selection_json": str(selection_path.resolve()),
+        "scene_v1": str(scene_out_path.resolve()),
+        "selected_sku": selected.get("sku"),
+        "selected_name": selected.get("name"),
+        "average_rgb": selected.get("average_rgb"),
+        "average_hex": selected.get("average_hex"),
+        "dominant_colors_hex": selected.get("dominant_colors_hex"),
+        "llm_rerank": selection.get("llm_rerank"),
+    }
+
+
+def _flooring_prompt_for_selector(prompt_text: str, style_profile: dict[str, Any], run_dir: Path) -> str:
+    parts = [str(prompt_text or "").strip()]
+    style_hint = str(style_profile.get("style_hint") or "").strip()
+    if style_hint:
+        parts.append(f"Style/color context from style LLM: {style_hint}")
+    preferred_colors = style_profile.get("preferred_colors")
+    if isinstance(preferred_colors, list) and preferred_colors:
+        parts.append("Preferred room colors: " + ", ".join(str(x) for x in preferred_colors if str(x).strip()))
+    material_family = style_profile.get("material_family")
+    if isinstance(material_family, list) and material_family:
+        parts.append("Preferred materials: " + ", ".join(str(x) for x in material_family if str(x).strip()))
+    meta_path = run_dir / "infinigen_clean_meta.json"
+    if meta_path.is_file():
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            style_label = str(meta.get("style_label") or "").strip()
+            room_semantic = str(meta.get("room_semantic") or "").strip()
+            if style_label or room_semantic:
+                parts.append(
+                    "Infinigen generated scene context: "
+                    f"style={style_label or 'unknown'}, room={room_semantic or 'unknown'}. "
+                    "Choose a floor color/material that harmonizes with the generated Infinigen interior."
+                )
+        except Exception:
+            pass
+    return "\n".join(part for part in parts if part).strip() or str(prompt_text or "")
 
 
 def run_pipeline_for_mode(
@@ -410,6 +629,32 @@ def run_pipeline_for_mode(
         )
         if base_repair_info is not None:
             manifest["scene_repair_base"] = base_repair_info
+        base_scene_for_render, base_flooring_info = _maybe_apply_flooring_to_scene(
+            args=args,
+            run_dir=run_dir,
+            scene_json_path=base_scene_for_render,
+            prompt_text=prompt_text,
+            style_profile=style_profile,
+            room_id="room_001",
+            suffix=".lego_gen_base",
+        )
+        if base_flooring_info is not None:
+            manifest["flooring_base"] = base_flooring_info
+            if isinstance(manifest.get("lego_gen"), dict):
+                manifest["lego_gen"]["scene_v1_flooring"] = base_flooring_info.get("scene_v1")
+        base_scene_for_render, base_wall_info = _maybe_apply_wall_material_to_scene(
+            args=args,
+            run_dir=run_dir,
+            scene_json_path=base_scene_for_render,
+            prompt_text=prompt_text,
+            style_profile=style_profile,
+            room_id="room_001",
+            suffix=".lego_gen_base",
+        )
+        if base_wall_info is not None:
+            manifest["wall_material_base"] = base_wall_info
+            if isinstance(manifest.get("lego_gen"), dict):
+                manifest["lego_gen"]["scene_v1_wall_material"] = base_wall_info.get("scene_v1")
         if supplier_scene_for_render and supplier_scene_for_render.is_file():
             supplier_scene_for_render, supplier_repair_info = maybe_repair_scene_json(
                 args=args,
@@ -419,6 +664,32 @@ def run_pipeline_for_mode(
             )
             if supplier_repair_info is not None:
                 manifest["scene_repair_supplier"] = supplier_repair_info
+            supplier_scene_for_render, supplier_flooring_info = _maybe_apply_flooring_to_scene(
+                args=args,
+                run_dir=run_dir,
+                scene_json_path=supplier_scene_for_render,
+                prompt_text=prompt_text,
+                style_profile=style_profile,
+                room_id="room_001",
+                suffix=".lego_gen_supplier",
+            )
+            if supplier_flooring_info is not None:
+                manifest["flooring_supplier"] = supplier_flooring_info
+                if isinstance(manifest.get("supplier_rebind"), dict):
+                    manifest["supplier_rebind"]["scene_v1_flooring"] = supplier_flooring_info.get("scene_v1")
+            supplier_scene_for_render, supplier_wall_info = _maybe_apply_wall_material_to_scene(
+                args=args,
+                run_dir=run_dir,
+                scene_json_path=supplier_scene_for_render,
+                prompt_text=prompt_text,
+                style_profile=style_profile,
+                room_id="room_001",
+                suffix=".lego_gen_supplier",
+            )
+            if supplier_wall_info is not None:
+                manifest["wall_material_supplier"] = supplier_wall_info
+                if isinstance(manifest.get("supplier_rebind"), dict):
+                    manifest["supplier_rebind"]["scene_v1_wall_material"] = supplier_wall_info.get("scene_v1")
         write_json(manifest_path, manifest)
 
         if args.skip_blender:
@@ -563,6 +834,32 @@ def run_pipeline_for_mode(
     )
     if base_repair_info is not None:
         manifest["scene_repair_base"] = base_repair_info
+    base_scene_for_render, base_flooring_info = _maybe_apply_flooring_to_scene(
+        args=args,
+        run_dir=run_dir,
+        scene_json_path=base_scene_for_render,
+        prompt_text=prompt_text,
+        style_profile=style_profile,
+        room_id="room_001",
+        suffix=".base",
+    )
+    if base_flooring_info is not None:
+        manifest["flooring_base"] = base_flooring_info
+        if isinstance(manifest.get("base"), dict):
+            manifest["base"]["scene_v1_flooring"] = base_flooring_info.get("scene_v1")
+    base_scene_for_render, base_wall_info = _maybe_apply_wall_material_to_scene(
+        args=args,
+        run_dir=run_dir,
+        scene_json_path=base_scene_for_render,
+        prompt_text=prompt_text,
+        style_profile=style_profile,
+        room_id="room_001",
+        suffix=".base",
+    )
+    if base_wall_info is not None:
+        manifest["wall_material_base"] = base_wall_info
+        if isinstance(manifest.get("base"), dict):
+            manifest["base"]["scene_v1_wall_material"] = base_wall_info.get("scene_v1")
     if supplier_scene_for_render and supplier_scene_for_render.is_file():
         supplier_scene_for_render, supplier_repair_info = maybe_repair_scene_json(
             args=args,
@@ -572,6 +869,32 @@ def run_pipeline_for_mode(
         )
         if supplier_repair_info is not None:
             manifest["scene_repair_supplier"] = supplier_repair_info
+        supplier_scene_for_render, supplier_flooring_info = _maybe_apply_flooring_to_scene(
+            args=args,
+            run_dir=run_dir,
+            scene_json_path=supplier_scene_for_render,
+            prompt_text=prompt_text,
+            style_profile=style_profile,
+            room_id="room_001",
+            suffix=".supplier",
+        )
+        if supplier_flooring_info is not None:
+            manifest["flooring_supplier"] = supplier_flooring_info
+            if isinstance(manifest.get("supplier_rebind"), dict):
+                manifest["supplier_rebind"]["scene_v1_flooring"] = supplier_flooring_info.get("scene_v1")
+        supplier_scene_for_render, supplier_wall_info = _maybe_apply_wall_material_to_scene(
+            args=args,
+            run_dir=run_dir,
+            scene_json_path=supplier_scene_for_render,
+            prompt_text=prompt_text,
+            style_profile=style_profile,
+            room_id="room_001",
+            suffix=".supplier",
+        )
+        if supplier_wall_info is not None:
+            manifest["wall_material_supplier"] = supplier_wall_info
+            if isinstance(manifest.get("supplier_rebind"), dict):
+                manifest["supplier_rebind"]["scene_v1_wall_material"] = supplier_wall_info.get("scene_v1")
     write_json(manifest_path, manifest)
 
     if args.skip_blender:
@@ -687,6 +1010,28 @@ def build_cli() -> argparse.ArgumentParser:
     p.add_argument("--supplier-assets-dir", default=None, help="Directory for scene-specific downloaded supplier assets")
     p.add_argument("--supplier-assets-db", default=None, help="SQLite DB for scene-specific downloaded supplier assets")
     p.add_argument("--supplier-assets-blender", default=None, help="Optional Blender binary for supplier asset conversion")
+
+    p.add_argument("--no-flooring", action="store_true", help="Disable supplier floor covering selection and Blender floor texture application")
+    p.add_argument("--flooring-materials", default="data/sourse/obi_floor_coverings_cards/normalized_floor_materials.jsonl")
+    p.add_argument("--flooring-style-rules", default="config/flooring_style_rules.json")
+    p.add_argument("--flooring-top-k", type=int, default=10)
+    p.add_argument("--flooring-llm-provider", choices=["none", "ollama"], default="ollama")
+    p.add_argument("--flooring-ollama-url", default=None)
+    p.add_argument("--flooring-ollama-model", default=None)
+    p.add_argument("--flooring-ollama-timeout", type=int, default=None)
+    p.add_argument("--flooring-ollama-temperature", type=float, default=0.0)
+    p.add_argument("--flooring-ollama-num-ctx", type=int, default=8192)
+    p.add_argument("--flooring-llm-top-n", type=int, default=5)
+    p.add_argument("--no-wall-material", action="store_true", help="Disable supplier wall covering selection")
+    p.add_argument("--wall-materials", default="data/sourse/domlenta_wallpapers/normalized_wall_materials.jsonl")
+    p.add_argument("--wall-top-k", type=int, default=10)
+    p.add_argument("--wall-llm-provider", choices=["none", "ollama"], default="ollama")
+    p.add_argument("--wall-ollama-url", default=None)
+    p.add_argument("--wall-ollama-model", default=None)
+    p.add_argument("--wall-ollama-timeout", type=int, default=None)
+    p.add_argument("--wall-ollama-temperature", type=float, default=0.0)
+    p.add_argument("--wall-ollama-num-ctx", type=int, default=8192)
+    p.add_argument("--wall-llm-top-n", type=int, default=5)
 
     p.add_argument("--lego-postprocess", action="store_true")
     p.add_argument("--infinigen-src", default=None)
