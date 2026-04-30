@@ -1,0 +1,757 @@
+{
+  "version": "1.0",
+  "units": "m",
+  "count": 75,
+  "rooms": [
+    {
+      "id": "bedroom_small_01",
+      "room_type": "bedroom",
+      "size_class": "small",
+      "room_json": "rooms/bedroom_small_01.json",
+      "prompt_txt": "prompts/bedroom_small_01.prompt.txt",
+      "width_m": 2.4,
+      "depth_m": 3.0,
+      "area_m2": 7.2
+    },
+    {
+      "id": "bedroom_small_02",
+      "room_type": "bedroom",
+      "size_class": "small",
+      "room_json": "rooms/bedroom_small_02.json",
+      "prompt_txt": "prompts/bedroom_small_02.prompt.txt",
+      "width_m": 2.6,
+      "depth_m": 3.2,
+      "area_m2": 8.32
+    },
+    {
+      "id": "bedroom_small_03",
+      "room_type": "bedroom",
+      "size_class": "small",
+      "room_json": "rooms/bedroom_small_03.json",
+      "prompt_txt": "prompts/bedroom_small_03.prompt.txt",
+      "width_m": 2.8,
+      "depth_m": 3.4,
+      "area_m2": 9.52
+    },
+    {
+      "id": "bedroom_small_04",
+      "room_type": "bedroom",
+      "size_class": "small",
+      "room_json": "rooms/bedroom_small_04.json",
+      "prompt_txt": "prompts/bedroom_small_04.prompt.txt",
+      "width_m": 3.0,
+      "depth_m": 3.5,
+      "area_m2": 10.5
+    },
+    {
+      "id": "bedroom_small_05",
+      "room_type": "bedroom",
+      "size_class": "small",
+      "room_json": "rooms/bedroom_small_05.json",
+      "prompt_txt": "prompts/bedroom_small_05.prompt.txt",
+      "width_m": 3.1,
+      "depth_m": 3.8,
+      "area_m2": 11.78
+    },
+    {
+      "id": "bedroom_medium_06",
+      "room_type": "bedroom",
+      "size_class": "medium",
+      "room_json": "rooms/bedroom_medium_06.json",
+      "prompt_txt": "prompts/bedroom_medium_06.prompt.txt",
+      "width_m": 3.3,
+      "depth_m": 3.9,
+      "area_m2": 12.87
+    },
+    {
+      "id": "bedroom_medium_07",
+      "room_type": "bedroom",
+      "size_class": "medium",
+      "room_json": "rooms/bedroom_medium_07.json",
+      "prompt_txt": "prompts/bedroom_medium_07.prompt.txt",
+      "width_m": 3.5,
+      "depth_m": 4.0,
+      "area_m2": 14.0
+    },
+    {
+      "id": "bedroom_medium_08",
+      "room_type": "bedroom",
+      "size_class": "medium",
+      "room_json": "rooms/bedroom_medium_08.json",
+      "prompt_txt": "prompts/bedroom_medium_08.prompt.txt",
+      "width_m": 3.6,
+      "depth_m": 4.2,
+      "area_m2": 15.12
+    },
+    {
+      "id": "bedroom_medium_09",
+      "room_type": "bedroom",
+      "size_class": "medium",
+      "room_json": "rooms/bedroom_medium_09.json",
+      "prompt_txt": "prompts/bedroom_medium_09.prompt.txt",
+      "width_m": 3.8,
+      "depth_m": 4.3,
+      "area_m2": 16.34
+    },
+    {
+      "id": "bedroom_medium_10",
+      "room_type": "bedroom",
+      "size_class": "medium",
+      "room_json": "rooms/bedroom_medium_10.json",
+      "prompt_txt": "prompts/bedroom_medium_10.prompt.txt",
+      "width_m": 4.0,
+      "depth_m": 4.4,
+      "area_m2": 17.6
+    },
+    {
+      "id": "bedroom_large_11",
+      "room_type": "bedroom",
+      "size_class": "large",
+      "room_json": "rooms/bedroom_large_11.json",
+      "prompt_txt": "prompts/bedroom_large_11.prompt.txt",
+      "width_m": 4.2,
+      "depth_m": 4.6,
+      "area_m2": 19.32
+    },
+    {
+      "id": "bedroom_large_12",
+      "room_type": "bedroom",
+      "size_class": "large",
+      "room_json": "rooms/bedroom_large_12.json",
+      "prompt_txt": "prompts/bedroom_large_12.prompt.txt",
+      "width_m": 4.4,
+      "depth_m": 4.8,
+      "area_m2": 21.12
+    },
+    {
+      "id": "bedroom_large_13",
+      "room_type": "bedroom",
+      "size_class": "large",
+      "room_json": "rooms/bedroom_large_13.json",
+      "prompt_txt": "prompts/bedroom_large_13.prompt.txt",
+      "width_m": 4.6,
+      "depth_m": 5.0,
+      "area_m2": 23.0
+    },
+    {
+      "id": "bedroom_large_14",
+      "room_type": "bedroom",
+      "size_class": "large",
+      "room_json": "rooms/bedroom_large_14.json",
+      "prompt_txt": "prompts/bedroom_large_14.prompt.txt",
+      "width_m": 4.8,
+      "depth_m": 5.2,
+      "area_m2": 24.96
+    },
+    {
+      "id": "bedroom_large_15",
+      "room_type": "bedroom",
+      "size_class": "large",
+      "room_json": "rooms/bedroom_large_15.json",
+      "prompt_txt": "prompts/bedroom_large_15.prompt.txt",
+      "width_m": 5.0,
+      "depth_m": 5.4,
+      "area_m2": 27.0
+    },
+    {
+      "id": "living_room_small_01",
+      "room_type": "living_room",
+      "size_class": "small",
+      "room_json": "rooms/living_room_small_01.json",
+      "prompt_txt": "prompts/living_room_small_01.prompt.txt",
+      "width_m": 3.0,
+      "depth_m": 3.6,
+      "area_m2": 10.8
+    },
+    {
+      "id": "living_room_small_02",
+      "room_type": "living_room",
+      "size_class": "small",
+      "room_json": "rooms/living_room_small_02.json",
+      "prompt_txt": "prompts/living_room_small_02.prompt.txt",
+      "width_m": 3.2,
+      "depth_m": 3.8,
+      "area_m2": 12.16
+    },
+    {
+      "id": "living_room_small_03",
+      "room_type": "living_room",
+      "size_class": "small",
+      "room_json": "rooms/living_room_small_03.json",
+      "prompt_txt": "prompts/living_room_small_03.prompt.txt",
+      "width_m": 3.5,
+      "depth_m": 4.0,
+      "area_m2": 14.0
+    },
+    {
+      "id": "living_room_small_04",
+      "room_type": "living_room",
+      "size_class": "small",
+      "room_json": "rooms/living_room_small_04.json",
+      "prompt_txt": "prompts/living_room_small_04.prompt.txt",
+      "width_m": 3.8,
+      "depth_m": 4.2,
+      "area_m2": 15.96
+    },
+    {
+      "id": "living_room_small_05",
+      "room_type": "living_room",
+      "size_class": "small",
+      "room_json": "rooms/living_room_small_05.json",
+      "prompt_txt": "prompts/living_room_small_05.prompt.txt",
+      "width_m": 4.0,
+      "depth_m": 4.4,
+      "area_m2": 17.6
+    },
+    {
+      "id": "living_room_medium_06",
+      "room_type": "living_room",
+      "size_class": "medium",
+      "room_json": "rooms/living_room_medium_06.json",
+      "prompt_txt": "prompts/living_room_medium_06.prompt.txt",
+      "width_m": 4.2,
+      "depth_m": 4.6,
+      "area_m2": 19.32
+    },
+    {
+      "id": "living_room_medium_07",
+      "room_type": "living_room",
+      "size_class": "medium",
+      "room_json": "rooms/living_room_medium_07.json",
+      "prompt_txt": "prompts/living_room_medium_07.prompt.txt",
+      "width_m": 4.5,
+      "depth_m": 4.8,
+      "area_m2": 21.6
+    },
+    {
+      "id": "living_room_medium_08",
+      "room_type": "living_room",
+      "size_class": "medium",
+      "room_json": "rooms/living_room_medium_08.json",
+      "prompt_txt": "prompts/living_room_medium_08.prompt.txt",
+      "width_m": 4.8,
+      "depth_m": 5.0,
+      "area_m2": 24.0
+    },
+    {
+      "id": "living_room_medium_09",
+      "room_type": "living_room",
+      "size_class": "medium",
+      "room_json": "rooms/living_room_medium_09.json",
+      "prompt_txt": "prompts/living_room_medium_09.prompt.txt",
+      "width_m": 5.0,
+      "depth_m": 5.2,
+      "area_m2": 26.0
+    },
+    {
+      "id": "living_room_medium_10",
+      "room_type": "living_room",
+      "size_class": "medium",
+      "room_json": "rooms/living_room_medium_10.json",
+      "prompt_txt": "prompts/living_room_medium_10.prompt.txt",
+      "width_m": 5.2,
+      "depth_m": 5.5,
+      "area_m2": 28.6
+    },
+    {
+      "id": "living_room_large_11",
+      "room_type": "living_room",
+      "size_class": "large",
+      "room_json": "rooms/living_room_large_11.json",
+      "prompt_txt": "prompts/living_room_large_11.prompt.txt",
+      "width_m": 5.5,
+      "depth_m": 5.8,
+      "area_m2": 31.9
+    },
+    {
+      "id": "living_room_large_12",
+      "room_type": "living_room",
+      "size_class": "large",
+      "room_json": "rooms/living_room_large_12.json",
+      "prompt_txt": "prompts/living_room_large_12.prompt.txt",
+      "width_m": 5.8,
+      "depth_m": 6.0,
+      "area_m2": 34.8
+    },
+    {
+      "id": "living_room_large_13",
+      "room_type": "living_room",
+      "size_class": "large",
+      "room_json": "rooms/living_room_large_13.json",
+      "prompt_txt": "prompts/living_room_large_13.prompt.txt",
+      "width_m": 6.0,
+      "depth_m": 6.2,
+      "area_m2": 37.2
+    },
+    {
+      "id": "living_room_large_14",
+      "room_type": "living_room",
+      "size_class": "large",
+      "room_json": "rooms/living_room_large_14.json",
+      "prompt_txt": "prompts/living_room_large_14.prompt.txt",
+      "width_m": 6.4,
+      "depth_m": 6.5,
+      "area_m2": 41.6
+    },
+    {
+      "id": "living_room_large_15",
+      "room_type": "living_room",
+      "size_class": "large",
+      "room_json": "rooms/living_room_large_15.json",
+      "prompt_txt": "prompts/living_room_large_15.prompt.txt",
+      "width_m": 6.8,
+      "depth_m": 7.0,
+      "area_m2": 47.6
+    },
+    {
+      "id": "kitchen_small_01",
+      "room_type": "kitchen",
+      "size_class": "small",
+      "room_json": "rooms/kitchen_small_01.json",
+      "prompt_txt": "prompts/kitchen_small_01.prompt.txt",
+      "width_m": 2.0,
+      "depth_m": 2.4,
+      "area_m2": 4.8
+    },
+    {
+      "id": "kitchen_small_02",
+      "room_type": "kitchen",
+      "size_class": "small",
+      "room_json": "rooms/kitchen_small_02.json",
+      "prompt_txt": "prompts/kitchen_small_02.prompt.txt",
+      "width_m": 2.2,
+      "depth_m": 2.6,
+      "area_m2": 5.72
+    },
+    {
+      "id": "kitchen_small_03",
+      "room_type": "kitchen",
+      "size_class": "small",
+      "room_json": "rooms/kitchen_small_03.json",
+      "prompt_txt": "prompts/kitchen_small_03.prompt.txt",
+      "width_m": 2.4,
+      "depth_m": 2.8,
+      "area_m2": 6.72
+    },
+    {
+      "id": "kitchen_small_04",
+      "room_type": "kitchen",
+      "size_class": "small",
+      "room_json": "rooms/kitchen_small_04.json",
+      "prompt_txt": "prompts/kitchen_small_04.prompt.txt",
+      "width_m": 2.5,
+      "depth_m": 3.0,
+      "area_m2": 7.5
+    },
+    {
+      "id": "kitchen_small_05",
+      "room_type": "kitchen",
+      "size_class": "small",
+      "room_json": "rooms/kitchen_small_05.json",
+      "prompt_txt": "prompts/kitchen_small_05.prompt.txt",
+      "width_m": 2.7,
+      "depth_m": 3.1,
+      "area_m2": 8.37
+    },
+    {
+      "id": "kitchen_medium_06",
+      "room_type": "kitchen",
+      "size_class": "medium",
+      "room_json": "rooms/kitchen_medium_06.json",
+      "prompt_txt": "prompts/kitchen_medium_06.prompt.txt",
+      "width_m": 2.9,
+      "depth_m": 3.2,
+      "area_m2": 9.28
+    },
+    {
+      "id": "kitchen_medium_07",
+      "room_type": "kitchen",
+      "size_class": "medium",
+      "room_json": "rooms/kitchen_medium_07.json",
+      "prompt_txt": "prompts/kitchen_medium_07.prompt.txt",
+      "width_m": 3.0,
+      "depth_m": 3.4,
+      "area_m2": 10.2
+    },
+    {
+      "id": "kitchen_medium_08",
+      "room_type": "kitchen",
+      "size_class": "medium",
+      "room_json": "rooms/kitchen_medium_08.json",
+      "prompt_txt": "prompts/kitchen_medium_08.prompt.txt",
+      "width_m": 3.2,
+      "depth_m": 3.5,
+      "area_m2": 11.2
+    },
+    {
+      "id": "kitchen_medium_09",
+      "room_type": "kitchen",
+      "size_class": "medium",
+      "room_json": "rooms/kitchen_medium_09.json",
+      "prompt_txt": "prompts/kitchen_medium_09.prompt.txt",
+      "width_m": 3.4,
+      "depth_m": 3.6,
+      "area_m2": 12.24
+    },
+    {
+      "id": "kitchen_medium_10",
+      "room_type": "kitchen",
+      "size_class": "medium",
+      "room_json": "rooms/kitchen_medium_10.json",
+      "prompt_txt": "prompts/kitchen_medium_10.prompt.txt",
+      "width_m": 3.6,
+      "depth_m": 3.8,
+      "area_m2": 13.68
+    },
+    {
+      "id": "kitchen_large_11",
+      "room_type": "kitchen",
+      "size_class": "large",
+      "room_json": "rooms/kitchen_large_11.json",
+      "prompt_txt": "prompts/kitchen_large_11.prompt.txt",
+      "width_m": 3.8,
+      "depth_m": 4.0,
+      "area_m2": 15.2
+    },
+    {
+      "id": "kitchen_large_12",
+      "room_type": "kitchen",
+      "size_class": "large",
+      "room_json": "rooms/kitchen_large_12.json",
+      "prompt_txt": "prompts/kitchen_large_12.prompt.txt",
+      "width_m": 4.0,
+      "depth_m": 4.2,
+      "area_m2": 16.8
+    },
+    {
+      "id": "kitchen_large_13",
+      "room_type": "kitchen",
+      "size_class": "large",
+      "room_json": "rooms/kitchen_large_13.json",
+      "prompt_txt": "prompts/kitchen_large_13.prompt.txt",
+      "width_m": 4.2,
+      "depth_m": 4.4,
+      "area_m2": 18.48
+    },
+    {
+      "id": "kitchen_large_14",
+      "room_type": "kitchen",
+      "size_class": "large",
+      "room_json": "rooms/kitchen_large_14.json",
+      "prompt_txt": "prompts/kitchen_large_14.prompt.txt",
+      "width_m": 4.5,
+      "depth_m": 4.6,
+      "area_m2": 20.7
+    },
+    {
+      "id": "kitchen_large_15",
+      "room_type": "kitchen",
+      "size_class": "large",
+      "room_json": "rooms/kitchen_large_15.json",
+      "prompt_txt": "prompts/kitchen_large_15.prompt.txt",
+      "width_m": 4.8,
+      "depth_m": 4.8,
+      "area_m2": 23.04
+    },
+    {
+      "id": "bathroom_small_01",
+      "room_type": "bathroom",
+      "size_class": "small",
+      "room_json": "rooms/bathroom_small_01.json",
+      "prompt_txt": "prompts/bathroom_small_01.prompt.txt",
+      "width_m": 1.7,
+      "depth_m": 2.0,
+      "area_m2": 3.4
+    },
+    {
+      "id": "bathroom_small_02",
+      "room_type": "bathroom",
+      "size_class": "small",
+      "room_json": "rooms/bathroom_small_02.json",
+      "prompt_txt": "prompts/bathroom_small_02.prompt.txt",
+      "width_m": 1.8,
+      "depth_m": 2.1,
+      "area_m2": 3.78
+    },
+    {
+      "id": "bathroom_small_03",
+      "room_type": "bathroom",
+      "size_class": "small",
+      "room_json": "rooms/bathroom_small_03.json",
+      "prompt_txt": "prompts/bathroom_small_03.prompt.txt",
+      "width_m": 1.9,
+      "depth_m": 2.2,
+      "area_m2": 4.18
+    },
+    {
+      "id": "bathroom_small_04",
+      "room_type": "bathroom",
+      "size_class": "small",
+      "room_json": "rooms/bathroom_small_04.json",
+      "prompt_txt": "prompts/bathroom_small_04.prompt.txt",
+      "width_m": 2.0,
+      "depth_m": 2.3,
+      "area_m2": 4.6
+    },
+    {
+      "id": "bathroom_small_05",
+      "room_type": "bathroom",
+      "size_class": "small",
+      "room_json": "rooms/bathroom_small_05.json",
+      "prompt_txt": "prompts/bathroom_small_05.prompt.txt",
+      "width_m": 2.1,
+      "depth_m": 2.4,
+      "area_m2": 5.04
+    },
+    {
+      "id": "bathroom_medium_06",
+      "room_type": "bathroom",
+      "size_class": "medium",
+      "room_json": "rooms/bathroom_medium_06.json",
+      "prompt_txt": "prompts/bathroom_medium_06.prompt.txt",
+      "width_m": 2.2,
+      "depth_m": 2.6,
+      "area_m2": 5.72
+    },
+    {
+      "id": "bathroom_medium_07",
+      "room_type": "bathroom",
+      "size_class": "medium",
+      "room_json": "rooms/bathroom_medium_07.json",
+      "prompt_txt": "prompts/bathroom_medium_07.prompt.txt",
+      "width_m": 2.4,
+      "depth_m": 2.7,
+      "area_m2": 6.48
+    },
+    {
+      "id": "bathroom_medium_08",
+      "room_type": "bathroom",
+      "size_class": "medium",
+      "room_json": "rooms/bathroom_medium_08.json",
+      "prompt_txt": "prompts/bathroom_medium_08.prompt.txt",
+      "width_m": 2.5,
+      "depth_m": 2.8,
+      "area_m2": 7.0
+    },
+    {
+      "id": "bathroom_medium_09",
+      "room_type": "bathroom",
+      "size_class": "medium",
+      "room_json": "rooms/bathroom_medium_09.json",
+      "prompt_txt": "prompts/bathroom_medium_09.prompt.txt",
+      "width_m": 2.6,
+      "depth_m": 3.0,
+      "area_m2": 7.8
+    },
+    {
+      "id": "bathroom_medium_10",
+      "room_type": "bathroom",
+      "size_class": "medium",
+      "room_json": "rooms/bathroom_medium_10.json",
+      "prompt_txt": "prompts/bathroom_medium_10.prompt.txt",
+      "width_m": 2.8,
+      "depth_m": 3.1,
+      "area_m2": 8.68
+    },
+    {
+      "id": "bathroom_large_11",
+      "room_type": "bathroom",
+      "size_class": "large",
+      "room_json": "rooms/bathroom_large_11.json",
+      "prompt_txt": "prompts/bathroom_large_11.prompt.txt",
+      "width_m": 3.0,
+      "depth_m": 3.2,
+      "area_m2": 9.6
+    },
+    {
+      "id": "bathroom_large_12",
+      "room_type": "bathroom",
+      "size_class": "large",
+      "room_json": "rooms/bathroom_large_12.json",
+      "prompt_txt": "prompts/bathroom_large_12.prompt.txt",
+      "width_m": 3.2,
+      "depth_m": 3.4,
+      "area_m2": 10.88
+    },
+    {
+      "id": "bathroom_large_13",
+      "room_type": "bathroom",
+      "size_class": "large",
+      "room_json": "rooms/bathroom_large_13.json",
+      "prompt_txt": "prompts/bathroom_large_13.prompt.txt",
+      "width_m": 3.4,
+      "depth_m": 3.5,
+      "area_m2": 11.9
+    },
+    {
+      "id": "bathroom_large_14",
+      "room_type": "bathroom",
+      "size_class": "large",
+      "room_json": "rooms/bathroom_large_14.json",
+      "prompt_txt": "prompts/bathroom_large_14.prompt.txt",
+      "width_m": 3.6,
+      "depth_m": 3.7,
+      "area_m2": 13.32
+    },
+    {
+      "id": "bathroom_large_15",
+      "room_type": "bathroom",
+      "size_class": "large",
+      "room_json": "rooms/bathroom_large_15.json",
+      "prompt_txt": "prompts/bathroom_large_15.prompt.txt",
+      "width_m": 3.8,
+      "depth_m": 4.0,
+      "area_m2": 15.2
+    },
+    {
+      "id": "toilet_small_01",
+      "room_type": "toilet",
+      "size_class": "small",
+      "room_json": "rooms/toilet_small_01.json",
+      "prompt_txt": "prompts/toilet_small_01.prompt.txt",
+      "width_m": 0.9,
+      "depth_m": 1.3,
+      "area_m2": 1.17
+    },
+    {
+      "id": "toilet_small_02",
+      "room_type": "toilet",
+      "size_class": "small",
+      "room_json": "rooms/toilet_small_02.json",
+      "prompt_txt": "prompts/toilet_small_02.prompt.txt",
+      "width_m": 1.0,
+      "depth_m": 1.4,
+      "area_m2": 1.4
+    },
+    {
+      "id": "toilet_small_03",
+      "room_type": "toilet",
+      "size_class": "small",
+      "room_json": "rooms/toilet_small_03.json",
+      "prompt_txt": "prompts/toilet_small_03.prompt.txt",
+      "width_m": 1.0,
+      "depth_m": 1.6,
+      "area_m2": 1.6
+    },
+    {
+      "id": "toilet_small_04",
+      "room_type": "toilet",
+      "size_class": "small",
+      "room_json": "rooms/toilet_small_04.json",
+      "prompt_txt": "prompts/toilet_small_04.prompt.txt",
+      "width_m": 1.1,
+      "depth_m": 1.6,
+      "area_m2": 1.76
+    },
+    {
+      "id": "toilet_small_05",
+      "room_type": "toilet",
+      "size_class": "small",
+      "room_json": "rooms/toilet_small_05.json",
+      "prompt_txt": "prompts/toilet_small_05.prompt.txt",
+      "width_m": 1.2,
+      "depth_m": 1.7,
+      "area_m2": 2.04
+    },
+    {
+      "id": "toilet_medium_06",
+      "room_type": "toilet",
+      "size_class": "medium",
+      "room_json": "rooms/toilet_medium_06.json",
+      "prompt_txt": "prompts/toilet_medium_06.prompt.txt",
+      "width_m": 1.2,
+      "depth_m": 1.9,
+      "area_m2": 2.28
+    },
+    {
+      "id": "toilet_medium_07",
+      "room_type": "toilet",
+      "size_class": "medium",
+      "room_json": "rooms/toilet_medium_07.json",
+      "prompt_txt": "prompts/toilet_medium_07.prompt.txt",
+      "width_m": 1.3,
+      "depth_m": 2.0,
+      "area_m2": 2.6
+    },
+    {
+      "id": "toilet_medium_08",
+      "room_type": "toilet",
+      "size_class": "medium",
+      "room_json": "rooms/toilet_medium_08.json",
+      "prompt_txt": "prompts/toilet_medium_08.prompt.txt",
+      "width_m": 1.4,
+      "depth_m": 2.1,
+      "area_m2": 2.94
+    },
+    {
+      "id": "toilet_medium_09",
+      "room_type": "toilet",
+      "size_class": "medium",
+      "room_json": "rooms/toilet_medium_09.json",
+      "prompt_txt": "prompts/toilet_medium_09.prompt.txt",
+      "width_m": 1.5,
+      "depth_m": 2.2,
+      "area_m2": 3.3
+    },
+    {
+      "id": "toilet_medium_10",
+      "room_type": "toilet",
+      "size_class": "medium",
+      "room_json": "rooms/toilet_medium_10.json",
+      "prompt_txt": "prompts/toilet_medium_10.prompt.txt",
+      "width_m": 1.6,
+      "depth_m": 2.3,
+      "area_m2": 3.68
+    },
+    {
+      "id": "toilet_large_11",
+      "room_type": "toilet",
+      "size_class": "large",
+      "room_json": "rooms/toilet_large_11.json",
+      "prompt_txt": "prompts/toilet_large_11.prompt.txt",
+      "width_m": 1.7,
+      "depth_m": 2.4,
+      "area_m2": 4.08
+    },
+    {
+      "id": "toilet_large_12",
+      "room_type": "toilet",
+      "size_class": "large",
+      "room_json": "rooms/toilet_large_12.json",
+      "prompt_txt": "prompts/toilet_large_12.prompt.txt",
+      "width_m": 1.8,
+      "depth_m": 2.5,
+      "area_m2": 4.5
+    },
+    {
+      "id": "toilet_large_13",
+      "room_type": "toilet",
+      "size_class": "large",
+      "room_json": "rooms/toilet_large_13.json",
+      "prompt_txt": "prompts/toilet_large_13.prompt.txt",
+      "width_m": 1.9,
+      "depth_m": 2.6,
+      "area_m2": 4.94
+    },
+    {
+      "id": "toilet_large_14",
+      "room_type": "toilet",
+      "size_class": "large",
+      "room_json": "rooms/toilet_large_14.json",
+      "prompt_txt": "prompts/toilet_large_14.prompt.txt",
+      "width_m": 2.0,
+      "depth_m": 2.7,
+      "area_m2": 5.4
+    },
+    {
+      "id": "toilet_large_15",
+      "room_type": "toilet",
+      "size_class": "large",
+      "room_json": "rooms/toilet_large_15.json",
+      "prompt_txt": "prompts/toilet_large_15.prompt.txt",
+      "width_m": 2.2,
+      "depth_m": 2.8,
+      "area_m2": 6.16
+    }
+  ]
+}

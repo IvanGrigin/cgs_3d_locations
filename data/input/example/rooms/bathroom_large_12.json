@@ -1,0 +1,123 @@
+{
+  "version": "1.0",
+  "units": "m",
+  "coordinate_system": {
+    "floor_plane": "XY",
+    "up": "Z",
+    "right_handed": true
+  },
+  "room": {
+    "id": "bathroom_large_12",
+    "name": "bathroom_large_12",
+    "title_ru": "Ванная 12",
+    "room_type": "bathroom",
+    "style_hint": "boho neutral",
+    "size_class": "large",
+    "width_m": 3.2,
+    "depth_m": 3.4,
+    "area_m2": 10.88,
+    "ceiling_height": 2.5,
+    "ceiling_height_m": 2.5,
+    "floor_polygon": [
+      {
+        "x": 0.0,
+        "y": 0.0
+      },
+      {
+        "x": 3.2,
+        "y": 0.0
+      },
+      {
+        "x": 3.2,
+        "y": 3.4
+      },
+      {
+        "x": 0.0,
+        "y": 3.4
+      }
+    ],
+    "floor_polygon_xz": [
+      {
+        "x": 0.0,
+        "z": 0.0
+      },
+      {
+        "x": 3.2,
+        "z": 0.0
+      },
+      {
+        "x": 3.2,
+        "z": 3.4
+      },
+      {
+        "x": 0.0,
+        "z": 3.4
+      }
+    ],
+    "walls": [
+      {
+        "id": "w0",
+        "from_vertex": 0,
+        "to_vertex": 1
+      },
+      {
+        "id": "w1",
+        "from_vertex": 1,
+        "to_vertex": 2
+      },
+      {
+        "id": "w2",
+        "from_vertex": 2,
+        "to_vertex": 3
+      },
+      {
+        "id": "w3",
+        "from_vertex": 3,
+        "to_vertex": 0
+      }
+    ],
+    "doors": [
+      {
+        "id": "door_0",
+        "wall_id": "w0",
+        "s": 0.704,
+        "width": 0.9,
+        "z0": 0.0,
+        "height": 2.05,
+        "swing": {
+          "hinge": "right",
+          "direction": "in"
+        },
+        "segment": {
+          "x1": 0.704,
+          "y1": 0.0,
+          "x2": 1.604,
+          "y2": 0.0
+        }
+      }
+    ],
+    "windows": [
+      {
+        "id": "win_0",
+        "wall_id": "w2",
+        "s": 1.285,
+        "width": 0.99,
+        "z0": 1.25,
+        "height": 0.65,
+        "glazing": "frosted",
+        "segment": {
+          "x1": 1.915,
+          "y1": 3.4,
+          "x2": 0.925,
+          "y2": 3.4
+        }
+      }
+    ],
+    "openings": [],
+    "notes": {
+      "generator": "generated_by_codex_for_examples",
+      "prompt_file": "../prompts/bathroom_large_12.prompt.txt",
+      "comment": "Example room spec with rectangular footprint, one door, and one or more windows."
+    }
+  }
+}

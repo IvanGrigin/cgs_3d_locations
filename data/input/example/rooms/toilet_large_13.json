@@ -1,0 +1,123 @@
+{
+  "version": "1.0",
+  "units": "m",
+  "coordinate_system": {
+    "floor_plane": "XY",
+    "up": "Z",
+    "right_handed": true
+  },
+  "room": {
+    "id": "toilet_large_13",
+    "name": "toilet_large_13",
+    "title_ru": "Туалет 13",
+    "room_type": "toilet",
+    "style_hint": "compact urban",
+    "size_class": "large",
+    "width_m": 1.9,
+    "depth_m": 2.6,
+    "area_m2": 4.94,
+    "ceiling_height": 2.5,
+    "ceiling_height_m": 2.5,
+    "floor_polygon": [
+      {
+        "x": 0.0,
+        "y": 0.0
+      },
+      {
+        "x": 1.9,
+        "y": 0.0
+      },
+      {
+        "x": 1.9,
+        "y": 2.6
+      },
+      {
+        "x": 0.0,
+        "y": 2.6
+      }
+    ],
+    "floor_polygon_xz": [
+      {
+        "x": 0.0,
+        "z": 0.0
+      },
+      {
+        "x": 1.9,
+        "z": 0.0
+      },
+      {
+        "x": 1.9,
+        "z": 2.6
+      },
+      {
+        "x": 0.0,
+        "z": 2.6
+      }
+    ],
+    "walls": [
+      {
+        "id": "w0",
+        "from_vertex": 0,
+        "to_vertex": 1
+      },
+      {
+        "id": "w1",
+        "from_vertex": 1,
+        "to_vertex": 2
+      },
+      {
+        "id": "w2",
+        "from_vertex": 2,
+        "to_vertex": 3
+      },
+      {
+        "id": "w3",
+        "from_vertex": 3,
+        "to_vertex": 0
+      }
+    ],
+    "doors": [
+      {
+        "id": "door_0",
+        "wall_id": "w0",
+        "s": 0.494,
+        "width": 0.8,
+        "z0": 0.0,
+        "height": 2.05,
+        "swing": {
+          "hinge": "left",
+          "direction": "in"
+        },
+        "segment": {
+          "x1": 0.494,
+          "y1": 0.0,
+          "x2": 1.294,
+          "y2": 0.0
+        }
+      }
+    ],
+    "windows": [
+      {
+        "id": "win_0",
+        "wall_id": "w2",
+        "s": 0.495,
+        "width": 0.55,
+        "z0": 1.25,
+        "height": 0.65,
+        "glazing": "frosted",
+        "segment": {
+          "x1": 1.405,
+          "y1": 2.6,
+          "x2": 0.855,
+          "y2": 2.6
+        }
+      }
+    ],
+    "openings": [],
+    "notes": {
+      "generator": "generated_by_codex_for_examples",
+      "prompt_file": "../prompts/toilet_large_13.prompt.txt",
+      "comment": "Example room spec with rectangular footprint, one door, and one or more windows."
+    }
+  }
+}

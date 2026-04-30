@@ -1,0 +1,123 @@
+{
+  "version": "1.0",
+  "units": "m",
+  "coordinate_system": {
+    "floor_plane": "XY",
+    "up": "Z",
+    "right_handed": true
+  },
+  "room": {
+    "id": "bedroom_medium_07",
+    "name": "bedroom_medium_07",
+    "title_ru": "Спальня 07",
+    "room_type": "bedroom",
+    "style_hint": "mid-century modern",
+    "size_class": "medium",
+    "width_m": 3.5,
+    "depth_m": 4.0,
+    "area_m2": 14.0,
+    "ceiling_height": 2.7,
+    "ceiling_height_m": 2.7,
+    "floor_polygon": [
+      {
+        "x": 0.0,
+        "y": 0.0
+      },
+      {
+        "x": 3.5,
+        "y": 0.0
+      },
+      {
+        "x": 3.5,
+        "y": 4.0
+      },
+      {
+        "x": 0.0,
+        "y": 4.0
+      }
+    ],
+    "floor_polygon_xz": [
+      {
+        "x": 0.0,
+        "z": 0.0
+      },
+      {
+        "x": 3.5,
+        "z": 0.0
+      },
+      {
+        "x": 3.5,
+        "z": 4.0
+      },
+      {
+        "x": 0.0,
+        "z": 4.0
+      }
+    ],
+    "walls": [
+      {
+        "id": "w0",
+        "from_vertex": 0,
+        "to_vertex": 1
+      },
+      {
+        "id": "w1",
+        "from_vertex": 1,
+        "to_vertex": 2
+      },
+      {
+        "id": "w2",
+        "from_vertex": 2,
+        "to_vertex": 3
+      },
+      {
+        "id": "w3",
+        "from_vertex": 3,
+        "to_vertex": 0
+      }
+    ],
+    "doors": [
+      {
+        "id": "door_0",
+        "wall_id": "w0",
+        "s": 0.77,
+        "width": 0.9,
+        "z0": 0.0,
+        "height": 2.05,
+        "swing": {
+          "hinge": "left",
+          "direction": "in"
+        },
+        "segment": {
+          "x1": 0.77,
+          "y1": 0.0,
+          "x2": 1.67,
+          "y2": 0.0
+        }
+      }
+    ],
+    "windows": [
+      {
+        "id": "win_0",
+        "wall_id": "w2",
+        "s": 0.89,
+        "width": 1.36,
+        "z0": 0.9,
+        "height": 1.2,
+        "glazing": "double",
+        "segment": {
+          "x1": 2.61,
+          "y1": 4.0,
+          "x2": 1.25,
+          "y2": 4.0
+        }
+      }
+    ],
+    "openings": [],
+    "notes": {
+      "generator": "generated_by_codex_for_examples",
+      "prompt_file": "../prompts/bedroom_medium_07.prompt.txt",
+      "comment": "Example room spec with rectangular footprint, one door, and one or more windows."
+    }
+  }
+}

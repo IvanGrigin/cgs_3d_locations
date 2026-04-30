@@ -1,0 +1,123 @@
+{
+  "version": "1.0",
+  "units": "m",
+  "coordinate_system": {
+    "floor_plane": "XY",
+    "up": "Z",
+    "right_handed": true
+  },
+  "room": {
+    "id": "living_room_small_02",
+    "name": "living_room_small_02",
+    "title_ru": "Гостиная 02",
+    "room_type": "living_room",
+    "style_hint": "warm modern",
+    "size_class": "small",
+    "width_m": 3.2,
+    "depth_m": 3.8,
+    "area_m2": 12.16,
+    "ceiling_height": 2.7,
+    "ceiling_height_m": 2.7,
+    "floor_polygon": [
+      {
+        "x": 0.0,
+        "y": 0.0
+      },
+      {
+        "x": 3.2,
+        "y": 0.0
+      },
+      {
+        "x": 3.2,
+        "y": 3.8
+      },
+      {
+        "x": 0.0,
+        "y": 3.8
+      }
+    ],
+    "floor_polygon_xz": [
+      {
+        "x": 0.0,
+        "z": 0.0
+      },
+      {
+        "x": 3.2,
+        "z": 0.0
+      },
+      {
+        "x": 3.2,
+        "z": 3.8
+      },
+      {
+        "x": 0.0,
+        "z": 3.8
+      }
+    ],
+    "walls": [
+      {
+        "id": "w0",
+        "from_vertex": 0,
+        "to_vertex": 1
+      },
+      {
+        "id": "w1",
+        "from_vertex": 1,
+        "to_vertex": 2
+      },
+      {
+        "id": "w2",
+        "from_vertex": 2,
+        "to_vertex": 3
+      },
+      {
+        "id": "w3",
+        "from_vertex": 3,
+        "to_vertex": 0
+      }
+    ],
+    "doors": [
+      {
+        "id": "door_0",
+        "wall_id": "w3",
+        "s": 0.836,
+        "width": 0.9,
+        "z0": 0.0,
+        "height": 2.05,
+        "swing": {
+          "hinge": "right",
+          "direction": "in"
+        },
+        "segment": {
+          "x1": 0.0,
+          "y1": 2.964,
+          "x2": 0.0,
+          "y2": 2.064
+        }
+      }
+    ],
+    "windows": [
+      {
+        "id": "win_0",
+        "wall_id": "w2",
+        "s": 0.96,
+        "width": 1.28,
+        "z0": 0.9,
+        "height": 1.2,
+        "glazing": "double",
+        "segment": {
+          "x1": 2.24,
+          "y1": 3.8,
+          "x2": 0.96,
+          "y2": 3.8
+        }
+      }
+    ],
+    "openings": [],
+    "notes": {
+      "generator": "generated_by_codex_for_examples",
+      "prompt_file": "../prompts/living_room_small_02.prompt.txt",
+      "comment": "Example room spec with rectangular footprint, one door, and one or more windows."
+    }
+  }
+}

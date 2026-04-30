@@ -1,0 +1,138 @@
+{
+  "version": "1.0",
+  "units": "m",
+  "coordinate_system": {
+    "floor_plane": "XY",
+    "up": "Z",
+    "right_handed": true
+  },
+  "room": {
+    "id": "kitchen_large_11",
+    "name": "kitchen_large_11",
+    "title_ru": "Кухня 11",
+    "room_type": "kitchen",
+    "style_hint": "quiet luxury",
+    "size_class": "large",
+    "width_m": 3.8,
+    "depth_m": 4.0,
+    "area_m2": 15.2,
+    "ceiling_height": 2.9,
+    "ceiling_height_m": 2.9,
+    "floor_polygon": [
+      {
+        "x": 0.0,
+        "y": 0.0
+      },
+      {
+        "x": 3.8,
+        "y": 0.0
+      },
+      {
+        "x": 3.8,
+        "y": 4.0
+      },
+      {
+        "x": 0.0,
+        "y": 4.0
+      }
+    ],
+    "floor_polygon_xz": [
+      {
+        "x": 0.0,
+        "z": 0.0
+      },
+      {
+        "x": 3.8,
+        "z": 0.0
+      },
+      {
+        "x": 3.8,
+        "z": 4.0
+      },
+      {
+        "x": 0.0,
+        "z": 4.0
+      }
+    ],
+    "walls": [
+      {
+        "id": "w0",
+        "from_vertex": 0,
+        "to_vertex": 1
+      },
+      {
+        "id": "w1",
+        "from_vertex": 1,
+        "to_vertex": 2
+      },
+      {
+        "id": "w2",
+        "from_vertex": 2,
+        "to_vertex": 3
+      },
+      {
+        "id": "w3",
+        "from_vertex": 3,
+        "to_vertex": 0
+      }
+    ],
+    "doors": [
+      {
+        "id": "door_0",
+        "wall_id": "w3",
+        "s": 0.72,
+        "width": 0.9,
+        "z0": 0.0,
+        "height": 2.05,
+        "swing": {
+          "hinge": "left",
+          "direction": "in"
+        },
+        "segment": {
+          "x1": 0.0,
+          "y1": 3.28,
+          "x2": 0.0,
+          "y2": 2.38
+        }
+      }
+    ],
+    "windows": [
+      {
+        "id": "win_0",
+        "wall_id": "w2",
+        "s": 1.22,
+        "width": 1.36,
+        "z0": 0.9,
+        "height": 1.2,
+        "glazing": "double",
+        "segment": {
+          "x1": 2.58,
+          "y1": 4.0,
+          "x2": 1.22,
+          "y2": 4.0
+        }
+      },
+      {
+        "id": "win_1",
+        "wall_id": "w1",
+        "s": 1.8,
+        "width": 1.0,
+        "z0": 0.9,
+        "height": 1.2,
+        "glazing": "double",
+        "segment": {
+          "x1": 3.8,
+          "y1": 1.8,
+          "x2": 3.8,
+          "y2": 2.8
+        }
+      }
+    ],
+    "openings": [],
+    "notes": {
+      "generator": "generated_by_codex_for_examples",
+      "prompt_file": "../prompts/kitchen_large_11.prompt.txt",
+      "comment": "Example room spec with rectangular footprint, one door, and one or more windows."
+    }
+  }
+}

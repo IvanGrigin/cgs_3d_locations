@@ -1,0 +1,23 @@
+{
+  "scale_px_per_meter": 107.42857142857143,
+  "max_room_width_m": 6.8,
+  "max_room_depth_m": 7.0,
+  "canvas_px": [
+    960,
+    960
+  ],
+  "gifs": {
+    "bathroom": "data/input/example/previews/gifs/bathroom.gif",
+    "bedroom": "data/input/example/previews/gifs/bedroom.gif",
+    "kitchen": "data/input/example/previews/gifs/kitchen.gif",
+    "living_room": "data/input/example/previews/gifs/living_room.gif",
+    "toilet": "data/input/example/previews/gifs/toilet.gif"
+  },
+  "contact_sheets": {
+    "bathroom": "data/input/example/previews/contact_sheets/bathroom_contact_sheet.png",
+    "bedroom": "data/input/example/previews/contact_sheets/bedroom_contact_sheet.png",
+    "kitchen": "data/input/example/previews/contact_sheets/kitchen_contact_sheet.png",
+    "living_room": "data/input/example/previews/contact_sheets/living_room_contact_sheet.png",
+    "toilet": "data/input/example/previews/contact_sheets/toilet_contact_sheet.png"
+  }
+}

@@ -1,0 +1,123 @@
+{
+  "version": "1.0",
+  "units": "m",
+  "coordinate_system": {
+    "floor_plane": "XY",
+    "up": "Z",
+    "right_handed": true
+  },
+  "room": {
+    "id": "kitchen_medium_06",
+    "name": "kitchen_medium_06",
+    "title_ru": "Кухня 06",
+    "room_type": "kitchen",
+    "style_hint": "soft neoclassical",
+    "size_class": "medium",
+    "width_m": 2.9,
+    "depth_m": 3.2,
+    "area_m2": 9.28,
+    "ceiling_height": 2.7,
+    "ceiling_height_m": 2.7,
+    "floor_polygon": [
+      {
+        "x": 0.0,
+        "y": 0.0
+      },
+      {
+        "x": 2.9,
+        "y": 0.0
+      },
+      {
+        "x": 2.9,
+        "y": 3.2
+      },
+      {
+        "x": 0.0,
+        "y": 3.2
+      }
+    ],
+    "floor_polygon_xz": [
+      {
+        "x": 0.0,
+        "z": 0.0
+      },
+      {
+        "x": 2.9,
+        "z": 0.0
+      },
+      {
+        "x": 2.9,
+        "z": 3.2
+      },
+      {
+        "x": 0.0,
+        "z": 3.2
+      }
+    ],
+    "walls": [
+      {
+        "id": "w0",
+        "from_vertex": 0,
+        "to_vertex": 1
+      },
+      {
+        "id": "w1",
+        "from_vertex": 1,
+        "to_vertex": 2
+      },
+      {
+        "id": "w2",
+        "from_vertex": 2,
+        "to_vertex": 3
+      },
+      {
+        "id": "w3",
+        "from_vertex": 3,
+        "to_vertex": 0
+      }
+    ],
+    "doors": [
+      {
+        "id": "door_0",
+        "wall_id": "w0",
+        "s": 0.522,
+        "width": 0.9,
+        "z0": 0.0,
+        "height": 2.05,
+        "swing": {
+          "hinge": "right",
+          "direction": "in"
+        },
+        "segment": {
+          "x1": 0.522,
+          "y1": 0.0,
+          "x2": 1.422,
+          "y2": 0.0
+        }
+      }
+    ],
+    "windows": [
+      {
+        "id": "win_0",
+        "wall_id": "w2",
+        "s": 0.99,
+        "width": 1.28,
+        "z0": 0.9,
+        "height": 1.2,
+        "glazing": "double",
+        "segment": {
+          "x1": 1.91,
+          "y1": 3.2,
+          "x2": 0.63,
+          "y2": 3.2
+        }
+      }
+    ],
+    "openings": [],
+    "notes": {
+      "generator": "generated_by_codex_for_examples",
+      "prompt_file": "../prompts/kitchen_medium_06.prompt.txt",
+      "comment": "Example room spec with rectangular footprint, one door, and one or more windows."
+    }
+  }
+}
