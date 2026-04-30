@@ -13,9 +13,9 @@
     "room_type": "bedroom",
     "style_hint": "mid-century modern",
     "size_class": "medium",
-    "width_m": 3.5,
-    "depth_m": 4.0,
-    "area_m2": 14.0,
+    "width_m": 2.75,
+    "depth_m": 5.35,
+    "area_m2": 14.712,
     "ceiling_height": 2.7,
     "ceiling_height_m": 2.7,
     "floor_polygon": [
@@ -24,16 +24,16 @@
         "y": 0.0
       },
       {
-        "x": 3.5,
+        "x": 2.75,
         "y": 0.0
       },
       {
-        "x": 3.5,
-        "y": 4.0
+        "x": 2.75,
+        "y": 5.35
       },
       {
         "x": 0.0,
-        "y": 4.0
+        "y": 5.35
       }
     ],
     "floor_polygon_xz": [
@@ -42,16 +42,16 @@
         "z": 0.0
       },
       {
-        "x": 3.5,
+        "x": 2.75,
         "z": 0.0
       },
       {
-        "x": 3.5,
-        "z": 4.0
+        "x": 2.75,
+        "z": 5.35
       },
       {
         "x": 0.0,
-        "z": 4.0
+        "z": 5.35
       }
     ],
     "walls": [
@@ -80,8 +80,8 @@
       {
         "id": "door_0",
         "wall_id": "w0",
-        "s": 0.77,
-        "width": 0.9,
+        "s": 0.605,
+        "width": 0.85,
         "z0": 0.0,
         "height": 2.05,
         "swing": {
@@ -89,9 +89,9 @@
           "direction": "in"
         },
         "segment": {
-          "x1": 0.77,
+          "x1": 0.605,
           "y1": 0.0,
-          "x2": 1.67,
+          "x2": 1.455,
           "y2": 0.0
         }
       }
@@ -100,16 +100,16 @@
       {
         "id": "win_0",
         "wall_id": "w2",
-        "s": 0.89,
-        "width": 1.36,
+        "s": 0.825,
+        "width": 1.1,
         "z0": 0.9,
         "height": 1.2,
         "glazing": "double",
         "segment": {
-          "x1": 2.61,
-          "y1": 4.0,
-          "x2": 1.25,
-          "y2": 4.0
+          "x1": 1.925,
+          "y1": 5.35,
+          "x2": 0.825,
+          "y2": 5.35
         }
       }
     ],
@@ -117,7 +117,9 @@
     "notes": {
       "generator": "generated_by_codex_for_examples",
       "prompt_file": "../prompts/bedroom_medium_07.prompt.txt",
-      "comment": "Example room spec with rectangular footprint, one door, and one or more windows."
-    }
+      "comment": "Example room spec with rectangular footprint, one door, and one or more windows.",
+      "shape_update": "elongated_rectangle"
+    },
+    "shape": "elongated_rectangle"
   }
 }

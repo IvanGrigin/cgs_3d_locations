@@ -100,31 +100,31 @@
       {
         "id": "win_0",
         "wall_id": "w2",
-        "s": 2.56,
-        "width": 1.28,
+        "s": 0.65,
+        "width": 1.2,
         "z0": 0.9,
         "height": 1.2,
         "glazing": "double",
         "segment": {
-          "x1": 3.84,
+          "x1": 5.75,
           "y1": 6.5,
-          "x2": 2.56,
+          "x2": 4.55,
           "y2": 6.5
         }
       },
       {
         "id": "win_1",
-        "wall_id": "w1",
-        "s": 2.925,
-        "width": 1.0,
+        "wall_id": "w2",
+        "s": 2.15,
+        "width": 1.2,
         "z0": 0.9,
         "height": 1.2,
         "glazing": "double",
         "segment": {
-          "x1": 6.4,
-          "y1": 2.925,
-          "x2": 6.4,
-          "y2": 3.925
+          "x1": 4.25,
+          "y1": 6.5,
+          "x2": 3.05,
+          "y2": 6.5
         }
       }
     ],
@@ -132,7 +132,9 @@
     "notes": {
       "generator": "generated_by_codex_for_examples",
       "prompt_file": "../prompts/living_room_large_14.prompt.txt",
-      "comment": "Example room spec with rectangular footprint, one door, and one or more windows."
-    }
+      "comment": "Example room spec with rectangular footprint, one door, and one or more windows.",
+      "shape_update": "Two windows on one side."
+    },
+    "shape": "rectangle_two_windows_same_wall"
   }
 }

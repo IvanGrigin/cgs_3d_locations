@@ -13,9 +13,9 @@
     "room_type": "living_room",
     "style_hint": "boho neutral",
     "size_class": "large",
-    "width_m": 5.8,
-    "depth_m": 6.0,
-    "area_m2": 34.8,
+    "width_m": 3.8,
+    "depth_m": 7.4,
+    "area_m2": 28.12,
     "ceiling_height": 2.9,
     "ceiling_height_m": 2.9,
     "floor_polygon": [
@@ -24,16 +24,16 @@
         "y": 0.0
       },
       {
-        "x": 5.8,
+        "x": 3.8,
         "y": 0.0
       },
       {
-        "x": 5.8,
-        "y": 6.0
+        "x": 3.8,
+        "y": 7.4
       },
       {
         "x": 0.0,
-        "y": 6.0
+        "y": 7.4
       }
     ],
     "floor_polygon_xz": [
@@ -42,16 +42,16 @@
         "z": 0.0
       },
       {
-        "x": 5.8,
+        "x": 3.8,
         "z": 0.0
       },
       {
-        "x": 5.8,
-        "z": 6.0
+        "x": 3.8,
+        "z": 7.4
       },
       {
         "x": 0.0,
-        "z": 6.0
+        "z": 7.4
       }
     ],
     "walls": [
@@ -80,18 +80,18 @@
       {
         "id": "door_0",
         "wall_id": "w0",
-        "s": 1.276,
+        "s": 0.836,
         "width": 0.9,
         "z0": 0.0,
         "height": 2.05,
         "swing": {
-          "hinge": "right",
+          "hinge": "left",
           "direction": "in"
         },
         "segment": {
-          "x1": 1.276,
+          "x1": 0.836,
           "y1": 0.0,
-          "x2": 2.176,
+          "x2": 1.736,
           "y2": 0.0
         }
       }
@@ -100,31 +100,31 @@
       {
         "id": "win_0",
         "wall_id": "w2",
-        "s": 2.36,
-        "width": 1.44,
-        "z0": 0.9,
-        "height": 1.2,
-        "glazing": "double",
-        "segment": {
-          "x1": 3.44,
-          "y1": 6.0,
-          "x2": 2.0,
-          "y2": 6.0
-        }
-      },
-      {
-        "id": "win_1",
-        "wall_id": "w1",
-        "s": 2.7,
+        "s": 0.45,
         "width": 1.0,
         "z0": 0.9,
         "height": 1.2,
         "glazing": "double",
         "segment": {
-          "x1": 5.8,
-          "y1": 2.7,
-          "x2": 5.8,
-          "y2": 3.7
+          "x1": 3.35,
+          "y1": 7.4,
+          "x2": 2.35,
+          "y2": 7.4
+        }
+      },
+      {
+        "id": "win_1",
+        "wall_id": "w2",
+        "s": 2.35,
+        "width": 1.0,
+        "z0": 0.9,
+        "height": 1.2,
+        "glazing": "double",
+        "segment": {
+          "x1": 1.45,
+          "y1": 7.4,
+          "x2": 0.45,
+          "y2": 7.4
         }
       }
     ],
@@ -132,7 +132,9 @@
     "notes": {
       "generator": "generated_by_codex_for_examples",
       "prompt_file": "../prompts/living_room_large_12.prompt.txt",
-      "comment": "Example room spec with rectangular footprint, one door, and one or more windows."
-    }
+      "comment": "Example room spec with rectangular footprint, one door, and one or more windows.",
+      "shape_update": "elongated_rectangle_two_windows_same_wall"
+    },
+    "shape": "elongated_rectangle_two_windows_same_wall"
   }
 }

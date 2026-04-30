@@ -1,7 +1,7 @@
 {
-  "scale_px_per_meter": 107.42857142857143,
+  "scale_px_per_meter": 101.62162162162161,
   "max_room_width_m": 6.8,
-  "max_room_depth_m": 7.0,
+  "max_room_depth_m": 7.4,
   "canvas_px": [
     960,
     960

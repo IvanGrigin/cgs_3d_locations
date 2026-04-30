@@ -13,9 +13,9 @@
     "room_type": "living_room",
     "style_hint": "Japandi",
     "size_class": "small",
-    "width_m": 3.8,
-    "depth_m": 4.2,
-    "area_m2": 15.96,
+    "width_m": 2.8,
+    "depth_m": 5.6,
+    "area_m2": 15.68,
     "ceiling_height": 2.7,
     "ceiling_height_m": 2.7,
     "floor_polygon": [
@@ -24,16 +24,16 @@
         "y": 0.0
       },
       {
-        "x": 3.8,
+        "x": 2.8,
         "y": 0.0
       },
       {
-        "x": 3.8,
-        "y": 4.2
+        "x": 2.8,
+        "y": 5.6
       },
       {
         "x": 0.0,
-        "y": 4.2
+        "y": 5.6
       }
     ],
     "floor_polygon_xz": [
@@ -42,16 +42,16 @@
         "z": 0.0
       },
       {
-        "x": 3.8,
+        "x": 2.8,
         "z": 0.0
       },
       {
-        "x": 3.8,
-        "z": 4.2
+        "x": 2.8,
+        "z": 5.6
       },
       {
         "x": 0.0,
-        "z": 4.2
+        "z": 5.6
       }
     ],
     "walls": [
@@ -80,18 +80,18 @@
       {
         "id": "door_0",
         "wall_id": "w0",
-        "s": 1.14,
+        "s": 0.616,
         "width": 0.9,
         "z0": 0.0,
         "height": 2.05,
         "swing": {
-          "hinge": "right",
+          "hinge": "left",
           "direction": "in"
         },
         "segment": {
-          "x1": 1.14,
+          "x1": 0.616,
           "y1": 0.0,
-          "x2": 2.04,
+          "x2": 1.516,
           "y2": 0.0
         }
       }
@@ -100,16 +100,31 @@
       {
         "id": "win_0",
         "wall_id": "w2",
-        "s": 1.0,
-        "width": 1.44,
+        "s": 0.45,
+        "width": 1.0,
         "z0": 0.9,
         "height": 1.2,
         "glazing": "double",
         "segment": {
-          "x1": 2.8,
-          "y1": 4.2,
-          "x2": 1.36,
-          "y2": 4.2
+          "x1": 2.35,
+          "y1": 5.6,
+          "x2": 1.35,
+          "y2": 5.6
+        }
+      },
+      {
+        "id": "win_1",
+        "wall_id": "w2",
+        "s": 1.35,
+        "width": 1.0,
+        "z0": 0.9,
+        "height": 1.2,
+        "glazing": "double",
+        "segment": {
+          "x1": 1.45,
+          "y1": 5.6,
+          "x2": 0.45,
+          "y2": 5.6
         }
       }
     ],
@@ -117,7 +132,9 @@
     "notes": {
       "generator": "generated_by_codex_for_examples",
       "prompt_file": "../prompts/living_room_small_04.prompt.txt",
-      "comment": "Example room spec with rectangular footprint, one door, and one or more windows."
-    }
+      "comment": "Example room spec with rectangular footprint, one door, and one or more windows.",
+      "shape_update": "elongated_rectangle_two_windows_same_wall"
+    },
+    "shape": "elongated_rectangle_two_windows_same_wall"
   }
 }

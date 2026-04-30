@@ -13,9 +13,9 @@
     "room_type": "living_room",
     "style_hint": "compact urban",
     "size_class": "large",
-    "width_m": 6.0,
-    "depth_m": 6.2,
-    "area_m2": 37.2,
+    "width_m": 6.3,
+    "depth_m": 6.6,
+    "area_m2": 37.38,
     "ceiling_height": 2.9,
     "ceiling_height_m": 2.9,
     "floor_polygon": [
@@ -24,16 +24,24 @@
         "y": 0.0
       },
       {
-        "x": 6.0,
+        "x": 6.3,
         "y": 0.0
       },
       {
-        "x": 6.0,
-        "y": 6.2
+        "x": 6.3,
+        "y": 4.5
+      },
+      {
+        "x": 4.3,
+        "y": 4.5
+      },
+      {
+        "x": 4.3,
+        "y": 6.6
       },
       {
         "x": 0.0,
-        "y": 6.2
+        "y": 6.6
       }
     ],
     "floor_polygon_xz": [
@@ -42,16 +50,24 @@
         "z": 0.0
       },
       {
-        "x": 6.0,
+        "x": 6.3,
         "z": 0.0
       },
       {
-        "x": 6.0,
-        "z": 6.2
+        "x": 6.3,
+        "z": 4.5
+      },
+      {
+        "x": 4.3,
+        "z": 4.5
+      },
+      {
+        "x": 4.3,
+        "z": 6.6
       },
       {
         "x": 0.0,
-        "z": 6.2
+        "z": 6.6
       }
     ],
     "walls": [
@@ -73,6 +89,16 @@
       {
         "id": "w3",
         "from_vertex": 3,
+        "to_vertex": 4
+      },
+      {
+        "id": "w4",
+        "from_vertex": 4,
+        "to_vertex": 5
+      },
+      {
+        "id": "w5",
+        "from_vertex": 5,
         "to_vertex": 0
       }
     ],
@@ -80,7 +106,7 @@
       {
         "id": "door_0",
         "wall_id": "w0",
-        "s": 1.56,
+        "s": 1.386,
         "width": 0.9,
         "z0": 0.0,
         "height": 2.05,
@@ -89,9 +115,9 @@
           "direction": "in"
         },
         "segment": {
-          "x1": 1.56,
+          "x1": 1.386,
           "y1": 0.0,
-          "x2": 2.46,
+          "x2": 2.286,
           "y2": 0.0
         }
       }
@@ -99,32 +125,32 @@
     "windows": [
       {
         "id": "win_0",
-        "wall_id": "w2",
-        "s": 2.22,
-        "width": 1.2,
+        "wall_id": "w4",
+        "s": 0.55,
+        "width": 1.25,
         "z0": 0.9,
         "height": 1.2,
         "glazing": "double",
         "segment": {
-          "x1": 3.78,
-          "y1": 6.2,
-          "x2": 2.58,
-          "y2": 6.2
+          "x1": 3.75,
+          "y1": 6.6,
+          "x2": 2.5,
+          "y2": 6.6
         }
       },
       {
         "id": "win_1",
-        "wall_id": "w1",
-        "s": 2.79,
-        "width": 1.0,
+        "wall_id": "w4",
+        "s": 2.0,
+        "width": 1.25,
         "z0": 0.9,
         "height": 1.2,
         "glazing": "double",
         "segment": {
-          "x1": 6.0,
-          "y1": 2.79,
-          "x2": 6.0,
-          "y2": 3.79
+          "x1": 2.3,
+          "y1": 6.6,
+          "x2": 1.05,
+          "y2": 6.6
         }
       }
     ],
@@ -132,7 +158,9 @@
     "notes": {
       "generator": "generated_by_codex_for_examples",
       "prompt_file": "../prompts/living_room_large_13.prompt.txt",
-      "comment": "Example room spec with rectangular footprint, one door, and one or more windows."
-    }
+      "comment": "Example room spec with rectangular footprint, one door, and one or more windows.",
+      "shape_update": "l_shaped_top_right_cutout_two_windows_same_wall"
+    },
+    "shape": "l_shaped_top_right_cutout_two_windows_same_wall"
   }
 }

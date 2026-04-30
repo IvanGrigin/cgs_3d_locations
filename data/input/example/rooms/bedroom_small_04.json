@@ -13,9 +13,9 @@
     "room_type": "bedroom",
     "style_hint": "Japandi",
     "size_class": "small",
-    "width_m": 3.0,
-    "depth_m": 3.5,
-    "area_m2": 10.5,
+    "width_m": 2.35,
+    "depth_m": 4.65,
+    "area_m2": 10.928,
     "ceiling_height": 2.7,
     "ceiling_height_m": 2.7,
     "floor_polygon": [
@@ -24,16 +24,16 @@
         "y": 0.0
       },
       {
-        "x": 3.0,
+        "x": 2.35,
         "y": 0.0
       },
       {
-        "x": 3.0,
-        "y": 3.5
+        "x": 2.35,
+        "y": 4.65
       },
       {
         "x": 0.0,
-        "y": 3.5
+        "y": 4.65
       }
     ],
     "floor_polygon_xz": [
@@ -42,16 +42,16 @@
         "z": 0.0
       },
       {
-        "x": 3.0,
+        "x": 2.35,
         "z": 0.0
       },
       {
-        "x": 3.0,
-        "z": 3.5
+        "x": 2.35,
+        "z": 4.65
       },
       {
         "x": 0.0,
-        "z": 3.5
+        "z": 4.65
       }
     ],
     "walls": [
@@ -80,18 +80,18 @@
       {
         "id": "door_0",
         "wall_id": "w0",
-        "s": 0.9,
-        "width": 0.9,
+        "s": 0.517,
+        "width": 0.85,
         "z0": 0.0,
         "height": 2.05,
         "swing": {
-          "hinge": "right",
+          "hinge": "left",
           "direction": "in"
         },
         "segment": {
-          "x1": 0.9,
+          "x1": 0.517,
           "y1": 0.0,
-          "x2": 1.8,
+          "x2": 1.367,
           "y2": 0.0
         }
       }
@@ -100,16 +100,16 @@
       {
         "id": "win_0",
         "wall_id": "w2",
-        "s": 0.6,
-        "width": 1.44,
+        "s": 0.625,
+        "width": 1.1,
         "z0": 0.9,
         "height": 1.2,
         "glazing": "double",
         "segment": {
-          "x1": 2.4,
-          "y1": 3.5,
-          "x2": 0.96,
-          "y2": 3.5
+          "x1": 1.725,
+          "y1": 4.65,
+          "x2": 0.625,
+          "y2": 4.65
         }
       }
     ],
@@ -117,7 +117,9 @@
     "notes": {
       "generator": "generated_by_codex_for_examples",
       "prompt_file": "../prompts/bedroom_small_04.prompt.txt",
-      "comment": "Example room spec with rectangular footprint, one door, and one or more windows."
-    }
+      "comment": "Example room spec with rectangular footprint, one door, and one or more windows.",
+      "shape_update": "elongated_rectangle"
+    },
+    "shape": "elongated_rectangle"
   }
 }

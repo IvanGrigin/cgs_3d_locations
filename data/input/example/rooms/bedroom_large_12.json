@@ -13,9 +13,9 @@
     "room_type": "bedroom",
     "style_hint": "boho neutral",
     "size_class": "large",
-    "width_m": 4.4,
-    "depth_m": 4.8,
-    "area_m2": 21.12,
+    "width_m": 3.15,
+    "depth_m": 6.25,
+    "area_m2": 19.688,
     "ceiling_height": 2.9,
     "ceiling_height_m": 2.9,
     "floor_polygon": [
@@ -24,16 +24,16 @@
         "y": 0.0
       },
       {
-        "x": 4.4,
+        "x": 3.15,
         "y": 0.0
       },
       {
-        "x": 4.4,
-        "y": 4.8
+        "x": 3.15,
+        "y": 6.25
       },
       {
         "x": 0.0,
-        "y": 4.8
+        "y": 6.25
       }
     ],
     "floor_polygon_xz": [
@@ -42,16 +42,16 @@
         "z": 0.0
       },
       {
-        "x": 4.4,
+        "x": 3.15,
         "z": 0.0
       },
       {
-        "x": 4.4,
-        "z": 4.8
+        "x": 3.15,
+        "z": 6.25
       },
       {
         "x": 0.0,
-        "z": 4.8
+        "z": 6.25
       }
     ],
     "walls": [
@@ -80,18 +80,18 @@
       {
         "id": "door_0",
         "wall_id": "w0",
-        "s": 0.968,
-        "width": 0.9,
+        "s": 0.693,
+        "width": 0.85,
         "z0": 0.0,
         "height": 2.05,
         "swing": {
-          "hinge": "right",
+          "hinge": "left",
           "direction": "in"
         },
         "segment": {
-          "x1": 0.968,
+          "x1": 0.693,
           "y1": 0.0,
-          "x2": 1.868,
+          "x2": 1.543,
           "y2": 0.0
         }
       }
@@ -100,16 +100,16 @@
       {
         "id": "win_0",
         "wall_id": "w2",
-        "s": 1.66,
-        "width": 1.44,
+        "s": 1.025,
+        "width": 1.1,
         "z0": 0.9,
         "height": 1.2,
         "glazing": "double",
         "segment": {
-          "x1": 2.74,
-          "y1": 4.8,
-          "x2": 1.3,
-          "y2": 4.8
+          "x1": 2.125,
+          "y1": 6.25,
+          "x2": 1.025,
+          "y2": 6.25
         }
       }
     ],
@@ -117,7 +117,9 @@
     "notes": {
       "generator": "generated_by_codex_for_examples",
       "prompt_file": "../prompts/bedroom_large_12.prompt.txt",
-      "comment": "Example room spec with rectangular footprint, one door, and one or more windows."
-    }
+      "comment": "Example room spec with rectangular footprint, one door, and one or more windows.",
+      "shape_update": "elongated_rectangle"
+    },
+    "shape": "elongated_rectangle"
   }
 }

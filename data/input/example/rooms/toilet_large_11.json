@@ -96,28 +96,14 @@
         }
       }
     ],
-    "windows": [
-      {
-        "id": "win_0",
-        "wall_id": "w2",
-        "s": 0.495,
-        "width": 0.71,
-        "z0": 1.25,
-        "height": 0.65,
-        "glazing": "frosted",
-        "segment": {
-          "x1": 1.205,
-          "y1": 2.4,
-          "x2": 0.495,
-          "y2": 2.4
-        }
-      }
-    ],
+    "windows": [],
     "openings": [],
     "notes": {
       "generator": "generated_by_codex_for_examples",
       "prompt_file": "../prompts/toilet_large_11.prompt.txt",
-      "comment": "Example room spec with rectangular footprint, one door, and one or more windows."
-    }
+      "comment": "Example internal toilet room spec with rectangular footprint, one door, and no exterior windows.",
+      "shape_update": "Internal toilet room without windows."
+    },
+    "shape": "internal_windowless_rectangle"
   }
 }

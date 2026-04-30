@@ -13,9 +13,9 @@
     "room_type": "bedroom",
     "style_hint": "art deco accent",
     "size_class": "large",
-    "width_m": 4.8,
-    "depth_m": 5.2,
-    "area_m2": 24.96,
+    "width_m": 5.1,
+    "depth_m": 5.4,
+    "area_m2": 24.652,
     "ceiling_height": 2.9,
     "ceiling_height_m": 2.9,
     "floor_polygon": [
@@ -24,16 +24,24 @@
         "y": 0.0
       },
       {
-        "x": 4.8,
+        "x": 5.1,
         "y": 0.0
       },
       {
-        "x": 4.8,
-        "y": 5.2
+        "x": 5.1,
+        "y": 3.65
+      },
+      {
+        "x": 3.45,
+        "y": 3.65
+      },
+      {
+        "x": 3.45,
+        "y": 5.4
       },
       {
         "x": 0.0,
-        "y": 5.2
+        "y": 5.4
       }
     ],
     "floor_polygon_xz": [
@@ -42,16 +50,24 @@
         "z": 0.0
       },
       {
-        "x": 4.8,
+        "x": 5.1,
         "z": 0.0
       },
       {
-        "x": 4.8,
-        "z": 5.2
+        "x": 5.1,
+        "z": 3.65
+      },
+      {
+        "x": 3.45,
+        "z": 3.65
+      },
+      {
+        "x": 3.45,
+        "z": 5.4
       },
       {
         "x": 0.0,
-        "z": 5.2
+        "z": 5.4
       }
     ],
     "walls": [
@@ -73,43 +89,68 @@
       {
         "id": "w3",
         "from_vertex": 3,
+        "to_vertex": 4
+      },
+      {
+        "id": "w4",
+        "from_vertex": 4,
+        "to_vertex": 5
+      },
+      {
+        "id": "w5",
+        "from_vertex": 5,
         "to_vertex": 0
       }
     ],
     "doors": [
       {
         "id": "door_0",
-        "wall_id": "w3",
-        "s": 1.56,
+        "wall_id": "w0",
+        "s": 1.122,
         "width": 0.9,
         "z0": 0.0,
         "height": 2.05,
         "swing": {
-          "hinge": "right",
+          "hinge": "left",
           "direction": "in"
         },
         "segment": {
-          "x1": 0.0,
-          "y1": 3.64,
-          "x2": 0.0,
-          "y2": 2.74
+          "x1": 1.122,
+          "y1": 0.0,
+          "x2": 2.022,
+          "y2": 0.0
         }
       }
     ],
     "windows": [
       {
         "id": "win_0",
-        "wall_id": "w2",
-        "s": 1.76,
-        "width": 1.28,
+        "wall_id": "w4",
+        "s": 0.65,
+        "width": 1.15,
         "z0": 0.9,
         "height": 1.2,
         "glazing": "double",
         "segment": {
-          "x1": 3.04,
-          "y1": 5.2,
-          "x2": 1.76,
-          "y2": 5.2
+          "x1": 2.8,
+          "y1": 5.4,
+          "x2": 1.65,
+          "y2": 5.4
+        }
+      },
+      {
+        "id": "win_1",
+        "wall_id": "w4",
+        "s": 2.1,
+        "width": 1.15,
+        "z0": 0.9,
+        "height": 1.2,
+        "glazing": "double",
+        "segment": {
+          "x1": 1.35,
+          "y1": 5.4,
+          "x2": 0.2,
+          "y2": 5.4
         }
       }
     ],
@@ -117,7 +158,9 @@
     "notes": {
       "generator": "generated_by_codex_for_examples",
       "prompt_file": "../prompts/bedroom_large_14.prompt.txt",
-      "comment": "Example room spec with rectangular footprint, one door, and one or more windows."
-    }
+      "comment": "Example room spec with rectangular footprint, one door, and one or more windows.",
+      "shape_update": "l_shaped_top_right_cutout"
+    },
+    "shape": "l_shaped_top_right_cutout"
   }
 }
