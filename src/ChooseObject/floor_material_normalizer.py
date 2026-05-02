@@ -207,7 +207,14 @@ def normalize_chamfer(text: str) -> str | None:
 
 
 def _package_area(name: str, props: dict[str, Any]) -> float | None:
-    value = _prop(props, ["Площадь в упаковке", "Количество м² в упаковке", "Площадь упаковки", "м² в упаковке"])
+    value = _prop(props, [
+        "Площадь в упаковке",
+        "Количество м² в упаковке",
+        "Площадь упаковки",
+        "м² в упаковке",
+        "Кол-во м2 (м.п.) в коробке",
+        "Кол-во м² (м.п.) в коробке",
+    ])
     parsed = _parse_float(value)
     if parsed:
         return parsed
@@ -263,12 +270,18 @@ def normalize_product(row: dict[str, Any]) -> FloorMaterial:
     props = _safe_json(row.get("properties_json", ""), {})
     images = _safe_json(row.get("images_json", ""), [])
     local_images = _safe_json(row.get("local_image_paths_json", ""), [])
+    room_recs = _safe_json(row.get("room_recommendations_json", ""), [])
+    style_recs = _safe_json(row.get("style_recommendations_json", ""), [])
     if not isinstance(props, dict):
         props = {}
     if not isinstance(images, list):
         images = []
     if not isinstance(local_images, list):
         local_images = []
+    if not isinstance(room_recs, list):
+        room_recs = []
+    if not isinstance(style_recs, list):
+        style_recs = []
 
     name = _norm(row.get("name"))
     description = _norm(row.get("description"))
@@ -288,15 +301,25 @@ def normalize_product(row: dict[str, Any]) -> FloorMaterial:
         warm_floor = True
 
     suitability, bad_for = _room_suitability(material_type, water)
+    explicit_rooms = [
+        _norm(item.get("room"))
+        for item in room_recs
+        if isinstance(item, dict) and _norm(item.get("room"))
+    ]
+    if explicit_rooms:
+        suitability = sorted(set(suitability).union(explicit_rooms))
+        bad_for = [room for room in bad_for if room not in suitability]
     decor_name = _prop(props, ["Название декора", "Декор"]) or None
     class_value = _parse_int(_prop(props, ["Класс", "Класс износостойкости", "Класс применения"]) or name)
+    product_url = _norm(row.get("url") or row.get("final_url"))
+    source = "mosplitka" if "mosplitka.ru" in product_url else "domlenta"
 
     material = FloorMaterial(
-        source="domlenta",
-        sku=_norm(row.get("sku")) or (_norm(row.get("url")).rstrip("/").split("-")[-1] if _norm(row.get("url")) else ""),
+        source=source,
+        sku=_norm(row.get("sku")) or (product_url.rstrip("/").split("-")[-1] if product_url else ""),
         name=name,
         brand=_norm(row.get("brand")) or _prop(props, ["Бренд"]),
-        product_url=_norm(row.get("url") or row.get("final_url")),
+        product_url=product_url,
         price=_parse_float(row.get("price")),
         price_currency=_norm(row.get("price_currency")) or "RUB",
         availability=normalize_availability(_norm(row.get("availability"))),
@@ -307,7 +330,7 @@ def normalize_product(row: dict[str, Any]) -> FloorMaterial:
         tone=tone,
         tone_family=tone_family,
         class_=class_value,
-        thickness_mm=_parse_float(_prop(props, ["Толщина планки", "Толщина", "Толщина покрытия"])),
+        thickness_mm=_parse_float(_prop(props, ["Толщина планки", "Толщина", "Толщина покрытия", "Толщина, мм"])),
         plank_width_mm=_parse_float(_prop(props, ["Ширина планки", "Ширина", "Ширина доски"])),
         plank_length_mm=_parse_float(_prop(props, ["Длина планки", "Длина", "Длина доски"])),
         package_area_m2=_package_area(name, props),
@@ -324,9 +347,17 @@ def normalize_product(row: dict[str, Any]) -> FloorMaterial:
         parse_status=_norm(row.get("parse_status")) or "ok",
     )
     material.style_tags = _style_tags(material.material_type, material.decor, material.design, material.tone)
+    explicit_styles = [
+        _norm(item.get("style"))
+        for item in style_recs
+        if isinstance(item, dict) and _norm(item.get("style"))
+    ]
+    if explicit_styles:
+        material.style_tags = sorted(set(material.style_tags).union(explicit_styles))
     material.search_text = _lower(" ".join([
         material.name, material.brand, material.description, material.material_type,
         material.decor or "", material.decor_name or "", material.design or "", material.tone or "",
+        row.get("recommendations_text", ""),
         " ".join(f"{k} {v}" for k, v in props.items()),
     ]))
     return material

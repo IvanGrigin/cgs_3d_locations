@@ -124,6 +124,28 @@ SITE_BATCH_PLANS = {
         deny_path_markers=("/wheretobuy/", "/news/", "/about/", "/contacts/", "/delivery/", "/download/"),
         discovery_mode="sitemap",
     ),
+    "timotrader": SiteBatchPlan(
+        site_name="timotrader",
+        root_url="https://timotrader.ru/",
+        seed_urls=(
+            "https://timotrader.ru/3d-modeli",
+        ),
+        product_path_markers=("/katalog/",),
+        category_path_markers=("/3d-modeli",),
+        deny_path_markers=("/assets/", "/contacts/", "/dostavka/", "/servis/", "/o-magazine/"),
+        discovery_mode="timotrader_3d_listing",
+    ),
+    "cersanit": SiteBatchPlan(
+        site_name="cersanit",
+        root_url="https://cersanit.ru/",
+        seed_urls=(
+            "https://cersanit.ru/catalog/mito/3d-be/",
+        ),
+        product_path_markers=("/catalog/mito/3d-be/",),
+        category_path_markers=("/catalog/mito/3d-be/",),
+        deny_path_markers=("/download/", "/catalog/pdf/", "/upload/", "/blog/", "/gde-kupit/"),
+        discovery_mode="cersanit_collection",
+    ),
 }
 
 
@@ -140,6 +162,10 @@ def normalize_url(url: str) -> str:
     query = ""
     if path.lower() == "/3dmodels":
         allowed_query_keys = {"cat", "subcat", "types", "page", "order", "query"}
+        filtered_query = [(key, value) for key, value in parse_qsl(parsed.query, keep_blank_values=False) if key in allowed_query_keys]
+        query = urlencode(filtered_query, doseq=True)
+    elif parsed.netloc.lower() in {"cersanit.ru", "www.cersanit.ru"}:
+        allowed_query_keys = {"PAGEN_1"}
         filtered_query = [(key, value) for key, value in parse_qsl(parsed.query, keep_blank_values=False) if key in allowed_query_keys]
         query = urlencode(filtered_query, doseq=True)
 
@@ -297,6 +323,209 @@ def discover_product_urls_homeconcept_library(
     product_urls = extract_homeconcept_library_product_urls(html, final_url, plan)
     log(f"[{plan.site_name}] library discovered products: {len(product_urls)}")
     return product_urls[:limit]
+
+
+def extract_timotrader_listing_product_urls(html: str, base_url: str, plan: SiteBatchPlan) -> list[str]:
+    soup = BeautifulSoup(html, "html.parser")
+    out: list[str] = []
+    seen: set[str] = set()
+
+    for card in soup.select("#products .tm-product-item"):
+        link = card.select_one(".tm-media-box[href]") or card.select_one(".tm-product-card-body a[href]")
+        if not link or not link.get("href"):
+            continue
+
+        absolute = normalize_url(urljoin(base_url, link["href"]))
+        if not same_host(absolute, plan.root_url):
+            continue
+        if not is_product_url(absolute, plan):
+            continue
+        if absolute in seen:
+            continue
+
+        seen.add(absolute)
+        out.append(absolute)
+
+    return out
+
+
+def extract_timotrader_listing_page_numbers(html: str) -> set[int]:
+    soup = BeautifulSoup(html, "html.parser")
+    pages = {1}
+    for a in soup.select("ul.uk-pagination a[href], .uk-pagination a[href]"):
+        text = a.get_text(" ", strip=True)
+        href = str(a.get("href") or "")
+
+        for value in (text, dict(parse_qsl(urlparse(href).query)).get("page") or ""):
+            try:
+                page = int(str(value).strip())
+            except Exception:
+                continue
+            if page > 0:
+                pages.add(page)
+
+    return pages
+
+
+def timotrader_listing_page_url(seed_url: str, page: int) -> str:
+    if page <= 1:
+        return seed_url
+
+    parsed = urlparse(seed_url)
+    query = dict(parse_qsl(parsed.query, keep_blank_values=False))
+    query["page"] = str(page)
+    return urlunparse(parsed._replace(query=urlencode(query)))
+
+
+def discover_product_urls_timotrader_3d_listing(
+    adapter,
+    plan: SiteBatchPlan,
+    limit: int,
+    max_listing_pages: int,
+) -> list[str]:
+    seed_url = plan.seed_urls[0]
+    seen_products: set[str] = set()
+    discovered_products: list[str] = []
+    pages_to_visit: deque[int] = deque([1])
+    queued_pages: set[int] = {1}
+    visited_pages: set[int] = set()
+
+    while pages_to_visit and len(visited_pages) < max_listing_pages and len(discovered_products) < limit:
+        page = pages_to_visit.popleft()
+        if page in visited_pages:
+            continue
+
+        visited_pages.add(page)
+        listing_url = timotrader_listing_page_url(seed_url, page)
+        log(f"[{plan.site_name}] 3d listing page {page}: {listing_url}")
+
+        try:
+            html, final_url = adapter.fetch_html(listing_url)
+        except Exception as exc:
+            log(f"[{plan.site_name}] listing error: {listing_url} -> {type(exc).__name__}: {exc}")
+            continue
+
+        added_products = 0
+        for product_url in extract_timotrader_listing_product_urls(html, final_url, plan):
+            if product_url in seen_products:
+                continue
+            seen_products.add(product_url)
+            discovered_products.append(product_url)
+            added_products += 1
+            if len(discovered_products) >= limit:
+                break
+
+        for next_page in sorted(extract_timotrader_listing_page_numbers(html)):
+            if next_page in queued_pages or next_page in visited_pages:
+                continue
+            queued_pages.add(next_page)
+            pages_to_visit.append(next_page)
+
+        log(
+            f"[{plan.site_name}] +products={added_products} "
+            f"queued_pages={len(pages_to_visit)} total_products={len(discovered_products)}"
+        )
+
+    return discovered_products[:limit]
+
+
+def extract_cersanit_collection_product_urls(html: str, base_url: str, plan: SiteBatchPlan) -> list[str]:
+    soup = BeautifulSoup(html, "html.parser")
+    out: list[str] = []
+    seen: set[str] = set()
+
+    for a in soup.select("a.catalog-list-item__info[href], a.catalog-list-item__pic-area[href]"):
+        href = str(a.get("href") or "").strip()
+        if not href:
+            continue
+
+        absolute = normalize_url(urljoin(base_url, href))
+        if not same_host(absolute, plan.root_url):
+            continue
+        if not absolute.startswith(plan.seed_urls[0].rstrip("/")):
+            continue
+        if absolute in seen:
+            continue
+
+        seen.add(absolute)
+        out.append(absolute)
+
+    return out
+
+
+def extract_cersanit_collection_page_urls(html: str, base_url: str, plan: SiteBatchPlan) -> list[str]:
+    soup = BeautifulSoup(html, "html.parser")
+    out: list[str] = []
+    seen: set[str] = set()
+
+    for a in soup.select("a[href*='PAGEN_1=']"):
+        href = str(a.get("href") or "").strip()
+        if not href:
+            continue
+
+        absolute = normalize_url(urljoin(base_url, href))
+        if not same_host(absolute, plan.root_url):
+            continue
+        if not absolute.startswith(plan.seed_urls[0].rstrip("/")):
+            continue
+        if absolute in seen:
+            continue
+
+        seen.add(absolute)
+        out.append(absolute)
+
+    return out
+
+
+def discover_product_urls_cersanit_collection(
+    adapter,
+    plan: SiteBatchPlan,
+    limit: int,
+    max_listing_pages: int,
+) -> list[str]:
+    seed_url = normalize_url(plan.seed_urls[0])
+    pages_to_visit: deque[str] = deque([seed_url])
+    queued_pages: set[str] = {seed_url}
+    visited_pages: set[str] = set()
+    seen_products: set[str] = set()
+    discovered_products: list[str] = []
+
+    while pages_to_visit and len(visited_pages) < max_listing_pages and len(discovered_products) < limit:
+        current_url = pages_to_visit.popleft()
+        if current_url in visited_pages:
+            continue
+
+        visited_pages.add(current_url)
+        log(f"[{plan.site_name}] collection page {len(visited_pages)}/{max_listing_pages}: {current_url}")
+
+        try:
+            html, final_url = adapter.fetch_html(current_url)
+        except Exception as exc:
+            log(f"[{plan.site_name}] collection error: {current_url} -> {type(exc).__name__}: {exc}")
+            continue
+
+        added_products = 0
+        for product_url in extract_cersanit_collection_product_urls(html, final_url, plan):
+            if product_url in seen_products:
+                continue
+            seen_products.add(product_url)
+            discovered_products.append(product_url)
+            added_products += 1
+            if len(discovered_products) >= limit:
+                break
+
+        for page_url in extract_cersanit_collection_page_urls(html, final_url, plan):
+            if page_url in visited_pages or page_url in queued_pages:
+                continue
+            queued_pages.add(page_url)
+            pages_to_visit.append(page_url)
+
+        log(
+            f"[{plan.site_name}] +products={added_products} "
+            f"queued_pages={len(pages_to_visit)} total_products={len(discovered_products)}"
+        )
+
+    return discovered_products[:limit]
 
 
 def build_site_fallback_map(adapter, plan: SiteBatchPlan) -> dict[str, dict[str, str]]:
@@ -506,6 +735,22 @@ def discover_product_urls(
             adapter=adapter,
             plan=plan,
             limit=limit,
+        )
+
+    if plan.discovery_mode == "timotrader_3d_listing":
+        return discover_product_urls_timotrader_3d_listing(
+            adapter=adapter,
+            plan=plan,
+            limit=limit,
+            max_listing_pages=max_listing_pages,
+        )
+
+    if plan.discovery_mode == "cersanit_collection":
+        return discover_product_urls_cersanit_collection(
+            adapter=adapter,
+            plan=plan,
+            limit=limit,
+            max_listing_pages=max_listing_pages,
         )
 
     if plan.discovery_mode == "sitemap":
@@ -835,7 +1080,7 @@ def build_adapter_map() -> dict[str, object]:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--sites", default="homeconcept,imodern,loftdesigne,3ddd,sancos")
+    ap.add_argument("--sites", default="homeconcept,imodern,loftdesigne,3ddd,sancos,timotrader,cersanit")
     ap.add_argument("--limit-per-site", type=int, default=500)
     ap.add_argument("--max-listing-pages", type=int, default=24)
     ap.add_argument("--max-depth", type=int, default=1)

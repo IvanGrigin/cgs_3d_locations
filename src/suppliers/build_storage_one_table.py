@@ -17,6 +17,12 @@ except ImportError:
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
     from src.suppliers.utils import sqlite_table_exists
 
+try:
+    from src.tools.normalize_supplier_categories_taxonomy import TAXONOMY_VERSION, infer_category_from_mapping
+except ImportError:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+    from src.tools.normalize_supplier_categories_taxonomy import TAXONOMY_VERSION, infer_category_from_mapping
+
 
 SCHEMA_VERSION = "supplier_storage_one_table/v1"
 
@@ -289,6 +295,40 @@ def _candidate_score(candidate: dict[str, Any]) -> tuple[Any, ...]:
         str(candidate.get("parsed_at") or ""),
         str(candidate.get("_source_file") or ""),
     )
+
+
+def _normalize_identity_url(value: Any) -> str | None:
+    text = _text_or_none(value)
+    if not text:
+        return None
+    text = text.split("#", 1)[0].strip()
+    if "?" in text:
+        base, query = text.split("?", 1)
+        keep_parts = []
+        for part in query.split("&"):
+            if not part:
+                continue
+            key = part.split("=", 1)[0].lower()
+            if key.startswith("utm_") or key in {"srsltid", "yclid", "gclid", "fbclid"}:
+                continue
+            keep_parts.append(part)
+        text = base + (("?" + "&".join(keep_parts)) if keep_parts else "")
+    if text.startswith(("http://", "https://")):
+        text = text.rstrip("/")
+    return text or None
+
+
+def _candidate_identity_key(candidate: dict[str, Any]) -> str:
+    site = str(candidate.get("source_site") or "").strip().lower()
+    model_url = _normalize_identity_url(candidate.get("model_download_url"))
+    if model_url:
+        return f"{site}::model::{model_url}"
+
+    product_url = _normalize_identity_url(candidate.get("product_url"))
+    if product_url:
+        return f"{site}::product::{product_url}"
+
+    return f"{site}::unique::{candidate.get('unique_key')}"
 
 
 def _sqlite_table_rows(con: sqlite3.Connection, table: str) -> int:
@@ -791,19 +831,18 @@ def _inventory_json_files(root: Path, db_unique_keys: set[str]) -> tuple[list[di
 def _merge_candidates(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
     grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for candidate in candidates:
-        unique_key = candidate.get("unique_key")
-        if unique_key:
-            grouped[str(unique_key)].append(candidate)
+        if candidate.get("unique_key"):
+            grouped[_candidate_identity_key(candidate)].append(candidate)
 
     merged_rows: list[dict[str, Any]] = []
-    for unique_key, group in grouped.items():
+    for identity_key, group in grouped.items():
         ordered = sorted(group, key=_candidate_score, reverse=True)
         winner = ordered[0]
         merged = _candidate_base()
-        merged["unique_key"] = unique_key
+        merged["unique_key"] = winner.get("unique_key") or identity_key
 
         for field in BASE_FIELDS:
-            if field in {"tags_json", "images_json", "related_json", "extra_json", "raw_json"}:
+            if field in {"unique_key", "tags_json", "images_json", "related_json", "extra_json", "raw_json"}:
                 continue
             for candidate in ordered:
                 value = candidate.get(field)
@@ -820,6 +859,12 @@ def _merge_candidates(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
             value = candidate.get("extra_json")
             if isinstance(value, dict):
                 extra.update(value)
+        extra["merge_identity_key"] = identity_key
+        extra["merged_unique_keys"] = [
+            str(candidate.get("unique_key"))
+            for candidate in ordered
+            if candidate.get("unique_key")
+        ]
         merged["extra_json"] = extra
         merged["raw_json"] = winner.get("raw_json")
 
@@ -843,6 +888,20 @@ def _merge_candidates(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
             }
             for candidate in ordered
         ]
+
+        existing_category_norm = _text_or_none(merged.get("category_norm"))
+        inferred_category_norm, category_rule, effective_title = infer_category_from_mapping(merged)
+        if existing_category_norm and existing_category_norm.lower() not in {"unknown", "other", "uncategorized"}:
+            category_norm = existing_category_norm
+            category_rule = f"source_existing:{category_rule}"
+        else:
+            category_norm = inferred_category_norm
+        merged["category_norm"] = category_norm
+        extra_for_taxonomy = dict(merged.get("extra_json") or {})
+        extra_for_taxonomy["category_taxonomy_version"] = TAXONOMY_VERSION
+        extra_for_taxonomy["category_rule"] = category_rule
+        extra_for_taxonomy["category_effective_title"] = effective_title
+        merged["extra_json"] = extra_for_taxonomy
 
         merged_rows.append(merged)
 

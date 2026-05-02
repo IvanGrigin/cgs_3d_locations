@@ -8,6 +8,27 @@ from typing import Any
 from src.ChooseObject.wall_material_selector import WallMaterialSelector
 
 
+def _resolve_texture_path(raw_path: str | None, materials_path: Path) -> str | None:
+    text = str(raw_path or "").strip()
+    if not text:
+        return None
+    if text.startswith(("http://", "https://")):
+        return text
+    path = Path(text).expanduser()
+    candidates = [path]
+    if not path.is_absolute():
+        candidates.append(materials_path.parent / path)
+        candidates.append(Path.cwd() / path)
+    for candidate in candidates:
+        try:
+            resolved = candidate.resolve()
+        except Exception:
+            resolved = candidate
+        if resolved.is_file():
+            return str(resolved)
+    return str(path.resolve() if path.is_absolute() else (materials_path.parent / path).resolve())
+
+
 def run_wall_selection(
     prompt: str,
     style: str | None,
@@ -33,11 +54,13 @@ def run_wall_selection(
     return selection.to_dict()
 
 
-def _wall_material_scene_payload(selection: dict[str, Any]) -> dict[str, Any]:
+def _wall_material_scene_payload(selection: dict[str, Any], materials_path: Path | None = None) -> dict[str, Any]:
     material = selection.get("selected_material") or {}
     local_paths = material.get("local_image_paths") or []
     image_urls = material.get("image_urls") or []
     texture_path = local_paths[0] if local_paths else (image_urls[0] if image_urls else None)
+    if materials_path is not None:
+        texture_path = _resolve_texture_path(texture_path, materials_path)
     return {
         "source": "supplier_catalog",
         "sku": material.get("sku"),
@@ -64,6 +87,28 @@ def _wall_material_scene_payload(selection: dict[str, Any]) -> dict[str, Any]:
 def apply_wall_material_to_scene(scene: dict[str, Any], wall_selection: dict[str, Any]) -> dict[str, Any]:
     updated = copy.deepcopy(scene)
     payload = _wall_material_scene_payload(wall_selection)
+    room_id = wall_selection.get("room_id")
+    if isinstance(updated.get("rooms"), list):
+        for room in updated["rooms"]:
+            if isinstance(room, dict) and room.get("id") == room_id:
+                room["wall_material"] = payload
+                return updated
+        if updated["rooms"] and isinstance(updated["rooms"][0], dict):
+            updated["rooms"][0]["wall_material"] = payload
+            return updated
+    room = updated.setdefault("room", {})
+    if isinstance(room, dict):
+        room["wall_material"] = payload
+    return updated
+
+
+def apply_wall_material_to_scene_with_catalog(
+    scene: dict[str, Any],
+    wall_selection: dict[str, Any],
+    materials_path: Path,
+) -> dict[str, Any]:
+    updated = copy.deepcopy(scene)
+    payload = _wall_material_scene_payload(wall_selection, materials_path=materials_path)
     room_id = wall_selection.get("room_id")
     if isinstance(updated.get("rooms"), list):
         for room in updated["rooms"]:

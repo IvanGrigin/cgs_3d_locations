@@ -91,9 +91,9 @@ def chat_json(
         attempts.append((False, True))
         attempts.append((False, False))
     else:
+        attempts.append((True, False))
         attempts.append((False, False))
         attempts.append((False, True))
-        attempts.append((True, False))
 
     last_error: Optional[Exception] = None
 

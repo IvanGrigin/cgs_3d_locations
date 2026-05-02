@@ -9,19 +9,25 @@ Keep adapter ordering predictable and easy to inspect.
 from __future__ import annotations
 
 from src.suppliers.adapters.base import SupplierAdapter
+from src.suppliers.adapters.cersanit import CersanitAdapter
 from src.suppliers.adapters.homeconcept import HomeConceptAdapter
 from src.suppliers.adapters.imodern import IModernAdapter
 from src.suppliers.adapters.loftdesigne import LoftDesigneAdapter
 from src.suppliers.adapters.sancos import SancosAdapter
 from src.suppliers.adapters.three_ddd import ThreeDDDAdapter
+from src.suppliers.adapters.timotrader import TimoTraderAdapter
+from src.suppliers.adapters.zeelproject import ZeelProjectAdapter
 
 
 ADAPTER_CLASSES = (
+    CersanitAdapter,
     HomeConceptAdapter,
     IModernAdapter,
     LoftDesigneAdapter,
     SancosAdapter,
     ThreeDDDAdapter,
+    TimoTraderAdapter,
+    ZeelProjectAdapter,
 )
 
 

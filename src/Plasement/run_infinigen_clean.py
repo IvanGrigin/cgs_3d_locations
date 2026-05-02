@@ -422,6 +422,30 @@ def infer_room_semantic(room_data: Dict[str, Any]) -> str:
     return "bedroom"
 
 
+def infer_room_semantic_from_style_profile(style_profile: Dict[str, Any] | None) -> str | None:
+    if not isinstance(style_profile, dict):
+        return None
+    raw = str(style_profile.get("room_type") or "").strip().lower().replace("_", " ").replace("-", " ")
+    raw = " ".join(raw.split())
+    explicit_map = {
+        "bedroom": "bedroom",
+        "living room": "living-room",
+        "livingroom": "living-room",
+        "dining room": "dining-room",
+        "diningroom": "dining-room",
+        "kitchen": "kitchen",
+        "bathroom": "bathroom",
+        "toilet": "restroom",
+        "wc": "restroom",
+        "restroom": "restroom",
+        "hallway": "hallway",
+        "corridor": "hallway",
+        "balcony": "balcony",
+        "loggia": "balcony",
+    }
+    return explicit_map.get(raw)
+
+
 def infer_room_polygon(room_data: Dict[str, Any]) -> List[Tuple[float, float]]:
     room = room_data.get("room", room_data)
     poly = room.get("floor_polygon")
@@ -1011,7 +1035,7 @@ def run_local(args: argparse.Namespace) -> None:
     style_profile = load_style_profile(args.style_profile)
     if isinstance(style_profile, dict):
         style_profile["__source_path__"] = str(Path(args.style_profile).expanduser().resolve())
-    semantic_name = infer_room_semantic(room_data)
+    semantic_name = infer_room_semantic_from_style_profile(style_profile) or infer_room_semantic(room_data)
 
     infinigen_src = Path(args.infinigen_src).expanduser().resolve() if args.infinigen_src else default_infinigen_src()
     custom_dir = infinigen_src / "infinigen_examples" / "configs_indoor" / "floor_plans" / "custom"

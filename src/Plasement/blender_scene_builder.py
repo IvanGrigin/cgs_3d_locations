@@ -577,29 +577,113 @@ def _hide_object_family(root: bpy.types.Object) -> None:
             pass
 
 
+def _looks_like_reference_light_fixture(obj: bpy.types.Object) -> bool:
+    text = " ".join(
+        str(part or "").lower()
+        for part in (
+            getattr(obj, "name", ""),
+            getattr(getattr(obj, "data", None), "name", ""),
+            obj.get("factory"),
+            obj.get("category"),
+            obj.get("semantic_group"),
+        )
+    )
+    tokens = (
+        "lamp",
+        "light",
+        "chandelier",
+        "pendant",
+        "ceilinglight",
+        "ceiling_light",
+        "desklamp",
+        "floorlamp",
+        "walllamp",
+        "люстр",
+        "свет",
+        "бра",
+        "торшер",
+    )
+    return any(token in text for token in tokens)
+
+
 def _duplicate_light_objects_from_family(root: bpy.types.Object) -> int:
     kept_count = 0
     scene_coll = bpy.context.scene.collection
-    for obj in _iter_object_with_descendants(root):
-        if getattr(obj, "type", None) != "LIGHT":
+
+    family = _iter_object_with_descendants(root)
+    fixture_roots: List[bpy.types.Object] = []
+    for obj in family:
+        if getattr(obj, "type", None) != "LIGHT" and not _looks_like_reference_light_fixture(obj):
             continue
-        try:
-            dup = obj.copy()
-            if getattr(obj, "data", None) is not None:
-                dup.data = obj.data.copy()
-            dup.parent = None
-            dup.matrix_world = obj.matrix_world.copy()
-            dup.name = f"{obj.name}__kept"
-            scene_coll.objects.link(dup)
+        parent = obj.parent
+        if parent is not None and any(parent in _iter_object_with_descendants(existing) for existing in fixture_roots):
+            continue
+        fixture_roots.append(obj)
+
+    for fixture_root in fixture_roots:
+        copies: Dict[bpy.types.Object, bpy.types.Object] = {}
+        for obj in _iter_object_with_descendants(fixture_root):
+            try:
+                dup = obj.copy()
+                if getattr(obj, "data", None) is not None:
+                    dup.data = obj.data.copy()
+                dup.name = f"{obj.name}__kept"
+                dup.matrix_world = obj.matrix_world.copy()
+                copies[obj] = dup
+                scene_coll.objects.link(dup)
+            except Exception:
+                continue
+        for obj, dup in copies.items():
+            if obj.parent in copies:
+                dup.parent = copies[obj.parent]
+                dup.matrix_parent_inverse = obj.matrix_parent_inverse.copy()
+            else:
+                dup.parent = None
+                dup.matrix_world = obj.matrix_world.copy()
             dup.hide_render = False
             try:
                 dup.hide_set(False)
             except Exception:
                 pass
             kept_count += 1
-        except Exception:
-            continue
     return kept_count
+
+
+def _collect_reference_light_fixture_roots() -> List[bpy.types.Object]:
+    roots: List[bpy.types.Object] = []
+    for obj in list(bpy.data.objects):
+        if getattr(obj, "type", None) != "LIGHT" and not _looks_like_reference_light_fixture(obj):
+            continue
+        parent = obj.parent
+        if parent is not None and any(parent in _iter_object_with_descendants(existing) for existing in roots):
+            continue
+        roots.append(obj)
+    return roots
+
+
+def _object_or_parent_hidden(obj: bpy.types.Object) -> bool:
+    cur: Optional[bpy.types.Object] = obj
+    while cur is not None:
+        if bool(getattr(cur, "hide_render", False)):
+            return True
+        try:
+            if bool(cur.hide_get()):
+                return True
+        except Exception:
+            pass
+        cur = cur.parent
+    return False
+
+
+def _restore_hidden_reference_light_fixtures(reference_roots: List[bpy.types.Object]) -> int:
+    restored = 0
+    for root in reference_roots:
+        if root.name not in bpy.data.objects:
+            continue
+        if not _object_or_parent_hidden(root):
+            continue
+        restored += _duplicate_light_objects_from_family(root)
+    return restored
 
 
 def _move_object_family_to_target_aabb(
@@ -1646,12 +1730,12 @@ def _render_turntable_sequence(
     room_dims = room_max - room_min
     xy_span = max(float(room_dims.x), float(room_dims.y), 0.8)
     z_span = max(float(visible_dims.z), 0.8)
-    orbit_radius = max(1.9, xy_span * 0.68)
+    orbit_radius = max(1.9, xy_span * 1.5)
     elev_rad = math.radians(float(elevation_deg or 0.0))
     target = mathutils.Vector(
         (
-            room_center.x * 0.72 + visible_center.x * 0.28,
-            room_center.y * 0.72 + visible_center.y * 0.28,
+            room_center.x,
+            room_center.y,
             max(float(room_min.z) + 0.78, min(float(room_min.z) + float(room_dims.z) * 0.40, float(bb_min.z) + z_span * 0.28)),
         )
     )
@@ -3243,7 +3327,90 @@ def _choose_texture(kind: str, candidates: List[str], style_text: Optional[str],
     return rng.choice(candidates)
 
 
-def _make_image_material(name: str, image_path: str, uv_scale: float = 1.0, is_data: bool = False) -> bpy.types.Material:
+def _as_float_or_none(value) -> Optional[float]:
+    try:
+        if value is None or value == "":
+            return None
+        return float(value)
+    except Exception:
+        return None
+
+
+def _floor_material_texture_info(room: dict) -> Tuple[Optional[str], float, bool]:
+    floor_material = room.get("floor_material")
+    if not isinstance(floor_material, dict):
+        return None, 1.0, False
+
+    texture_path = str(floor_material.get("texture_path") or "").strip()
+    if not texture_path:
+        return None, 1.0, False
+
+    path = Path(texture_path).expanduser()
+    if not path.is_absolute():
+        path = path.resolve()
+    if not path.is_file():
+        return None, 1.0, False
+
+    tiling = floor_material.get("texture_tiling") if isinstance(floor_material.get("texture_tiling"), dict) else {}
+    tile_size_m = _as_float_or_none(tiling.get("tile_size_m"))
+    if tile_size_m is None:
+        tile_size_m = _as_float_or_none(floor_material.get("plank_length_mm"))
+        tile_size_m = (tile_size_m / 1000.0) if tile_size_m else None
+    tile_size_m = max(0.25, min(float(tile_size_m or 1.2), 2.4))
+    uv_scale = 1.0 / tile_size_m
+    mirror = str(tiling.get("mode") or "").strip().lower() in {"mirror_repeat", "mirror", "mirrored"}
+    return str(path), uv_scale, mirror
+
+
+def _make_supplier_floor_material_for_room(room: dict) -> Tuple[Optional[bpy.types.Material], float, bool]:
+    texture_path, uv_scale, mirror = _floor_material_texture_info(room)
+    if not texture_path:
+        return None, 1.0, False
+    mat = _make_image_material(
+        "MAT_ROOM_FLOOR_SUPPLIER",
+        texture_path,
+        uv_scale=1.0,
+        extension=("MIRROR" if mirror else "REPEAT"),
+    )
+    return mat, uv_scale, mirror
+
+
+def _wall_material_texture_info(room: dict) -> Tuple[Optional[str], float]:
+    wall_material = room.get("wall_material")
+    if not isinstance(wall_material, dict):
+        return None, 1.0
+
+    texture_path = str(wall_material.get("texture_path") or "").strip()
+    if not texture_path:
+        return None, 1.0
+    if texture_path.startswith(("http://", "https://")):
+        return None, 1.0
+
+    path = Path(texture_path).expanduser()
+    if not path.is_absolute():
+        candidates = [
+            path.resolve(),
+            (Path.cwd() / "data/sourse/domlenta_wallpapers" / path).resolve(),
+        ]
+    else:
+        candidates = [path]
+    resolved = next((candidate for candidate in candidates if candidate.is_file()), None)
+    if resolved is None:
+        return None, 1.0
+
+    tiling = wall_material.get("wall_tiling") if isinstance(wall_material.get("wall_tiling"), dict) else {}
+    tile_size_m = _as_float_or_none(tiling.get("tile_size_m")) or 1.0
+    tile_size_m = max(0.25, min(float(tile_size_m), 3.0))
+    return str(resolved), 1.0 / tile_size_m
+
+
+def _make_image_material(
+    name: str,
+    image_path: str,
+    uv_scale: float = 1.0,
+    is_data: bool = False,
+    extension: str = "REPEAT",
+) -> bpy.types.Material:
     mat = bpy.data.materials.new(name)
     mat.use_nodes = True
     nt = mat.node_tree
@@ -3268,6 +3435,10 @@ def _make_image_material(name: str, image_path: str, uv_scale: float = 1.0, is_d
 
     tex = nodes.new("ShaderNodeTexImage")
     tex.location = (340, 0)
+    try:
+        tex.extension = extension
+    except Exception:
+        pass
     try:
         img = bpy.data.images.load(image_path, check_existing=True)
         tex.image = img
@@ -3487,6 +3658,107 @@ def _poly_signed_area_xy(pts: List[Tuple[float, float]]) -> float:
     return 0.5 * a
 
 
+def _point_in_bounds_xy(x: float, y: float, bounds: Tuple[float, float, float, float], margin: float = 0.0) -> bool:
+    x_min, x_max, y_min, y_max = bounds
+    return (x_min - margin) <= x <= (x_max + margin) and (y_min - margin) <= y <= (y_max + margin)
+
+
+def _polygon_area_xy_from_vectors(points: List[mathutils.Vector]) -> float:
+    if len(points) < 3:
+        return 0.0
+    area = 0.0
+    for idx, p0 in enumerate(points):
+        p1 = points[(idx + 1) % len(points)]
+        area += float(p0.x) * float(p1.y) - float(p1.x) * float(p0.y)
+    return abs(area) * 0.5
+
+
+def _infer_reference_floor_z(
+    poly_xy: List[Tuple[float, float]],
+    fallback_z: float,
+    verbose: bool = False,
+) -> float:
+    if len(poly_xy) < 3:
+        return float(fallback_z)
+    xs = [p[0] for p in poly_xy]
+    ys = [p[1] for p in poly_xy]
+    room_bounds = (min(xs), max(xs), min(ys), max(ys))
+    z_min_allowed = float(fallback_z) - 0.35
+    z_max_allowed = float(fallback_z) + 0.55
+    buckets: Dict[int, Dict[str, float]] = {}
+    deps = bpy.context.evaluated_depsgraph_get()
+
+    for obj in list(bpy.data.objects):
+        if obj.type != "MESH":
+            continue
+        if bool(getattr(obj, "hide_render", False)):
+            continue
+        name_l = str(getattr(obj, "name", "") or "").lower()
+        if "supplieroverlay" in name_l or "aabb" in name_l or name_l.endswith("_label"):
+            continue
+        try:
+            eo = obj.evaluated_get(deps)
+            me = eo.to_mesh()
+        except Exception:
+            continue
+        if not me:
+            continue
+        try:
+            world = eo.matrix_world
+            normal_world = world.to_3x3()
+            verts = me.vertices
+            for poly in me.polygons:
+                try:
+                    n = normal_world @ poly.normal
+                    if n.length <= 1e-8:
+                        continue
+                    n.normalize()
+                    if float(n.z) < 0.86:
+                        continue
+                    points = [world @ verts[idx].co for idx in poly.vertices]
+                    if len(points) < 3:
+                        continue
+                    z_values = [float(p.z) for p in points]
+                    if max(z_values) - min(z_values) > 0.025:
+                        continue
+                    z = sum(z_values) / len(z_values)
+                    if z < z_min_allowed or z > z_max_allowed:
+                        continue
+                    cx = sum(float(p.x) for p in points) / len(points)
+                    cy = sum(float(p.y) for p in points) / len(points)
+                    if not _point_in_bounds_xy(cx, cy, room_bounds, margin=0.35):
+                        continue
+                    area = _polygon_area_xy_from_vectors(points)
+                    if area < 0.015:
+                        continue
+                    bucket = int(round(z / 0.005))
+                    rec = buckets.setdefault(bucket, {"z_sum": 0.0, "area": 0.0, "count": 0.0})
+                    rec["z_sum"] += z * area
+                    rec["area"] += area
+                    rec["count"] += 1.0
+                except Exception:
+                    continue
+        finally:
+            try:
+                eo.to_mesh_clear()
+            except Exception:
+                pass
+
+    if not buckets:
+        if verbose:
+            print(f"[RoomSpec] reference floor z inference failed; fallback={fallback_z:.4f}")
+        return float(fallback_z)
+
+    best = max(buckets.values(), key=lambda item: (float(item["area"]), -abs(float(item["z_sum"]) / max(float(item["area"]), 1e-9) - float(fallback_z))))
+    inferred = float(best["z_sum"]) / max(float(best["area"]), 1e-9)
+    if verbose:
+        print(
+            "[RoomSpec] inferred reference floor z: "
+            f"{inferred:.4f} area={float(best['area']):.3f} faces={int(best['count'])} fallback={fallback_z:.4f}"
+        )
+    return inferred
+
+
 def _normalize2(x: float, y: float) -> Tuple[float, float]:
     l = math.hypot(x, y)
     if l < 1e-12:
@@ -3511,16 +3783,21 @@ def _ensure_uv_layer(me: bpy.types.Mesh, name: str = "UVMap") -> None:
         me.uv_layers.new(name=name)
 
 
-def _set_uvs_floor_xy(obj: bpy.types.Object, uv_scale: float = 1.0) -> None:
+def _set_uvs_floor_xy(
+    obj: bpy.types.Object,
+    uv_scale: float = 1.0,
+    origin_xy: Tuple[float, float] = (0.0, 0.0),
+) -> None:
     me = obj.data
     _ensure_uv_layer(me)
     uv = me.uv_layers.active.data
+    ox, oy = origin_xy
 
     for poly in me.polygons:
         for li in poly.loop_indices:
             vi = me.loops[li].vertex_index
             x, y, _z = me.vertices[vi].co
-            uv[li].uv = (x * uv_scale, y * uv_scale)
+            uv[li].uv = ((x - ox) * uv_scale, (y - oy) * uv_scale)
 
 
 def _set_uvs_wall_sz(obj: bpy.types.Object, origin_xy: Tuple[float, float], dir_xy: Tuple[float, float], uv_scale: float = 1.0) -> None:
@@ -3687,6 +3964,9 @@ def build_room_from_spec(
     ccw = (area > 0.0)
 
     floor_tex = wall_tex = door_tex = window_tex = None
+    floor_uv_scale = 1.0
+    wall_uv_scale = 1.0
+    floor_tex_mirror = False
     if env_textures_dir and os.path.isdir(env_textures_dir):
         tex = _list_env_textures(env_textures_dir)
         rng = random.Random(
@@ -3698,14 +3978,29 @@ def build_room_from_spec(
         door_tex = _choose_texture("door", tex.get("door", []), style_text, rng)
         window_tex = _choose_texture("window", tex.get("window", []), style_text, rng)
 
+    supplier_floor_tex, supplier_floor_uv_scale, supplier_floor_mirror = _floor_material_texture_info(r)
+    if supplier_floor_tex:
+        floor_tex = supplier_floor_tex
+        floor_uv_scale = supplier_floor_uv_scale
+        floor_tex_mirror = supplier_floor_mirror
+    supplier_wall_tex, supplier_wall_uv_scale = _wall_material_texture_info(r)
+    if supplier_wall_tex:
+        wall_tex = supplier_wall_tex
+        wall_uv_scale = supplier_wall_uv_scale
+
     if verbose:
         print(f"[RoomSpec] ccw={ccw} H={H}")
         print(f"[RoomSpec] floor_tex={floor_tex}")
+        print(f"[RoomSpec] floor_uv_scale={floor_uv_scale} mirror={floor_tex_mirror}")
         print(f"[RoomSpec] wall_tex ={wall_tex}")
+        print(f"[RoomSpec] wall_uv_scale={wall_uv_scale}")
         print(f"[RoomSpec] door_tex ={door_tex}")
         print(f"[RoomSpec] win_tex  ={window_tex}")
 
-    floor_mat = _make_image_material("MAT_ROOM_FLOOR", floor_tex, uv_scale=1.0) if floor_tex else None
+    floor_mat = (
+        _make_image_material("MAT_ROOM_FLOOR", floor_tex, uv_scale=1.0, extension=("MIRROR" if floor_tex_mirror else "REPEAT"))
+        if floor_tex else None
+    )
     wall_mat = _make_image_material("MAT_ROOM_WALL", wall_tex, uv_scale=1.0) if wall_tex else None
     door_mat = _make_image_material("MAT_ROOM_DOOR", door_tex, uv_scale=1.0) if door_tex else None
     win_mat = _make_glass_material("MAT_ROOM_WINDOW", window_tex) if window_tex else _make_glass_material("MAT_ROOM_WINDOW", None)
@@ -3713,7 +4008,10 @@ def build_room_from_spec(
     out_objs: List[bpy.types.Object] = []
 
     floor_obj = _make_floor_from_polygon("Room_Floor", poly_xy, z=floor_z, coll=coll_room)
-    _set_uvs_floor_xy(floor_obj, uv_scale=1.0)
+    xs = [p[0] for p in poly_xy]
+    ys = [p[1] for p in poly_xy]
+    floor_origin = ((min(xs) + max(xs)) * 0.5, (min(ys) + max(ys)) * 0.5)
+    _set_uvs_floor_xy(floor_obj, uv_scale=floor_uv_scale, origin_xy=floor_origin)
     if floor_mat:
         _assign_material_to_object(floor_obj, floor_mat)
     out_objs.append(floor_obj)
@@ -3760,7 +4058,7 @@ def build_room_from_spec(
             z1=floor_z + H,
             coll=coll_room,
         )
-        _set_uvs_wall_sz(wall_obj, origin_xy=p0, dir_xy=(ex, ey), uv_scale=1.0)
+        _set_uvs_wall_sz(wall_obj, origin_xy=p0, dir_xy=(ex, ey), uv_scale=wall_uv_scale)
 
         if wall_mat:
             _assign_material_to_object(wall_obj, wall_mat)
@@ -3836,6 +4134,192 @@ def build_room_from_spec(
 
     bmin, bmax = _world_bounds_mesh_objects(out_objs)
     return out_objs, bmin, bmax
+
+
+def add_supplier_floor_overlay_from_spec(
+    room_json: dict,
+    coll_room: bpy.types.Collection,
+    floor_z_override: Optional[float] = None,
+    verbose: bool = False,
+) -> Optional[bpy.types.Object]:
+    room = room_json.get("room") or {}
+    floor_material = room.get("floor_material")
+    if not isinstance(floor_material, dict):
+        return None
+    mat, floor_uv_scale, floor_tex_mirror = _make_supplier_floor_material_for_room(room)
+    if mat is None:
+        return None
+    poly = room.get("floor_polygon") or []
+    if not isinstance(poly, list) or len(poly) < 3:
+        return None
+    poly_xy = [(float(p["x"]), float(p["y"])) for p in poly if isinstance(p, dict) and "x" in p and "y" in p]
+    if len(poly_xy) < 3:
+        return None
+    base_floor_z = float(floor_z_override) if floor_z_override is not None else float(room.get("floor_z", room.get("z_min", 0.0)))
+    floor_z = base_floor_z + 0.0015
+    floor_obj = _make_floor_from_polygon("Room_Floor_SupplierOverlay", poly_xy, z=floor_z, coll=coll_room)
+    xs = [p[0] for p in poly_xy]
+    ys = [p[1] for p in poly_xy]
+    floor_origin = ((min(xs) + max(xs)) * 0.5, (min(ys) + max(ys)) * 0.5)
+    _set_uvs_floor_xy(floor_obj, uv_scale=floor_uv_scale, origin_xy=floor_origin)
+    _assign_material_to_object(floor_obj, mat)
+    if verbose:
+        print(
+            "[RoomSpec] supplier floor overlay: "
+            f"base_z={base_floor_z:.4f} overlay_z={floor_z:.4f} uv_scale={floor_uv_scale:.4f} mirror={floor_tex_mirror}"
+        )
+    return floor_obj
+
+
+def apply_supplier_wall_material_to_reference_scene(room_json: dict, verbose: bool = False) -> int:
+    room = room_json.get("room") or {}
+    wall_tex, wall_uv_scale = _wall_material_texture_info(room)
+    if not wall_tex:
+        return 0
+    mat = _make_image_material("MAT_ROOM_WALL_SUPPLIER", wall_tex, uv_scale=wall_uv_scale)
+    changed = 0
+    for obj in list(bpy.data.objects):
+        name_l = str(obj.name or "").lower()
+        if obj.type != "MESH":
+            continue
+        if "wall" not in name_l or "window" in name_l:
+            continue
+        _assign_material_to_object(obj, mat)
+        changed += 1
+    if verbose:
+        print(f"[RoomSpec] supplier wall material applied to {changed} reference wall object(s): {wall_tex}")
+    return changed
+
+
+def _subtract_wall_opening_from_segments(
+    segments: List[Tuple[float, float, float, float]],
+    *,
+    opening_s0: float,
+    opening_s1: float,
+    opening_z0: float,
+    opening_z1: float,
+) -> List[Tuple[float, float, float, float]]:
+    out: List[Tuple[float, float, float, float]] = []
+    for s0, s1, z0, z1 in segments:
+        os0 = max(s0, opening_s0)
+        os1 = min(s1, opening_s1)
+        oz0 = max(z0, opening_z0)
+        oz1 = min(z1, opening_z1)
+        if os0 >= os1 or oz0 >= oz1:
+            out.append((s0, s1, z0, z1))
+            continue
+        if s0 < os0:
+            out.append((s0, os0, z0, z1))
+        if os1 < s1:
+            out.append((os1, s1, z0, z1))
+        if z0 < oz0:
+            out.append((os0, os1, z0, oz0))
+        if oz1 < z1:
+            out.append((os0, os1, oz1, z1))
+    return [
+        (s0, s1, z0, z1)
+        for s0, s1, z0, z1 in out
+        if (s1 - s0) > 0.02 and (z1 - z0) > 0.02
+    ]
+
+
+def add_supplier_wall_overlay_from_spec(
+    room_json: dict,
+    coll_room: bpy.types.Collection,
+    floor_z_override: Optional[float] = None,
+    verbose: bool = False,
+) -> List[bpy.types.Object]:
+    room = room_json.get("room") or {}
+    wall_tex, wall_uv_scale = _wall_material_texture_info(room)
+    if not wall_tex:
+        return []
+    mat = _make_image_material("MAT_ROOM_WALLPAPER_SUPPLIER", wall_tex, uv_scale=1.0)
+    poly = room.get("floor_polygon") or []
+    if not isinstance(poly, list) or len(poly) < 3:
+        return []
+    poly_xy = [(float(p["x"]), float(p["y"])) for p in poly if isinstance(p, dict) and "x" in p and "y" in p]
+    if len(poly_xy) < 3:
+        return []
+
+    walls = room.get("walls", [])
+    if not walls:
+        walls = _synthesize_walls_from_floor_polygon(room)
+    if not isinstance(walls, list):
+        return []
+
+    floor_z = float(floor_z_override) if floor_z_override is not None else float(room.get("floor_z", room.get("z_min", 0.0)))
+    height = max(float(room.get("ceiling_height", room.get("ceiling_height_m", 2.8))), 0.1)
+    area = _poly_signed_area_xy(poly_xy)
+    ccw = area > 0.0
+
+    openings_by_wall: Dict[str, List[dict]] = {}
+    for group_name in ("doors", "windows", "openings"):
+        for opening in room.get(group_name, []) or []:
+            if not isinstance(opening, dict):
+                continue
+            wid = str(opening.get("wall_id") or "").strip()
+            if wid:
+                openings_by_wall.setdefault(wid, []).append(opening)
+
+    out_objs: List[bpy.types.Object] = []
+    for wall_index, wall in enumerate(walls):
+        if not isinstance(wall, dict):
+            continue
+        try:
+            wid = str(wall.get("id", f"w{wall_index}"))
+            i0 = int(wall["from_vertex"])
+            i1 = int(wall["to_vertex"])
+            p0 = poly_xy[i0]
+            p1 = poly_xy[i1]
+        except Exception:
+            continue
+
+        dx, dy = p1[0] - p0[0], p1[1] - p0[1]
+        wall_len = math.hypot(dx, dy)
+        if wall_len <= 0.02:
+            continue
+        ex, ey = _normalize2(dx, dy)
+        if ccw:
+            nx, ny = (-ey, ex)
+        else:
+            nx, ny = (ey, -ex)
+
+        segments: List[Tuple[float, float, float, float]] = [(0.0, wall_len, floor_z + 0.01, floor_z + height - 0.01)]
+        for opening in openings_by_wall.get(wid, []):
+            opening_s0 = float(opening.get("s", 0.0))
+            opening_width = float(opening.get("width", 0.0))
+            opening_z0 = floor_z + float(opening.get("z0", 0.0))
+            opening_z1 = opening_z0 + float(opening.get("height", height))
+            segments = _subtract_wall_opening_from_segments(
+                segments,
+                opening_s0=opening_s0,
+                opening_s1=opening_s0 + opening_width,
+                opening_z0=opening_z0,
+                opening_z1=opening_z1,
+            )
+
+        for seg_idx, (s0, s1, z0, z1) in enumerate(segments):
+            width = s1 - s0
+            seg_objs = _make_double_sided_decal_on_wall(
+                name=f"Room_Wallpaper_SupplierOverlay_{wid}_{seg_idx}",
+                wall_p0=p0,
+                wall_p1=p1,
+                inward_n=(nx, ny),
+                s0=s0,
+                width=width,
+                z0=z0,
+                height=z1 - z0,
+                coll=coll_room,
+                offset=0.006,
+            )
+            for obj in seg_objs:
+                _set_uvs_wall_sz(obj, origin_xy=p0, dir_xy=(ex, ey), uv_scale=wall_uv_scale)
+                _assign_material_to_object(obj, mat)
+                out_objs.append(obj)
+
+    if verbose:
+        print(f"[RoomSpec] supplier wallpaper overlay created {len(out_objs)} object(s): {wall_tex}")
+    return out_objs
 # ============================================================
 # Placement
 # ============================================================
@@ -4142,6 +4626,7 @@ def build_scene(
         if source_name:
             source_name_to_items.setdefault(source_name, []).append(item)
     hidden_reference_sources: set[str] = set()
+    reference_light_fixture_roots = _collect_reference_light_fixture_roots() if use_reference_scene else []
     item_actual_aabbs: Dict[str, Dict[str, float]] = {}
     item_roots: Dict[str, bpy.types.Object] = {}
     item_issue_reasons: Dict[str, List[str]] = {}
@@ -4181,6 +4666,37 @@ def build_scene(
             bb_max = room_bb_max.copy()
     if room_bb_min is not None and room_bb_max is not None:
         _store_scene_room_bounds(room_bb_min, room_bb_max)
+    if use_reference_scene:
+        room_for_overlay = room_data_for_build.get("room") or {}
+        overlay_poly = room_for_overlay.get("floor_polygon") or []
+        overlay_poly_xy = [
+            (float(p["x"]), float(p["y"]))
+            for p in overlay_poly
+            if isinstance(p, dict) and "x" in p and "y" in p
+        ]
+        fallback_floor_z = float(room_for_overlay.get("floor_z", room_for_overlay.get("z_min", bb_min.z)))
+        reference_floor_z = _infer_reference_floor_z(overlay_poly_xy, fallback_floor_z, verbose=verbose)
+        overlay = add_supplier_floor_overlay_from_spec(
+            room_data_for_build,
+            coll_room=coll_room,
+            floor_z_override=reference_floor_z,
+            verbose=verbose,
+        )
+        if overlay is not None:
+            room_objs.append(overlay)
+            if room_bb_min is not None and room_bb_max is not None:
+                room_bb_min.z = min(float(room_bb_min.z), float(reference_floor_z))
+                room_bb_max.z = max(float(room_bb_max.z), float(reference_floor_z) + 0.0015)
+                bb_min = room_bb_min.copy()
+                bb_max = room_bb_max.copy()
+        apply_supplier_wall_material_to_reference_scene(room_data_for_build, verbose=verbose)
+        wallpaper_overlays = add_supplier_wall_overlay_from_spec(
+            room_data_for_build,
+            coll_room=coll_room,
+            floor_z_override=reference_floor_z,
+            verbose=verbose,
+        )
+        room_objs.extend(wallpaper_overlays)
 
     z_floor = float(bb_min.z)
     z_ceil = float(bb_max.z)
@@ -4455,6 +4971,11 @@ def build_scene(
             _add_aabb_box(aabb_eng, name, coll_items)
             if force_bbox:
                 _add_aabb_label(aabb_eng, name, coll_items)
+
+    if use_reference_scene and reference_light_fixture_roots:
+        restored_light_count = _restore_hidden_reference_light_fixtures(reference_light_fixture_roots)
+        if restored_light_count:
+            print(f"[DBG] restored {restored_light_count} hidden reference light fixture object(s)")
 
     support_solver = MLSupportSolver(room_floor_z=z_floor)
     support_items: List[Tuple[float, str, Dict]] = []

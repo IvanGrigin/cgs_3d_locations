@@ -105,6 +105,81 @@ def _safe_float(value: Any) -> float | None:
         return None
 
 
+SUPPLIER_SELECTION_STRATEGIES = {
+    "balanced",
+    "cheapest",
+    "cheap_style",
+    "style",
+}
+
+
+STYLE_LLM_MIN_CONFIDENCE = 0.55
+STYLE_LLM_MIN_QUALITY = 6
+
+
+STYLE_ALIASES = {
+    "industrial": "loft_industrial",
+    "loft": "loft_industrial",
+    "loft_industrial": "loft_industrial",
+    "mid-century": "mid_century_modern",
+    "mid_century": "mid_century_modern",
+    "mid_century_modern": "mid_century_modern",
+    "mcm": "mid_century_modern",
+    "eco": "eco_organic",
+    "organic": "eco_organic",
+    "eco_organic": "eco_organic",
+    "hightech": "high_tech",
+    "high_tech": "high_tech",
+    "soft_minimal": "soft_minimalism",
+    "soft_minimalism": "soft_minimalism",
+    "minimal": "minimalism",
+    "minimalism": "minimalism",
+    "modern": "modern",
+    "contemporary": "contemporary",
+    "scandinavian": "scandinavian",
+    "nordic": "scandinavian",
+    "japandi": "japandi",
+    "wabi_sabi": "eco_organic",
+}
+
+
+STYLE_COMPATIBILITY = {
+    "modern": {"contemporary", "minimalism", "soft_minimalism", "high_tech"},
+    "contemporary": {"modern", "soft_minimalism", "minimalism"},
+    "minimalism": {"soft_minimalism", "modern", "japandi"},
+    "soft_minimalism": {"minimalism", "modern", "contemporary", "japandi"},
+    "scandinavian": {"japandi", "eco_organic", "soft_minimalism"},
+    "japandi": {"scandinavian", "minimalism", "soft_minimalism", "eco_organic"},
+    "loft_industrial": {"modern", "high_tech"},
+    "high_tech": {"modern", "loft_industrial"},
+    "eco_organic": {"scandinavian", "japandi", "soft_minimalism"},
+    "mid_century_modern": {"modern", "contemporary"},
+}
+
+
+def _normalize_style_label(value: Any) -> str | None:
+    text = str(value or "").strip().lower().replace("ё", "е")
+    if not text:
+        return None
+    text = text.replace("-", "_").replace(" ", "_").replace("/", "_")
+    return STYLE_ALIASES.get(text, text if text in STYLE_COMPATIBILITY else None)
+
+
+def _extract_styles_from_text(value: Any) -> set[str]:
+    text = str(value or "").strip().lower().replace("ё", "е")
+    if not text:
+        return set()
+    found: set[str] = set()
+    normalized_text = text.replace("-", "_").replace(" ", "_").replace("/", "_")
+    direct = _normalize_style_label(normalized_text)
+    if direct:
+        found.add(direct)
+    for raw, normalized in STYLE_ALIASES.items():
+        if raw.replace("_", " ") in text or raw in normalized_text:
+            found.add(normalized)
+    return found
+
+
 def _normalize_preference_scope(raw: dict[str, Any] | None) -> dict[str, Any]:
     raw = raw if isinstance(raw, dict) else {}
     max_price_rub = None
@@ -1134,6 +1209,115 @@ def _design_match_info(target: dict[str, Any], row: dict[str, Any]) -> tuple[flo
     return design_score, breakdown
 
 
+def _row_style_llm_info(row: dict[str, Any]) -> dict[str, Any]:
+    style = _normalize_style_label(row.get("style_llm"))
+    secondary_raw = row.get("style_llm_secondary") or []
+    if isinstance(secondary_raw, str):
+        secondary_raw = _json_loads_or(secondary_raw, [])
+        if isinstance(secondary_raw, str):
+            secondary_raw = [secondary_raw]
+    secondary = [
+        normalized
+        for normalized in (_normalize_style_label(x) for x in (secondary_raw if isinstance(secondary_raw, list) else []))
+        if normalized
+    ]
+    confidence = _safe_float(row.get("style_llm_confidence"))
+    quality = _safe_float(row.get("style_llm_quality_score"))
+    usable = (
+        style is not None
+        and confidence is not None
+        and quality is not None
+        and confidence >= STYLE_LLM_MIN_CONFIDENCE
+        and quality >= STYLE_LLM_MIN_QUALITY
+    )
+    return {
+        "style": style,
+        "secondary": _dedup_keep_order(secondary),
+        "confidence": confidence,
+        "quality": quality,
+        "usable": usable,
+        "flags": row.get("style_llm_quality_flags") or [],
+    }
+
+
+def _target_style_labels(target: dict[str, Any], context: dict[str, Any] | None) -> set[str]:
+    context = context or {}
+    constraints = target.get("constraints") or {}
+    labels: set[str] = set()
+    for part in (
+        constraints.get("style"),
+        constraints.get("theme"),
+        context.get("style_label"),
+        context.get("room_style_hint"),
+        context.get("prompt_text"),
+    ):
+        labels |= _extract_styles_from_text(part)
+    return labels
+
+
+def _style_match_info(target: dict[str, Any], row: dict[str, Any], context: dict[str, Any] | None) -> tuple[int, float, dict[str, Any]]:
+    target_styles = _target_style_labels(target, context)
+    row_info = _row_style_llm_info(row)
+    row_styles = {row_info["style"]} if row_info.get("style") else set()
+    row_styles |= {x for x in row_info.get("secondary") or [] if x}
+
+    if not target_styles:
+        rank = 2
+        match = "no_target_style"
+    elif not row_info.get("usable") or not row_styles:
+        rank = 2
+        match = "candidate_style_unknown_or_low_quality"
+    elif target_styles & row_styles:
+        rank = 0
+        match = "exact_style"
+    elif any((STYLE_COMPATIBILITY.get(target_style) or set()) & row_styles for target_style in target_styles):
+        rank = 1
+        match = "compatible_style"
+    else:
+        rank = 3
+        match = "style_mismatch"
+
+    confidence = float(row_info.get("confidence") or 0.0)
+    quality = float(row_info.get("quality") or 0.0)
+    strength = confidence + (quality / 10.0)
+    if rank == 0:
+        score = 100.0 + strength * 10.0
+    elif rank == 1:
+        score = 70.0 + strength * 10.0
+    elif rank == 2:
+        score = 20.0 + strength * 2.0
+    else:
+        score = strength
+
+    return rank, score, {
+        "style_selection_target_styles": sorted(target_styles),
+        "style_selection_candidate_style": row_info.get("style"),
+        "style_selection_candidate_secondary": row_info.get("secondary") or [],
+        "style_selection_confidence": row_info.get("confidence"),
+        "style_selection_quality_score": row_info.get("quality"),
+        "style_selection_usable": bool(row_info.get("usable")),
+        "style_selection_match": match,
+        "style_selection_rank": rank,
+        "style_selection_score": round(score, 6),
+    }
+
+
+def _price_rank_info(row: dict[str, Any]) -> dict[str, Any]:
+    price = _safe_float(row.get("price_value"))
+    return {
+        "price_known_rank": 0 if price is not None else 1,
+        "price_sort_value": round(price, 6) if price is not None else 999999999999.0,
+        "price_sort_value_desc": round(-price, 6) if price is not None else 999999999999.0,
+    }
+
+
+def _selection_strategy(context: dict[str, Any] | None) -> str:
+    strategy = str((context or {}).get("supplier_selection_strategy") or "balanced").strip().lower()
+    if strategy not in SUPPLIER_SELECTION_STRATEGIES:
+        return "balanced"
+    return strategy
+
+
 def _prompt_match_info(target: dict[str, Any], row: dict[str, Any], context: dict[str, Any] | None) -> tuple[float, dict[str, Any]]:
     context = context or {}
     prompt_tokens = set(context.get("prompt_tokens") or set())
@@ -1314,6 +1498,22 @@ def _extract_ollama_text(resp: dict[str, Any]) -> str:
     return json.dumps(resp, ensure_ascii=False)
 
 
+def _parse_json_object_from_text(text: str) -> dict[str, Any]:
+    raw = str(text or "").strip()
+    if raw.startswith("```"):
+        raw = re.sub(r"^```(?:json)?", "", raw).strip()
+        raw = re.sub(r"```$", "", raw).strip()
+    parsed = _json_loads_or(raw, None)
+    if isinstance(parsed, dict):
+        return parsed
+    match = re.search(r"\{.*\}", raw, flags=re.S)
+    if match:
+        parsed = _json_loads_or(match.group(0), None)
+        if isinstance(parsed, dict):
+            return parsed
+    raise RuntimeError("LLM did not return JSON object")
+
+
 def _llm_candidate_payload(candidate: dict[str, Any]) -> dict[str, Any]:
     score_breakdown = candidate.get("score_breakdown") if isinstance(candidate.get("score_breakdown"), dict) else {}
     return {
@@ -1326,6 +1526,14 @@ def _llm_candidate_payload(candidate: dict[str, Any]) -> dict[str, Any]:
         "price_currency": candidate.get("price_currency"),
         "color": candidate.get("color"),
         "materials": candidate.get("materials"),
+        "style_llm": {
+            "primary": candidate.get("style_llm"),
+            "secondary": candidate.get("style_llm_secondary") or [],
+            "confidence": candidate.get("style_llm_confidence"),
+            "quality_score": candidate.get("style_llm_quality_score"),
+            "quality_flags": candidate.get("style_llm_quality_flags") or [],
+            "rationale": candidate.get("style_llm_rationale"),
+        },
         "dimensions_cm": {
             "width": candidate.get("width_cm"),
             "depth": candidate.get("depth_cm"),
@@ -1343,6 +1551,12 @@ def _llm_candidate_payload(candidate: dict[str, Any]) -> dict[str, Any]:
             "height_distance": score_breakdown.get("height_distance"),
             "depth_distance": score_breakdown.get("depth_distance"),
             "user_preference_score": score_breakdown.get("user_preference_score"),
+            "style_selection_match": score_breakdown.get("style_selection_match"),
+            "style_selection_rank": score_breakdown.get("style_selection_rank"),
+            "style_selection_score": score_breakdown.get("style_selection_score"),
+            "style_selection_target_styles": score_breakdown.get("style_selection_target_styles"),
+            "price_known_rank": score_breakdown.get("price_known_rank"),
+            "price_sort_value": score_breakdown.get("price_sort_value"),
         },
     }
 
@@ -1390,17 +1604,44 @@ def _llm_rerank_candidates(
             "reason": f"ollama_import_failed:{type(import_error).__name__ if import_error else 'RuntimeError'}:{import_error or 'chat_json_not_found'}",
         }
 
+    def resolve_candidate_key(raw_key: Any) -> str | None:
+        key = str(raw_key or "").strip()
+        if not key or key.lower() == "string":
+            return None
+        if key in candidate_map:
+            return key
+        if key + " model" in candidate_map:
+            return key + " model"
+        if key.endswith(" model") and key[:-6] in candidate_map:
+            return key[:-6]
+        key_l = key.lower()
+        matches: list[str] = []
+        for candidate_key, candidate in candidate_map.items():
+            candidate_key_l = candidate_key.lower()
+            title_l = str(candidate.get("title") or "").strip().lower()
+            if key_l and (key_l in candidate_key_l or (title_l and key_l in title_l)):
+                matches.append(candidate_key)
+        return matches[0] if len(matches) == 1 else None
+
     system_prompt = (
         "You are selecting the best supplier furniture replacement for an interior scene. "
         "Choose only from the provided candidates. "
-        "Prioritize same furniture type, geometric fit, visual similarity, prompt/style match, "
-        "and explicit user preferences such as budget and preferred colors. "
+        "The candidates were already filtered and ordered by a deterministic heuristic using category, size, "
+        "bbox fit, asset availability, price, prompt context, and style_llm. "
+        "Pick the best final candidate from this shortlist only. "
+        "The chosen_unique_key must be copied exactly from one candidate.unique_key; do not invent ids, titles, "
+        "or placeholder strings. "
+        "Respect selection_strategy: cheapest means keep price dominant after fit/type; cheap_style means "
+        "prefer style-compatible candidates then lower price; style means prioritize style fit and ignore price. "
+        "Also consider visual similarity, prompt/style match, and explicit user preferences such as budget and preferred colors. "
         "Prefer realistic assets over placeholders when all else is close. "
         "Return strict JSON only."
     )
     prompt_payload = {
         "room_prompt": (context or {}).get("prompt_text"),
         "room_style_hint": (context or {}).get("room_style_hint"),
+        "style_label": (context or {}).get("style_label"),
+        "selection_strategy": _selection_strategy(context),
         "target": {
             "target_id": target.get("target_id"),
             "name": target.get("name"),
@@ -1441,17 +1682,19 @@ def _llm_rerank_candidates(
             think="low",
         )
         text = _extract_ollama_text(response)
-        parsed = _json_loads_or(text, None)
-        if not isinstance(parsed, dict):
-            raise RuntimeError("LLM did not return JSON object")
+        parsed = _parse_json_object_from_text(text)
     except Exception as exc:
         return top_candidates, {
             "status": "failed",
             "reason": f"ollama_rerank_failed:{type(exc).__name__}:{exc}",
         }
 
-    chosen_key = str(parsed.get("chosen_unique_key") or "").strip()
-    ordered_keys = [str(x).strip() for x in (parsed.get("ordered_unique_keys") or []) if str(x).strip() in candidate_map]
+    chosen_key = resolve_candidate_key(parsed.get("chosen_unique_key")) or ""
+    ordered_keys = []
+    for raw_key in parsed.get("ordered_unique_keys") or []:
+        resolved_key = resolve_candidate_key(raw_key)
+        if resolved_key and resolved_key not in ordered_keys:
+            ordered_keys.append(resolved_key)
     if chosen_key not in candidate_map:
         return top_candidates, {
             "status": "failed",
@@ -1516,6 +1759,8 @@ def _rank_candidate(target: dict[str, Any], row: dict[str, Any], context: dict[s
     design_score, design_breakdown = _design_match_info(target, row)
     query_score, query_breakdown = _query_match_info(target, row)
     prompt_score, prompt_breakdown = _prompt_match_info(target, row, context)
+    style_rank, style_score, style_breakdown = _style_match_info(target, row, context)
+    price_breakdown = _price_rank_info(row)
     preferences_ok, preference_score, preference_breakdown = _user_preference_match_info(target, row, context)
     if not preferences_ok:
         return None
@@ -1545,24 +1790,52 @@ def _rank_candidate(target: dict[str, Any], row: dict[str, Any], context: dict[s
         except Exception:
             price_distance_ratio = None
 
-    rank_key = (
+    structural_prefix = (
         category_rank,
         strict_group_asset_priority,
         effective_size_rank,
         asset_priority,
+    )
+    dimension_key = (
         width_distance,
         height_distance,
         depth_distance,
+    )
+    similarity_suffix_no_price = (
         -round(query_score, 6),
         -round(preference_score, 6),
         -round(prompt_score, 6),
+        style_rank,
+        -round(style_score, 6),
         -round(design_score, 6),
         0 if rich_card else 1,
         0 if has_model_link else 1,
-        round(price_distance_ratio if price_distance_ratio is not None else 999999.0, 6),
         -text_overlap,
         str(row.get("unique_key") or ""),
     )
+    similarity_suffix_with_budget = similarity_suffix_no_price[:-2] + (
+        round(price_distance_ratio if price_distance_ratio is not None else 999999.0, 6),
+    ) + similarity_suffix_no_price[-2:]
+    strategy = _selection_strategy(context)
+    if strategy == "cheapest":
+        rank_key = structural_prefix + (
+            price_breakdown["price_known_rank"],
+            price_breakdown["price_sort_value"],
+        ) + dimension_key + similarity_suffix_no_price
+    elif strategy == "cheap_style":
+        rank_key = structural_prefix + (
+            style_rank,
+            -round(style_score, 6),
+            price_breakdown["price_known_rank"],
+            price_breakdown["price_sort_value"],
+        ) + dimension_key + similarity_suffix_no_price
+    elif strategy == "style":
+        rank_key = structural_prefix + (
+            style_rank,
+            -round(style_score, 6),
+        ) + dimension_key + similarity_suffix_no_price
+    else:
+        rank_key = structural_prefix + dimension_key + similarity_suffix_with_budget
 
     reasons: dict[str, Any] = {
         **category_breakdown,
@@ -1582,6 +1855,8 @@ def _rank_candidate(target: dict[str, Any], row: dict[str, Any], context: dict[s
         },
         **design_breakdown,
         **query_breakdown,
+        **style_breakdown,
+        **price_breakdown,
         **source_policy_breakdown,
         **preference_breakdown,
         **prompt_breakdown,
@@ -1596,7 +1871,21 @@ def _rank_candidate(target: dict[str, Any], row: dict[str, Any], context: dict[s
         "strict_group_asset_priority": strict_group_asset_priority,
         "text_overlap_count": text_overlap,
         "price_distance_ratio": round(price_distance_ratio, 6) if price_distance_ratio is not None else None,
-        "ranking_order": ["category", "bbox_fit", "asset_ready", "width", "height", "depth", "query_match", "user_preferences", "prompt_color", "design"],
+        "supplier_selection_strategy": strategy,
+        "ranking_order": [
+            "category",
+            "bbox_fit",
+            "asset_ready",
+            "width",
+            "height",
+            "depth",
+            "strategy_price_style",
+            "query_match",
+            "user_preferences",
+            "prompt_color",
+            "style_llm",
+            "design",
+        ],
         "rank_key": [x for x in rank_key[:-1]],
     }
     return rank_key, reasons
@@ -1906,6 +2195,13 @@ def load_supplier_catalog_json(
                 "price_value": item.get("price_value"),
                 "price_currency": item.get("price_currency"),
                 "style": item.get("style"),
+                "style_llm": item.get("style_llm"),
+                "style_llm_confidence": item.get("style_llm_confidence"),
+                "style_llm_secondary": item.get("style_llm_secondary"),
+                "style_llm_quality_score": item.get("style_llm_quality_score"),
+                "style_llm_quality_flags": item.get("style_llm_quality_flags"),
+                "style_llm_evidence": item.get("style_llm_evidence"),
+                "style_llm_rationale": item.get("style_llm_rationale"),
                 "color": item.get("color"),
                 "description": item.get("description"),
                 "width_cm": item.get("width_cm", dims.get("width")),
@@ -1960,6 +2256,7 @@ def _load_matcher_context(
     targets_json_path: Path,
     data: dict[str, Any],
     user_preferences: dict[str, Any] | None = None,
+    selection_strategy: str = "balanced",
 ) -> dict[str, Any]:
     run_dir = targets_json_path.parent
     prompt_text = None
@@ -1973,11 +2270,28 @@ def _load_matcher_context(
 
     room = data.get("room") or {}
     room_style_hint = str(room.get("style_hint") or "").strip()
+    style_profile = data.get("style_profile") if isinstance(data.get("style_profile"), dict) else {}
+    if not style_profile:
+        profile_path = run_dir / "style_profile.json"
+        if profile_path.is_file():
+            try:
+                loaded_profile = read_json(profile_path)
+                if isinstance(loaded_profile, dict):
+                    style_profile = loaded_profile
+            except Exception:
+                style_profile = {}
+    if not room_style_hint:
+        room_style_hint = str(style_profile.get("style_hint") or style_profile.get("description") or "").strip()
+    strategy = str(selection_strategy or "balanced").strip().lower()
+    if strategy not in SUPPLIER_SELECTION_STRATEGIES:
+        strategy = "balanced"
     return {
         "prompt_text": prompt_text,
         "prompt_tokens": _normalize_text_tokens(prompt_text),
         "room_style_hint": room_style_hint,
         "room_style_tokens": _normalize_text_tokens(room_style_hint),
+        "style_label": _normalize_style_label(style_profile.get("style_label") or room.get("style_label")),
+        "supplier_selection_strategy": strategy,
         "user_preferences": _normalize_user_preferences(user_preferences),
     }
 
@@ -2085,6 +2399,7 @@ def build_bindings_with_candidates(
     targets_json_path: Path,
     catalog_rows: list[dict[str, Any]],
     top_k: int,
+    selection_strategy: str = "balanced",
     user_preferences: dict[str, Any] | None = None,
     llm_settings: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -2093,7 +2408,12 @@ def build_bindings_with_candidates(
     if not isinstance(targets, list):
         raise RuntimeError(f"Некорректный layout_targets JSON: {targets_json_path}")
     targets = _enrich_targets_from_source_scene(data, targets)
-    context = _load_matcher_context(targets_json_path, data, user_preferences=user_preferences)
+    context = _load_matcher_context(
+        targets_json_path,
+        data,
+        user_preferences=user_preferences,
+        selection_strategy=selection_strategy,
+    )
 
     bindings: list[dict[str, Any]] = []
     matched_count = 0
@@ -2120,6 +2440,7 @@ def build_bindings_with_candidates(
             "top_candidates": [],
             "chosen_candidate": None,
             "selection_notes": [],
+            "supplier_selection_strategy": context.get("supplier_selection_strategy"),
             "user_preferences": _target_user_preferences(target, context),
             "llm_rerank": None,
         }
@@ -2177,6 +2498,13 @@ def build_bindings_with_candidates(
                     "price_value": row.get("price_value"),
                     "price_currency": row.get("price_currency"),
                     "style": row.get("style"),
+                    "style_llm": row.get("style_llm"),
+                    "style_llm_confidence": row.get("style_llm_confidence"),
+                    "style_llm_secondary": row.get("style_llm_secondary"),
+                    "style_llm_quality_score": row.get("style_llm_quality_score"),
+                    "style_llm_quality_flags": row.get("style_llm_quality_flags"),
+                    "style_llm_evidence": row.get("style_llm_evidence"),
+                    "style_llm_rationale": row.get("style_llm_rationale"),
                     "color": row.get("color"),
                     "materials": row.get("materials"),
                     "room": row.get("room"),
@@ -2250,7 +2578,13 @@ def build_bindings_with_candidates(
             "target_count": len(bindings),
             "matched_target_count": matched_count,
             "top_k": int(top_k),
-            "ranking_order": ["category_family", "bbox_fit_required", "width", "height", "depth", "query_match", "user_preferences", "prompt_color", "design", "real_asset"],
+            "supplier_selection_strategy": context.get("supplier_selection_strategy"),
+            "style_llm_policy": {
+                "min_confidence": STYLE_LLM_MIN_CONFIDENCE,
+                "min_quality_score": STYLE_LLM_MIN_QUALITY,
+                "mismatch_is_penalty_not_filter": True,
+            },
+            "ranking_order": ["category_family", "bbox_fit_required", "width", "height", "depth", "strategy_price_style", "query_match", "user_preferences", "prompt_color", "style_llm", "design", "real_asset"],
             "category_policy": "exact_group_or_same_family",
             "bbox_fit_policy": "strict_bbox_or_rescalable_anchor_fit_with_group_limits",
             "final_selection_policy": "llm_or_heuristic_top1_sets_candidate_order_asset_acquisition_uses_first_acceptable_with_real_mesh_else_keep_generated",
@@ -2284,6 +2618,12 @@ def build_cli() -> argparse.ArgumentParser:
     ap.add_argument("--site", action="append", default=None, help="Optional source_site filter; can be repeated")
     ap.add_argument("--rich-only", action="store_true", help="Use only rich cards with title, price, dimensions, description, category and brand")
     ap.add_argument("--top-k", type=int, default=5)
+    ap.add_argument(
+        "--selection-strategy",
+        choices=sorted(SUPPLIER_SELECTION_STRATEGIES),
+        default="balanced",
+        help="Supplier candidate ranking strategy: cheapest, cheap_style, style, or balanced.",
+    )
     ap.add_argument("--user-preferences-json", default=None, help="Optional JSON with global/by_target_id/by_semantic_group manual constraints")
     ap.add_argument("--max-price-rub", type=float, default=None, help="Global max acceptable price in RUB")
     ap.add_argument("--preferred-color", action="append", default=[], help="Preferred color token; may be repeated")
@@ -2294,7 +2634,7 @@ def build_cli() -> argparse.ArgumentParser:
     ap.add_argument("--strict-color", action="store_true", help="Reject candidates that do not match preferred colors")
     ap.add_argument("--require-real-asset", action="store_true", help="Reject candidates without a local real mesh asset")
     ap.add_argument("--require-model-url", action="store_true", help="Reject candidates without model page or download URL")
-    ap.add_argument("--llm-provider", choices=["none", "ollama"], default="none", help="Optional final reranker provider")
+    ap.add_argument("--llm-provider", choices=["none", "ollama"], default="none", help="Optional final LLM reranker after heuristic top-K")
     ap.add_argument("--ollama-url", default="http://127.0.0.1:11434", help="Ollama base URL for LLM reranking")
     ap.add_argument("--ollama-model", default="gpt-oss:20b", help="Ollama model for final candidate reranking")
     ap.add_argument("--ollama-timeout", type=int, default=180, help="Ollama timeout in seconds")
@@ -2358,6 +2698,7 @@ def main() -> None:
         targets_json_path=targets_path,
         catalog_rows=catalog_rows,
         top_k=int(args.top_k),
+        selection_strategy=str(args.selection_strategy),
         user_preferences=user_preferences,
         llm_settings=llm_settings,
     )

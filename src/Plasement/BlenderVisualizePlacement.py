@@ -86,6 +86,7 @@ def main():
     ap.add_argument("--turntable-frames", type=int, default=24, help="Количество кадров turntable")
     ap.add_argument("--turntable-elevation-deg", type=float, default=30.0, help="Угол возвышения камеры для orbit")
     ap.add_argument("--no-pack-assets", action="store_true", help="Не паковать ассеты в .blend")
+    ap.add_argument("--verbose", action="store_true", help="Печатать подробную диагностику сборки Blender-сцены")
     args = ap.parse_args()
 
     blender_bin = find_executable(([args.blender] if args.blender else []) + DEFAULT_BLENDER_CANDIDATES)
@@ -125,6 +126,8 @@ def main():
         cmd += ["--turntable-elevation-deg", str(float(args.turntable_elevation_deg or 0.0))]
     if args.no_pack_assets:
         cmd += ["--no-pack-assets"]
+    if args.verbose:
+        cmd += ["--verbose"]
 
     print("RUN:", " ".join(cmd))
     subprocess.run(cmd, check=True)
