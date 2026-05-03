@@ -497,8 +497,8 @@ def _update_extra(extra_json: str, price_info: dict[str, Any]) -> str:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--input", default="data/sourse/suppliers/manual_ingest_urls.txt")
-    ap.add_argument("--db", default="data/sourse/suppliers/suppliers.db")
-    ap.add_argument("--out-dir", default="data/sourse/suppliers/items")
+    ap.add_argument("--db", default="out/supplier_ingest/suppliers.db")
+    ap.add_argument("--out-dir", default="out/supplier_ingest/items")
     ap.add_argument("--strict", action="store_true")
     args = ap.parse_args()
 

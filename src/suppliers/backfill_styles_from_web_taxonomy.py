@@ -674,11 +674,11 @@ def write_outputs(
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Backfill a web-derived style taxonomy into supplier_catalog_one_table.db")
+    parser = argparse.ArgumentParser(description="Backfill a web-derived style taxonomy into a working supplier catalog DB")
     parser.add_argument(
         "--db",
-        default="data/sourse/suppliers/supplier_catalog_one_table.db",
-        help="Path to supplier_catalog_one_table.db",
+        default="out/supplier_ingest/supplier_catalog_one_table.db",
+        help="Path to the working SQLite catalog DB",
     )
     parser.add_argument(
         "--only-accessible",
@@ -687,22 +687,22 @@ def main() -> int:
     )
     parser.add_argument(
         "--taxonomy-json",
-        default="data/sourse/suppliers/style_taxonomy_web_20260423.json",
+        default="reports/supplier_style_taxonomy/style_taxonomy_web_20260423.json",
         help="Path to write the taxonomy JSON",
     )
     parser.add_argument(
         "--taxonomy-md",
-        default="data/sourse/suppliers/style_taxonomy_web_20260423.md",
+        default="reports/supplier_style_taxonomy/style_taxonomy_web_20260423.md",
         help="Path to write the taxonomy Markdown",
     )
     parser.add_argument(
         "--report-json",
-        default="data/sourse/suppliers/style_backfill_report_20260423.json",
+        default="reports/supplier_style_taxonomy/style_backfill_report_20260423.json",
         help="Path to write the backfill report JSON",
     )
     parser.add_argument(
         "--report-md",
-        default="data/sourse/suppliers/style_backfill_report_20260423.md",
+        default="reports/supplier_style_taxonomy/style_backfill_report_20260423.md",
         help="Path to write the backfill report Markdown",
     )
     args = parser.parse_args()

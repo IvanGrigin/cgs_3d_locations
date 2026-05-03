@@ -484,8 +484,8 @@ def _link_local_archive_asset(
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--input", default="data/sourse/suppliers/manual_ingest_urls.txt")
-    ap.add_argument("--db", default="data/sourse/suppliers/suppliers.db")
-    ap.add_argument("--out-dir", default="data/sourse/suppliers/items")
+    ap.add_argument("--db", default="out/supplier_ingest/manual/suppliers.db")
+    ap.add_argument("--out-dir", default="out/supplier_ingest/manual/items")
     ap.add_argument("--archive-dir", default=None, help="Optional local archive directory for auto-linking 3ddd downloads")
     ap.add_argument("--assets-root", default="data/sourse/suppliers/manual_assets", help="Workspace directory for extracted local manual assets")
     ap.add_argument("--delete-archives-after-extract", action="store_true")

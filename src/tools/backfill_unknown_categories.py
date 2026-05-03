@@ -264,7 +264,7 @@ def _write_audit_csv(path: Path, rows: list[dict[str, Any]]) -> None:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="Backfill normalized categories in unified supplier catalog DB")
-    ap.add_argument("--db", required=True, help="Path to unified_supplier_catalog.db")
+    ap.add_argument("--db", required=True, help="Path to the working supplier catalog DB")
     ap.add_argument("--out-report-json", default=None)
     ap.add_argument("--out-audit-csv", default=None)
     ap.add_argument("--writeback-unknown", action="store_true", help="Copy category_norm_v2 into category_norm only for currently UNKNOWN/NULL rows")

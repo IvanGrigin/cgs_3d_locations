@@ -146,8 +146,8 @@ def coerce_product_record(item: ProductRecord | dict[str, Any], adapter, source_
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--url", required=True)
-    ap.add_argument("--db", default="data/sourse/suppliers/suppliers.db")
-    ap.add_argument("--out-dir", default="data/sourse/suppliers/items")
+    ap.add_argument("--db", default="out/supplier_ingest/suppliers.db")
+    ap.add_argument("--out-dir", default="out/supplier_ingest/items")
     args = ap.parse_args()
 
     db_path = Path(args.db).expanduser().resolve()

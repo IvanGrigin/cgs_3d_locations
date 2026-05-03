@@ -594,7 +594,14 @@ def _rgb_to_basic_color_tokens(value: Any) -> set[str]:
 
 def _extract_color_tokens(value: Any) -> set[str]:
     if isinstance(value, list):
-        return _rgb_to_basic_color_tokens(value)
+        if len(value) >= 3:
+            rgb_tokens = _rgb_to_basic_color_tokens(value)
+            if rgb_tokens:
+                return rgb_tokens
+        tokens: set[str] = set()
+        for item in value:
+            tokens |= _extract_color_tokens(item)
+        return tokens
     return {_normalize_color_token(x) for x in _normalize_text_tokens(value)}
 
 
@@ -676,6 +683,7 @@ def _row_query_tokens(row: dict[str, Any]) -> set[str]:
     tokens: set[str] = set()
     for part in parts:
         tokens |= _normalize_text_tokens(part)
+    tokens |= _row_image_color_tokens(row)
     return tokens
 
 
@@ -713,6 +721,19 @@ def _row_design_tokens(row: dict[str, Any]) -> set[str]:
     tokens: set[str] = set()
     for part in parts:
         tokens |= _normalize_text_tokens(part)
+    tokens |= _row_image_color_tokens(row)
+    return tokens
+
+
+def _row_image_color_tokens(row: dict[str, Any]) -> set[str]:
+    image_colors = row.get("image_color_features") if isinstance(row.get("image_color_features"), dict) else {}
+    tokens = _extract_color_tokens(image_colors.get("color_tokens"))
+    colors = image_colors.get("colors") if isinstance(image_colors.get("colors"), dict) else {}
+    for entry in colors.get("top5") or []:
+        if not isinstance(entry, dict):
+            continue
+        tokens |= _extract_color_tokens(entry.get("basic_color"))
+        tokens |= _extract_color_tokens(entry.get("rgb"))
     return tokens
 
 
@@ -723,6 +744,7 @@ def _row_color_tokens(row: dict[str, Any]) -> set[str]:
     tokens |= _extract_color_tokens(row.get("vlm_description_text"))
     tokens |= _extract_color_tokens(row.get("materials"))
     tokens |= _extract_color_tokens(row.get("title"))
+    tokens |= _row_image_color_tokens(row)
     return tokens
 
 
@@ -1580,6 +1602,7 @@ def _llm_candidate_payload(candidate: dict[str, Any]) -> dict[str, Any]:
             "materials": candidate.get("vlm_materials"),
             "style": candidate.get("vlm_style"),
         },
+        "image_color_features": candidate.get("image_color_features"),
         "heuristic": {
             "semantic_group": candidate.get("semantic_group"),
             "rich_card": candidate.get("rich_card"),
@@ -1668,8 +1691,8 @@ def _llm_rerank_candidates(
         "Choose only from the provided candidates. "
         "The candidates were already filtered and ordered by a deterministic heuristic using category, size, "
         "bbox fit, asset availability, price, prompt context, and style_llm. "
-        "When a candidate contains vlm_description/vlm_visual, treat it as the most direct evidence of the item's "
-        "visible shape, color, material, and style from product photos. "
+        "When a candidate contains vlm_description/vlm_visual/image_color_features, treat it as the most direct "
+        "evidence of the item's visible shape, color, material, and style from product photos. "
         "Pick the best final candidate from this shortlist only. "
         "The chosen_unique_key must be copied exactly from one candidate.unique_key; do not invent ids, titles, "
         "or placeholder strings. "
@@ -2206,6 +2229,36 @@ def load_supplier_catalog(
     return rows_out
 
 
+def _load_image_color_feature_sidecar(catalog_path: Path) -> dict[str, dict[str, Any]]:
+    if catalog_path.name != "supplier_catalog_canonical.json":
+        return {}
+    sidecar = Path("reports/supplier_image_colors/supplier_catalog_canonical.image_colors.jsonl")
+    if not sidecar.is_file():
+        return {}
+    features: dict[str, dict[str, Any]] = {}
+    try:
+        lines = sidecar.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return {}
+    for line in lines:
+        if not line.strip():
+            continue
+        parsed = _json_loads_or(line, None)
+        if not isinstance(parsed, dict) or parsed.get("status") != "ok":
+            continue
+        key = str(parsed.get("unique_key") or "").strip()
+        if not key:
+            continue
+        features[key] = {
+            "source_image": parsed.get("image"),
+            "foreground_ratio": parsed.get("foreground_ratio"),
+            "colors": parsed.get("colors"),
+            "color_tokens": parsed.get("color_tokens") or [],
+            "method": parsed.get("method"),
+        }
+    return features
+
+
 def load_supplier_catalog_json(
     json_paths: list[Path],
     sites: set[str] | None = None,
@@ -2223,12 +2276,17 @@ def load_supplier_catalog_json(
                 )
             raise RuntimeError(f"Некорректный supplier catalog JSON: {json_path}")
 
+        image_color_features_by_key = _load_image_color_feature_sidecar(json_path)
         for item in items:
             if not isinstance(item, dict):
                 continue
             dims = item.get("dimensions_cm") or {}
+            unique_key = item.get("unique_key")
+            image_color_features = item.get("image_color_features")
+            if not isinstance(image_color_features, dict):
+                image_color_features = image_color_features_by_key.get(str(unique_key or ""))
             row = {
-                "unique_key": item.get("unique_key"),
+                "unique_key": unique_key,
                 "source_site": item.get("source_site"),
                 "source_url": item.get("source_url"),
                 "parsed_at": item.get("parsed_at"),
@@ -2265,6 +2323,7 @@ def load_supplier_catalog_json(
                 "vlm_materials": item.get("vlm_materials"),
                 "vlm_style": item.get("vlm_style"),
                 "vlm_visual_features": item.get("vlm_visual_features"),
+                "image_color_features": image_color_features,
                 "width_cm": item.get("width_cm", dims.get("width")),
                 "depth_cm": item.get("depth_cm", dims.get("depth")),
                 "height_cm": item.get("height_cm", dims.get("height")),
@@ -2577,6 +2636,7 @@ def build_bindings_with_candidates(
                     "depth_cm": row.get("depth_cm"),
                     "height_cm": row.get("height_cm"),
                     "description": row.get("description"),
+                    "image_color_features": row.get("image_color_features"),
                     "score_breakdown": reasons,
                     "rich_card": _row_is_rich(row),
                 }

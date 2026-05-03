@@ -171,6 +171,21 @@ def _candidate_has_supported_local_asset(candidate: dict[str, Any] | None) -> bo
     )
 
 
+def _normalize_supplier_catalog_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
+    out = dict(candidate)
+    dims = out.get("dimensions_cm") if isinstance(out.get("dimensions_cm"), dict) else {}
+    for src_key, dst_key in [
+        ("width", "width_cm"),
+        ("depth", "depth_cm"),
+        ("height", "height_cm"),
+    ]:
+        if out.get(dst_key) is None and dims.get(src_key) is not None:
+            out[dst_key] = dims.get(src_key)
+    if not str(out.get("asset_format") or "").strip() and out.get("asset_local_path"):
+        out["asset_format"] = Path(str(out["asset_local_path"])).suffix.lstrip(".").lower()
+    return out
+
+
 def _compact_candidate_pool(binding: dict[str, Any], *, limit: int = 5) -> list[dict[str, Any]]:
     pool: list[dict[str, Any]] = []
     seen: set[str] = set()
@@ -612,7 +627,7 @@ def _semantic_group_for_item(item: dict[str, Any], binding: dict[str, Any] | Non
 
 
 def _candidate_from_supplier_catalog_json(category_norms: set[str], target_size: list[float]) -> dict[str, Any] | None:
-    catalog_path = Path("data/sourse/suppliers/supplier_catalog_one_table.json")
+    catalog_path = Path("data/sourse/suppliers/supplier_catalog_canonical.json")
     if not catalog_path.is_file():
         return None
     try:
@@ -630,10 +645,10 @@ def _candidate_from_supplier_catalog_json(category_norms: set[str], target_size:
     for row in items:
         if not isinstance(row, dict):
             continue
-        category_norm = str(row.get("category_norm") or "").strip()
+        candidate = _normalize_supplier_catalog_candidate(row)
+        category_norm = str(candidate.get("category_norm") or "").strip()
         if category_norm not in category_norms:
             continue
-        candidate = dict(row)
         if not _candidate_has_supported_local_asset(candidate):
             continue
         text = " ".join(
@@ -1054,33 +1069,10 @@ def _catalog_candidate_asset(candidate: dict[str, Any]) -> dict[str, Any]:
 
 def _candidate_from_supplier_db(group: str, target_size: list[float]) -> dict[str, Any] | None:
     target_w, target_d, target_h = target_size
-    groups = ("chair",) if group == "chair" else ("chair", "armchair")
     candidates: list[dict[str, Any]] = []
 
-    db_path = Path("data/sourse/suppliers/unified_supplier_mesh_catalog.db")
-    if db_path.is_file():
-        placeholders = ",".join("?" for _ in groups)
-        sql = f"""
-        SELECT unique_key, source_site, title, brand, collection, category_raw, category_norm,
-               semantic_group, product_url, model_page_url, model_download_url,
-               model_download_landing_url, model_vendor_url, asset_status, asset_format,
-               asset_local_path, mesh_local_path, mesh_format, width_cm, depth_cm, height_cm,
-               price_value, price_currency, style, color, materials, description
-        FROM supplier_mesh_catalog
-        WHERE semantic_group IN ({placeholders})
-          AND COALESCE(asset_local_path, mesh_local_path, '') != ''
-    """
-        try:
-            with sqlite3.connect(str(db_path)) as con:
-                con.row_factory = sqlite3.Row
-                candidates.extend(dict(row) for row in con.execute(sql, groups))
-        except sqlite3.Error:
-            pass
-
     for asset_db in [
-        Path("data/sourse/suppliers/site_assets_imodern_textured.db"),
-        Path("data/sourse/suppliers/site_assets_run.db"),
-        Path("data/sourse/suppliers/site_assets_homeconcept_mix.db"),
+        Path("data/sourse/suppliers/site_assets_imodern_clean.db"),
     ]:
         if not asset_db.is_file():
             continue

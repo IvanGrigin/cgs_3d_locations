@@ -576,8 +576,8 @@ def main() -> None:
     ap.add_argument("--count-per-site", type=int, default=2)
     ap.add_argument("--max-listing-pages", type=int, default=12)
     ap.add_argument("--max-depth", type=int, default=1)
-    ap.add_argument("--db", default="data/sourse/suppliers/site_assets.db")
-    ap.add_argument("--out-dir", default="data/sourse/suppliers/site_assets")
+    ap.add_argument("--db", default="out/supplier_ingest/site_assets/site_assets.db")
+    ap.add_argument("--out-dir", default="out/supplier_ingest/site_assets/assets")
     ap.add_argument("--blender", default=None)
     args = ap.parse_args()
 

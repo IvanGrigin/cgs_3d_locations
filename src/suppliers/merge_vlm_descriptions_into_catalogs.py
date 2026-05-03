@@ -294,20 +294,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--json-catalog",
         action="append",
         default=[
-            "data/sourse/suppliers/supplier_catalog_one_table.json",
-            "data/sourse/suppliers/supplier_product_full.json",
+            "data/sourse/suppliers/supplier_catalog_canonical.json",
         ],
     )
     parser.add_argument(
         "--sqlite-target",
         action="append",
-        default=[
-            "data/sourse/suppliers/supplier_catalog_one_table.db:supplier_catalog_one_table",
-            "data/sourse/suppliers/unified_supplier_catalog.db:supplier_item",
-            "data/sourse/suppliers/suppliers.db:supplier_product",
-            "data/sourse/suppliers/supplier_mesh_catalog.db:supplier_mesh_catalog",
-            "data/sourse/suppliers/unified_supplier_mesh_catalog.db:supplier_mesh_catalog",
-        ],
+        default=[],
     )
     return parser
 

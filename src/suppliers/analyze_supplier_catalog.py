@@ -404,7 +404,7 @@ def _to_markdown(summary: dict[str, Any]) -> str:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description="Build consolidated supplier catalog analytics.")
-    ap.add_argument("--db", default="data/sourse/suppliers/suppliers.db")
+    ap.add_argument("--db", default="out/supplier_ingest/suppliers.db")
     ap.add_argument("--out-dir", default="out/supplier_catalog_analytics_20260423")
     args = ap.parse_args()
 

@@ -18,8 +18,8 @@ from src.suppliers.models import ProductRecord
 from src.tools.normalize_supplier_categories_taxonomy import infer_category_from_mapping
 
 
-DEFAULT_INPUT = "data/sourse/suppliers/stoolgroup/catalog/products_with_3d_models.jsonl"
-DEFAULT_DB = "data/sourse/suppliers/suppliers.db"
+DEFAULT_INPUT = "out/supplier_ingest/stoolgroup/catalog/products_with_3d_models.jsonl"
+DEFAULT_DB = "out/supplier_ingest/suppliers.db"
 
 
 def _now_utc_iso() -> str:

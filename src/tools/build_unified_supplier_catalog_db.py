@@ -207,7 +207,7 @@ def _write_csv(path: Path, header: list[str], rows: list[list[Any]]) -> None:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="Build unified supplier SQLite DB and category statistics from supplier_product_full.json")
+    ap = argparse.ArgumentParser(description="Build unified supplier SQLite DB and category statistics from a supplier catalog JSON")
     ap.add_argument("--catalog-json", required=True)
     ap.add_argument("--out-db", required=True)
     ap.add_argument("--out-stats-json", required=True)

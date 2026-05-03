@@ -1065,8 +1065,8 @@ def parse_url(url: str, html: str, final_url: str | None = None) -> ProductRecor
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--url", required=True, help="URL карточки товара")
-    ap.add_argument("--db", default="data/sourse/suppliers/suppliers.db")
-    ap.add_argument("--out-dir", default="data/sourse/suppliers/items")
+    ap.add_argument("--db", default="out/supplier_ingest/suppliers.db")
+    ap.add_argument("--out-dir", default="out/supplier_ingest/items")
     ap.add_argument("--no-download-model", action="store_true")
     args = ap.parse_args()
 

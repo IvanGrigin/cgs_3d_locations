@@ -1151,7 +1151,7 @@ def _report_markdown(report: dict[str, Any]) -> str:
 def main() -> int:
     ap = argparse.ArgumentParser(description="Inventory supplier storage and build one consolidated supplier table.")
     ap.add_argument("--root", default="data/sourse/suppliers", help="Root directory with supplier db/json files.")
-    ap.add_argument("--out-db", default=None, help="SQLite DB with the consolidated supplier_catalog_one_table.")
+    ap.add_argument("--out-db", default=None, help="SQLite DB with the consolidated working supplier table.")
     ap.add_argument("--out-csv", default=None, help="Optional CSV export of the consolidated table.")
     ap.add_argument("--out-json", default=None, help="Optional JSON export of the consolidated table.")
     ap.add_argument("--out-report-json", default=None, help="Inventory report JSON.")
@@ -1159,14 +1159,19 @@ def main() -> int:
     args = ap.parse_args()
 
     root = Path(args.root).expanduser().resolve()
-    out_db = Path(args.out_db).expanduser().resolve() if args.out_db else root / "supplier_catalog_one_table.db"
-    out_csv = Path(args.out_csv).expanduser().resolve() if args.out_csv else root / "supplier_catalog_one_table.csv"
-    out_json = Path(args.out_json).expanduser().resolve() if args.out_json else root / "supplier_catalog_one_table.json"
+    out_root = Path("out/supplier_ingest/storage_one_table").resolve()
+    out_db = Path(args.out_db).expanduser().resolve() if args.out_db else out_root / "supplier_catalog_one_table.db"
+    out_csv = Path(args.out_csv).expanduser().resolve() if args.out_csv else out_root / "supplier_catalog_one_table.csv"
+    out_json = Path(args.out_json).expanduser().resolve() if args.out_json else out_root / "supplier_catalog_one_table.json"
     out_report_json = (
-        Path(args.out_report_json).expanduser().resolve() if args.out_report_json else root / "supplier_storage_inventory.json"
+        Path(args.out_report_json).expanduser().resolve()
+        if args.out_report_json
+        else out_root / "supplier_storage_inventory.json"
     )
     out_report_md = (
-        Path(args.out_report_md).expanduser().resolve() if args.out_report_md else root / "supplier_storage_inventory.md"
+        Path(args.out_report_md).expanduser().resolve()
+        if args.out_report_md
+        else out_root / "supplier_storage_inventory.md"
     )
 
     db_candidates, db_inventory = _collect_db_candidates(root)

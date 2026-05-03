@@ -6,7 +6,7 @@ Probe supplier model URLs and record whether the downloadable payload contains F
 The script operates on distinct model_download_url values, downloads each payload once,
 inspects direct files or archive contents, then writes the result back into:
   1. supplier_product.extra_json in SQLite
-  2. per-item metadata JSON files under data/sourse/suppliers/items
+  2. per-item metadata JSON files under out/supplier_ingest/items
 
 It is designed to be resumable. Re-running with --skip-checked avoids re-probing
 URLs that already have a recorded result in extra_json.
@@ -318,11 +318,11 @@ def _make_logger(progress_log: Path | None):
 
 def main() -> None:
     ap = argparse.ArgumentParser(description="Probe supplier model URLs for FBX presence.")
-    ap.add_argument("--db", default="data/sourse/suppliers/suppliers.db")
-    ap.add_argument("--out-dir", default="data/sourse/suppliers/items")
+    ap.add_argument("--db", default="out/supplier_ingest/suppliers.db")
+    ap.add_argument("--out-dir", default="out/supplier_ingest/items")
     ap.add_argument("--site", default="sancos")
     ap.add_argument("--temp-root", default="/tmp")
-    ap.add_argument("--report-json", default="data/sourse/suppliers/sancos_model_probe_report.json")
+    ap.add_argument("--report-json", default="reports/supplier_model_probe/sancos_model_probe_report.json")
     ap.add_argument("--progress-log", default="")
     ap.add_argument("--workers", type=int, default=4)
     ap.add_argument("--limit", type=int, default=0)

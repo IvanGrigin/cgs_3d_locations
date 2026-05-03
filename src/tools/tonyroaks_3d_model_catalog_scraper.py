@@ -47,7 +47,7 @@ LEGACY_CATEGORY_ROOTS = {
     "tables": [("tables", "486877244"), ("tables_old", "486877244")],
     "storagesystems": [("storagesystems", "499966435"), ("storagesystems_old", "499966435")],
 }
-DEFAULT_OUT_DIR = "data/sourse/suppliers/tonyroaks/catalog"
+DEFAULT_OUT_DIR = "out/supplier_ingest/tonyroaks/catalog"
 DEFAULT_USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "

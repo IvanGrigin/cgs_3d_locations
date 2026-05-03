@@ -13,11 +13,11 @@ from pathlib import Path
 from typing import Any
 
 
-DEFAULT_INPUT = "data/sourse/suppliers/supplier_catalog_one_table.json"
-DEFAULT_OUT_JSONL = "data/sourse/suppliers/supplier_catalog_one_table.style_llm.jsonl"
-DEFAULT_MERGED_JSON = "data/sourse/suppliers/supplier_catalog_one_table.with_style_llm.json"
-DEFAULT_REPORT_JSON = "data/sourse/suppliers/supplier_catalog_one_table.style_llm.quality.json"
-DEFAULT_REPORT_MD = "data/sourse/suppliers/supplier_catalog_one_table.style_llm.quality.md"
+DEFAULT_INPUT = "data/sourse/suppliers/supplier_catalog_canonical.json"
+DEFAULT_OUT_JSONL = "reports/supplier_style_llm/supplier_catalog_canonical.style_llm.jsonl"
+DEFAULT_MERGED_JSON = "reports/supplier_style_llm/supplier_catalog_canonical.with_style_llm.json"
+DEFAULT_REPORT_JSON = "reports/supplier_style_llm/supplier_catalog_canonical.style_llm.quality.json"
+DEFAULT_REPORT_MD = "reports/supplier_style_llm/supplier_catalog_canonical.style_llm.quality.md"
 DEFAULT_OLLAMA_MODEL = "llama3.2:latest"
 
 STYLE_DEFS: dict[str, str] = {

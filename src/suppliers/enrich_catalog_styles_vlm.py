@@ -26,10 +26,10 @@ from pathlib import Path
 from typing import Any
 
 
-DEFAULT_INPUT = "data/sourse/suppliers/supplier_catalog_one_table.json"
-DEFAULT_OUT_JSONL = "data/sourse/suppliers/supplier_catalog_one_table.vlm_styles.jsonl"
-DEFAULT_IMAGE_CACHE = "data/sourse/suppliers/vlm_style_images"
-DEFAULT_TOP_SAMPLES_DIR = "data/sourse/suppliers/vlm_style_top30"
+DEFAULT_INPUT = "data/sourse/suppliers/supplier_catalog_canonical.json"
+DEFAULT_OUT_JSONL = "reports/supplier_vlm_styles/supplier_catalog_canonical.vlm_styles.jsonl"
+DEFAULT_IMAGE_CACHE = "out/supplier_ingest/vlm_style_images"
+DEFAULT_TOP_SAMPLES_DIR = "reports/supplier_vlm_styles/top30"
 
 OBJECT_CATEGORIES = [
     "furniture",

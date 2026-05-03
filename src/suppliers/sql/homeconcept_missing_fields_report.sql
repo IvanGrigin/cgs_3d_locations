@@ -3,7 +3,7 @@
 -- The queries are meant for manual QA rather than automated monitoring.
 -- Output is optimized for sqlite3 terminal usage.
 -- Run:
--- sqlite3 -header -column data/sourse/suppliers/suppliers.db < src/suppliers/sql/homeconcept_missing_fields_report.sql
+-- sqlite3 -header -column out/supplier_ingest/suppliers.db < src/suppliers/sql/homeconcept_missing_fields_report.sql
 
 .print ''
 .print '1. Daily totals'

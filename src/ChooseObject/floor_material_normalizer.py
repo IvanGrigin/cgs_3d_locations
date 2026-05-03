@@ -40,6 +40,10 @@ class FloorMaterial:
     raw_properties: dict[str, Any] = field(default_factory=dict)
     image_urls: list[str] = field(default_factory=list)
     local_image_paths: list[str] = field(default_factory=list)
+    average_rgb: list[int] | None = None
+    average_hex: str | None = None
+    dominant_colors_rgb: list[list[int]] = field(default_factory=list)
+    dominant_colors_hex: list[str] = field(default_factory=list)
     style_tags: list[str] = field(default_factory=list)
     room_suitability: list[str] = field(default_factory=list)
     bad_for: list[str] = field(default_factory=list)
@@ -109,6 +113,88 @@ def _prop(props: dict[str, Any], names: list[str]) -> str:
         if key in lowered:
             return _norm(lowered[key])
     return ""
+
+
+def _rgb_to_hex(rgb: list[int] | tuple[int, int, int] | None) -> str | None:
+    if not rgb or len(rgb) != 3:
+        return None
+    return "#{:02x}{:02x}{:02x}".format(*(max(0, min(255, int(x))) for x in rgb))
+
+
+def _sample_image_pixels(image_path: Path, max_pixels: int = 5000) -> list[tuple[int, int, int]]:
+    try:
+        from PIL import Image
+    except ImportError:
+        return []
+    try:
+        image = Image.open(image_path)
+        try:
+            image.draft("RGB", (220, 220))
+        except Exception:
+            pass
+        image.thumbnail((220, 220))
+        image = image.convert("RGB")
+        pixels = list(image.getdata())
+    except Exception:
+        return []
+    usable: list[tuple[int, int, int]] = []
+    for r, g, b in pixels:
+        if r >= 246 and g >= 246 and b >= 246:
+            continue
+        if r <= 6 and g <= 6 and b <= 6:
+            continue
+        usable.append((r, g, b))
+    if len(usable) <= max_pixels:
+        return usable
+    step = max(1, len(usable) // max_pixels)
+    return usable[::step][:max_pixels]
+
+
+def _kmeans_rgb(pixels: list[tuple[int, int, int]], k: int = 5, iterations: int = 12) -> list[list[int]]:
+    if not pixels:
+        return []
+    k = max(1, min(k, len(pixels)))
+    ordered = sorted(pixels, key=lambda p: 0.2126 * p[0] + 0.7152 * p[1] + 0.0722 * p[2])
+    centers = [ordered[int((i + 0.5) * len(ordered) / k)] for i in range(k)]
+    labels = [0] * len(pixels)
+    for _ in range(iterations):
+        buckets: list[list[tuple[int, int, int]]] = [[] for _ in range(k)]
+        for idx, pixel in enumerate(pixels):
+            best = min(range(k), key=lambda ci: sum((pixel[c] - centers[ci][c]) ** 2 for c in range(3)))
+            labels[idx] = best
+            buckets[best].append(pixel)
+        new_centers = []
+        for ci, bucket in enumerate(buckets):
+            if not bucket:
+                new_centers.append(centers[ci])
+            else:
+                new_centers.append(tuple(int(round(sum(p[c] for p in bucket) / len(bucket))) for c in range(3)))
+        if new_centers == centers:
+            break
+        centers = new_centers
+    counts = [labels.count(i) for i in range(k)]
+    ranked = sorted(range(k), key=lambda i: counts[i], reverse=True)
+    return [[int(x) for x in centers[i]] for i in ranked if counts[i] > 0]
+
+
+def analyze_floor_material_colors(base_dir: Path, local_image_paths: list[str], k: int = 5) -> dict[str, Any]:
+    pixels: list[tuple[int, int, int]] = []
+    for raw in local_image_paths[:3]:
+        path = Path(raw).expanduser()
+        if not path.is_absolute():
+            path = Path(base_dir) / path
+        if path.exists():
+            pixels.extend(_sample_image_pixels(path))
+    if not pixels:
+        return {"average_rgb": None, "average_hex": None, "dominant_colors_rgb": [], "dominant_colors_hex": []}
+    avg = [int(round(sum(p[i] for p in pixels) / len(pixels))) for i in range(3)]
+    palette = _kmeans_rgb(pixels, k=k)
+    return {
+        "average_rgb": avg,
+        "average_hex": _rgb_to_hex(avg),
+        "dominant_colors_rgb": palette,
+        "dominant_colors_hex": [_rgb_to_hex(rgb) for rgb in palette if _rgb_to_hex(rgb)],
+    }
 
 
 def load_domlenta_products(products_csv: Path) -> list[dict[str, str]]:
@@ -266,7 +352,7 @@ def _room_suitability(material_type: str, water_resistant: bool) -> tuple[list[s
     return mapping.get(material_type, ([], []))
 
 
-def normalize_product(row: dict[str, Any]) -> FloorMaterial:
+def normalize_product(row: dict[str, Any], base_dir: Path | None = None, analyze_images: bool = True) -> FloorMaterial:
     props = _safe_json(row.get("properties_json", ""), {})
     images = _safe_json(row.get("images_json", ""), [])
     local_images = _safe_json(row.get("local_image_paths_json", ""), [])
@@ -314,6 +400,9 @@ def normalize_product(row: dict[str, Any]) -> FloorMaterial:
     product_url = _norm(row.get("url") or row.get("final_url"))
     source = "mosplitka" if "mosplitka.ru" in product_url else "domlenta"
 
+    local_paths = [_norm(x) for x in local_images if _norm(x)]
+    color_info = analyze_floor_material_colors(base_dir or Path("."), local_paths) if analyze_images and local_paths else {}
+
     material = FloorMaterial(
         source=source,
         sku=_norm(row.get("sku")) or (product_url.rstrip("/").split("-")[-1] if product_url else ""),
@@ -341,7 +430,11 @@ def normalize_product(row: dict[str, Any]) -> FloorMaterial:
         description=description or _prop(props, ["Описание"]),
         raw_properties=props,
         image_urls=[_norm(x) for x in images if _norm(x)],
-        local_image_paths=[_norm(x) for x in local_images if _norm(x)],
+        local_image_paths=local_paths,
+        average_rgb=color_info.get("average_rgb"),
+        average_hex=color_info.get("average_hex"),
+        dominant_colors_rgb=color_info.get("dominant_colors_rgb") or [],
+        dominant_colors_hex=color_info.get("dominant_colors_hex") or [],
         room_suitability=suitability,
         bad_for=bad_for,
         parse_status=_norm(row.get("parse_status")) or "ok",
@@ -371,11 +464,12 @@ def write_jsonl(materials: list[FloorMaterial], out_path: Path) -> None:
             f.write(json.dumps(material.to_dict(), ensure_ascii=False) + "\n")
 
 
-def normalize_domlenta_catalog(products_csv: Path, out_jsonl: Path) -> list[FloorMaterial]:
+def normalize_domlenta_catalog(products_csv: Path, out_jsonl: Path, analyze_images: bool = True) -> list[FloorMaterial]:
+    base_dir = Path(products_csv).resolve().parent
     materials: list[FloorMaterial] = []
     for row in load_domlenta_products(products_csv):
         try:
-            materials.append(normalize_product(row))
+            materials.append(normalize_product(row, base_dir=base_dir, analyze_images=analyze_images))
         except Exception:
             materials.append(FloorMaterial(name=_norm(row.get("name")), product_url=_norm(row.get("url"))))
     write_jsonl(materials, out_jsonl)
@@ -501,7 +595,7 @@ def _floor_material_from_catalog_item(item: dict[str, Any], base_dir: Path) -> F
         " ".join(f"{k} {v}" for k, v in raw_props.items()),
         " ".join(f"{k} {v}" for k, v in text_facts.items()),
     ]))
-    return FloorMaterial(
+    material = FloorMaterial(
         version="floor_material.v1",
         source=str(item.get("source") or ""),
         sku=str(item.get("sku") or ""),
@@ -520,16 +614,33 @@ def _floor_material_from_catalog_item(item: dict[str, Any], base_dir: Path) -> F
         gloss=str(normalized.get("surface_finish") or "") or None,
         class_=_parse_int(raw_props.get("Класс")),
         thickness_mm=_parse_float(normalized.get("thickness_mm")),
-        plank_width_mm=_parse_float(normalized.get("tile_width_cm")) * 10 if _parse_float(normalized.get("tile_width_cm")) else None,
-        plank_length_mm=_parse_float(normalized.get("tile_height_cm")) * 10 if _parse_float(normalized.get("tile_height_cm")) else None,
+        plank_width_mm=(
+            _parse_float(normalized.get("plank_width_mm"))
+            or (_parse_float(normalized.get("tile_width_cm")) * 10 if _parse_float(normalized.get("tile_width_cm")) else None)
+        ),
+        plank_length_mm=(
+            _parse_float(normalized.get("plank_length_mm"))
+            or (_parse_float(normalized.get("tile_height_cm")) * 10 if _parse_float(normalized.get("tile_height_cm")) else None)
+        ),
         water_resistant=material_type in {"porcelain_tile", "ceramic_tile", "vinyl_or_spc", "linoleum"},
         country=str(raw_props.get("Страна") or "") or None,
         description=desc,
         raw_properties=raw_props,
         image_urls=[x for x in image_urls if x],
         local_image_paths=_abs_local_paths(local_candidates, base_dir),
+        average_rgb=item.get("average_rgb") if isinstance(item.get("average_rgb"), list) else None,
+        average_hex=str(item.get("average_hex") or "") or None,
+        dominant_colors_rgb=item.get("dominant_colors_rgb") if isinstance(item.get("dominant_colors_rgb"), list) else [],
+        dominant_colors_hex=item.get("dominant_colors_hex") if isinstance(item.get("dominant_colors_hex"), list) else [],
         style_tags=sorted(set(style_tags + [material_type])),
         room_suitability=rooms,
         search_text=search_text,
         parse_status="ok",
     )
+    if not material.average_rgb and material.local_image_paths:
+        color_info = analyze_floor_material_colors(base_dir, material.local_image_paths)
+        material.average_rgb = color_info.get("average_rgb")
+        material.average_hex = color_info.get("average_hex")
+        material.dominant_colors_rgb = color_info.get("dominant_colors_rgb") or []
+        material.dominant_colors_hex = color_info.get("dominant_colors_hex") or []
+    return material

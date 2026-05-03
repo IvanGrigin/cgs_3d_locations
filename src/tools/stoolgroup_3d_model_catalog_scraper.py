@@ -9,7 +9,7 @@ the attachment URL and file label, but intentionally does not download zip files
 
 Examples:
     python3 -m src.tools.stoolgroup_3d_model_catalog_scraper all \
-      --out data/sourse/suppliers/stoolgroup/catalog \
+      --out out/supplier_ingest/stoolgroup/catalog \
       --workers 4
 
     python3 -m src.tools.stoolgroup_3d_model_catalog_scraper parse-saved-html \
@@ -47,7 +47,7 @@ DEFAULT_CATEGORY_URLS = [
     "https://stoolgroup.ru/stellazhi/",
     "https://stoolgroup.ru/home-light/",
 ]
-DEFAULT_OUT_DIR = "data/sourse/suppliers/stoolgroup/catalog"
+DEFAULT_OUT_DIR = "out/supplier_ingest/stoolgroup/catalog"
 DEFAULT_USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "

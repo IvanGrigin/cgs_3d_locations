@@ -1086,8 +1086,8 @@ def main() -> None:
     ap.add_argument("--max-depth", type=int, default=1)
     ap.add_argument("--workers", type=int, default=8)
     ap.add_argument("--skip-existing-products", action="store_true")
-    ap.add_argument("--db", default="data/sourse/suppliers/suppliers.db")
-    ap.add_argument("--out-dir", default="data/sourse/suppliers/items")
+    ap.add_argument("--db", default="out/supplier_ingest/suppliers.db")
+    ap.add_argument("--out-dir", default="out/supplier_ingest/items")
     args = ap.parse_args()
 
     db_path = Path(args.db).expanduser().resolve()

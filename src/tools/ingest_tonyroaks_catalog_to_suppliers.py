@@ -19,10 +19,10 @@ from src.tools.normalize_supplier_categories_taxonomy import infer_category_from
 
 
 DEFAULT_INPUTS = [
-    "data/sourse/suppliers/tonyroaks/catalog/products_with_3d_models.jsonl",
-    "data/sourse/suppliers/tonyroaks/catalog/products_without_3d_models.jsonl",
+    "out/supplier_ingest/tonyroaks/catalog/products_with_3d_models.jsonl",
+    "out/supplier_ingest/tonyroaks/catalog/products_without_3d_models.jsonl",
 ]
-DEFAULT_DB = "data/sourse/suppliers/suppliers.db"
+DEFAULT_DB = "out/supplier_ingest/suppliers.db"
 
 
 def _now_utc_iso() -> str:
