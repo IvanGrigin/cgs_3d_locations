@@ -40,7 +40,7 @@ from src.suppliers.utils import json_loads_or, now_utc_iso
 PREFERRED_EXPORT_EXTS = [".glb", ".fbx"]
 CONVERTIBLE_EXTS = [".glb", ".gltf", ".fbx", ".obj", ".blend"]
 ARCHIVE_EXTS = [".zip", ".rar", ".7z"]
-SEARCH_EXTS = [".glb", ".gltf", ".fbx", ".obj", ".blend", ".3ds", ".max"]
+SEARCH_EXTS = [".glb", ".gltf", ".fbx", ".obj", ".blend", ".3ds", ".max", ".skp"]
 BLENDER_HELPER = Path("src/tools/blender_supplier_asset.py")
 
 
@@ -127,7 +127,7 @@ def _pick_model_from_extracted_dir(extract_dir: Path, record=None) -> tuple[str 
 
     if preferred_tokens:
         notes.append(f"archive_preferred_name_tokens:{preferred_tokens}")
-        for ext in PREFERRED_EXPORT_EXTS + [".gltf", ".obj", ".blend", ".3ds", ".max"]:
+        for ext in PREFERRED_EXPORT_EXTS + [".gltf", ".obj", ".blend", ".3ds", ".max", ".skp"]:
             ext_paths = [path for path in paths if path.suffix.lower() == ext]
             for token in preferred_tokens:
                 for path in ext_paths:
@@ -137,7 +137,7 @@ def _pick_model_from_extracted_dir(extract_dir: Path, record=None) -> tuple[str 
                         notes.append(f"archive_selected_by_name:{token}:{path.suffix.lower()}")
                         return str(path), path.suffix.lower(), notes
 
-    for ext in PREFERRED_EXPORT_EXTS + [".gltf", ".obj", ".blend", ".3ds", ".max"]:
+    for ext in PREFERRED_EXPORT_EXTS + [".gltf", ".obj", ".blend", ".3ds", ".max", ".skp"]:
         for path in paths:
             if path.suffix.lower() == ext:
                 notes.append(f"archive_selected:{path.suffix.lower()}")

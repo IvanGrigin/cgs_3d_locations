@@ -18,6 +18,7 @@ import argparse
 import json
 from pathlib import Path
 import re
+import sqlite3
 import sys
 from typing import Any
 from urllib.parse import urlparse
@@ -30,11 +31,14 @@ from src.suppliers.db_core import init_db, upsert_asset
 from src.suppliers.registry import find_adapter
 from src.suppliers.runner import coerce_product_record, save_metadata_json
 from src.suppliers.acquire_site_assets import (
+    CONVERTIBLE_EXTS,
     PREFERRED_EXPORT_EXTS,
+    SEARCH_EXTS,
     build_asset_record,
     build_blender_job_spec,
     inspect_archive,
     slugify,
+    _pick_model_from_extracted_dir,
 )
 from src.suppliers.utils import json_loads_or
 
@@ -149,8 +153,9 @@ def _merge_manual_metadata(product, row: dict[str, Any], input_path: Path, final
 
 
 def _normalized_archive_stem(path: Path) -> str:
-    stem = re.sub(r"\s+\(\d+\)$", "", path.stem.strip())
-    return stem.casefold()
+    raw_name = path.name if path.is_dir() else path.stem
+    stem = re.sub(r"\s+\(\d+\)$", "", raw_name.strip())
+    return _path_token(stem)
 
 
 def _title_token(value: Any) -> str:
@@ -158,20 +163,31 @@ def _title_token(value: Any) -> str:
     return re.sub(r"_+", "_", token).strip("_")
 
 
+def _path_token(value: Any) -> str:
+    token = re.sub(r"[^\w]+", "_", str(value or "").strip().casefold(), flags=re.UNICODE)
+    return re.sub(r"_+", "_", token).strip("_")
+
+
+ARCHIVE_EXTS = {".zip", ".rar", ".7z"}
+
+
 def _build_archive_index(archive_dir: Path) -> list[Path]:
-    archive_paths = [
+    asset_paths = [
         path
         for path in archive_dir.iterdir()
-        if path.is_file() and path.suffix.lower() in {".zip", ".rar", ".7z"}
+        if (
+            (path.is_file() and path.suffix.lower() in {*ARCHIVE_EXTS, *SEARCH_EXTS})
+            or (path.is_dir() and not path.name.startswith("."))
+        )
     ]
-    archive_paths.sort(
+    asset_paths.sort(
         key=lambda path: (
             _normalized_archive_stem(path),
             0 if re.search(r"\s+\(\d+\)$", path.stem) is None else 1,
             -path.stat().st_mtime,
         )
     )
-    return archive_paths
+    return asset_paths
 
 
 def _product_image_basenames(product) -> list[str]:
@@ -198,6 +214,11 @@ def _archive_match_candidates(product) -> list[str]:
             seen.add(text)
             candidates.append(text)
 
+    def add_name_tokens(value: str | None) -> None:
+        add(_title_token(value))
+        path_token = _path_token(value)
+        add(path_token)
+
     for base in _product_image_basenames(product):
         add(base)
         prefix = base.split(".", 1)[0].strip()
@@ -210,11 +231,17 @@ def _archive_match_candidates(product) -> list[str]:
 
     external_id = str(getattr(product, "external_id", "") or "").strip()
     if external_id:
-        add(_title_token(external_id))
+        add_name_tokens(external_id)
 
     title = str(getattr(product, "title", "") or "").strip()
     if title:
-        add(_title_token(title))
+        add_name_tokens(title)
+
+    product_url = str(getattr(product, "product_url", "") or "").strip()
+    path_slug = Path(urlparse(product_url).path).stem
+    path_slug = re.sub(r"^\d+[-_]+", "", path_slug).strip()
+    if path_slug:
+        add_name_tokens(path_slug)
 
     return candidates
 
@@ -242,7 +269,7 @@ def _match_local_archive(product, archive_paths: list[Path]) -> tuple[Path | Non
             if stem_norm == candidate_norm:
                 exact_matches.append(archive_path)
                 break
-            if stem_norm.startswith(candidate_norm + "."):
+            if stem_norm.startswith(candidate_norm + "_") or stem_norm.startswith(candidate_norm + "."):
                 prefix_matches.append(archive_path)
                 break
             if len(candidate_norm) >= 8 and candidate_norm in stem_norm:
@@ -273,13 +300,127 @@ def _link_local_archive_asset(
     product,
     archive_path: Path,
     assets_root: Path,
+    delete_archive_after_extract: bool = False,
 ) -> tuple[Any, list[str]]:
     item_dir = (assets_root / product.source_site / slugify(product.title or product.unique_key)).resolve()
     item_dir.mkdir(parents=True, exist_ok=True)
 
-    extract_dir = item_dir / "extracted"
+    if archive_path.is_dir():
+        selected_path, selected_ext, notes = _pick_model_from_extracted_dir(archive_path, record=product)
+        if selected_path is None:
+            extracted_dir = archive_path / "extracted"
+            if extracted_dir.is_dir():
+                selected_path, selected_ext, extracted_notes = _pick_model_from_extracted_dir(extracted_dir, record=product)
+                notes.extend([f"local_dir_extracted:{extracted_dir}", *extracted_notes])
+        notes = [f"local_dir:{archive_path}", *notes]
+
+        extra = json_loads_or(product.extra_json, {})
+        if not isinstance(extra, dict):
+            extra = {}
+        extra["manual_local_dir"] = {
+            "dir_path": str(archive_path),
+            "selected_path": selected_path,
+            "selected_ext": selected_ext,
+        }
+
+        if selected_path and selected_ext in PREFERRED_EXPORT_EXTS:
+            asset = build_asset_record(
+                record=product,
+                status="local_dir_preferred",
+                asset_format=selected_ext.lstrip("."),
+                asset_source_url=product.product_url,
+                asset_local_path=selected_path,
+                preview_local_path=None,
+                blender_job_path=None,
+                notes=notes,
+                extra=extra,
+            )
+            return asset, notes
+
+        if selected_path and selected_ext:
+            blender_job_path = build_blender_job_spec(
+                record=product,
+                item_dir=item_dir,
+                reason="manual_dir_requires_conversion",
+                source_path=selected_path,
+                preview_path=None,
+            )
+            asset = build_asset_record(
+                record=product,
+                status="needs_blender_rebuild",
+                asset_format=selected_ext.lstrip("."),
+                asset_source_url=product.product_url,
+                asset_local_path=selected_path,
+                preview_local_path=None,
+                blender_job_path=blender_job_path,
+                notes=notes,
+                extra=extra,
+            )
+            return asset, notes
+
+        asset = build_asset_record(
+            record=product,
+            status="local_dir_no_supported_model",
+            asset_format=None,
+            asset_source_url=product.product_url,
+            asset_local_path=None,
+            preview_local_path=None,
+            blender_job_path=None,
+            notes=notes,
+            extra=extra,
+        )
+        return asset, notes
+
+    direct_ext = archive_path.suffix.lower()
+    if direct_ext in SEARCH_EXTS:
+        notes = [f"local_model:{archive_path}", f"local_model_selected:{direct_ext}"]
+        extra = json_loads_or(product.extra_json, {})
+        if not isinstance(extra, dict):
+            extra = {}
+        extra["manual_local_model"] = {
+            "model_path": str(archive_path),
+            "selected_path": str(archive_path),
+            "selected_ext": direct_ext,
+        }
+
+        status = "local_model_preferred" if direct_ext in PREFERRED_EXPORT_EXTS else "needs_blender_rebuild"
+        blender_job_path = None
+        if direct_ext in CONVERTIBLE_EXTS and direct_ext not in PREFERRED_EXPORT_EXTS:
+            blender_job_path = build_blender_job_spec(
+                record=product,
+                item_dir=item_dir,
+                reason="manual_model_requires_conversion",
+                source_path=str(archive_path),
+                preview_path=None,
+            )
+
+        asset = build_asset_record(
+            record=product,
+            status=status,
+            asset_format=direct_ext.lstrip("."),
+            asset_source_url=product.product_url,
+            asset_local_path=str(archive_path),
+            preview_local_path=None,
+            blender_job_path=blender_job_path,
+            notes=notes,
+            extra=extra,
+        )
+        return asset, notes
+
+    extract_dir = item_dir / f"extracted_{slugify(archive_path.stem)}"
     selected_path, selected_ext, notes = inspect_archive(archive_path, extract_dir, record=product)
     notes = [f"local_archive:{archive_path}", *notes]
+    if (
+        delete_archive_after_extract
+        and selected_path
+        and selected_ext
+        and archive_path.suffix.lower() in ARCHIVE_EXTS
+    ):
+        try:
+            archive_path.unlink()
+            notes.append("local_archive_deleted_after_extract")
+        except Exception as exc:
+            notes.append(f"local_archive_delete_failed:{type(exc).__name__}:{exc}")
 
     extra = json_loads_or(product.extra_json, {})
     if not isinstance(extra, dict):
@@ -347,6 +488,8 @@ def main() -> None:
     ap.add_argument("--out-dir", default="data/sourse/suppliers/items")
     ap.add_argument("--archive-dir", default=None, help="Optional local archive directory for auto-linking 3ddd downloads")
     ap.add_argument("--assets-root", default="data/sourse/suppliers/manual_assets", help="Workspace directory for extracted local manual assets")
+    ap.add_argument("--delete-archives-after-extract", action="store_true")
+    ap.add_argument("--replace-assets-for-input", action="store_true")
     ap.add_argument("--strict", action="store_true")
     args = ap.parse_args()
 
@@ -400,10 +543,14 @@ def main() -> None:
 
             assets: list[Any] = []
             for product in products:
+                if args.replace_assets_for_input:
+                    with sqlite3.connect(db_path) as con:
+                        con.execute("DELETE FROM supplier_asset WHERE unique_key = ?", (product.unique_key,))
+
                 local_archive_notes: list[str] = []
                 local_archive_path = _clean_text(row.get("local_archive_path"))
 
-                if not local_archive_path and archive_paths and adapter.site_name == "3ddd":
+                if not local_archive_path and archive_paths:
                     matched_archive, local_archive_notes = _match_local_archive(product, archive_paths)
                     if matched_archive is not None:
                         local_archive_path = str(matched_archive)
@@ -415,11 +562,12 @@ def main() -> None:
                     row["notes"] = f"{merged_notes}; {notes_text}".strip("; ").strip()
 
                 _merge_manual_metadata(product, row, input_path, final_url)
-                if local_archive_path and adapter.site_name == "3ddd":
+                if local_archive_path:
                     asset, _asset_notes = _link_local_archive_asset(
                         product=product,
                         archive_path=Path(local_archive_path).expanduser().resolve(),
                         assets_root=assets_root,
+                        delete_archive_after_extract=args.delete_archives_after_extract,
                     )
                     assets.append(asset)
 

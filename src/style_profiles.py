@@ -475,6 +475,7 @@ def build_style_hint(profile: dict[str, Any]) -> str:
     palette = ", ".join(str(x) for x in (profile.get("palette_base") or [])[:4])
     preferred = ", ".join(str(x) for x in (profile.get("preferred_colors") or [])[:4])
     materials = ", ".join(str(x) for x in (profile.get("material_family") or [])[:4])
+    surface_brief = str(profile.get("surface_design_brief") or "").strip()
     parts = [label]
     if room_type:
         parts.append(room_type.lower())
@@ -484,22 +485,33 @@ def build_style_hint(profile: dict[str, Any]) -> str:
         parts.append(f"palette {palette}")
     if materials:
         parts.append(f"materials {materials}")
+    if surface_brief:
+        parts.append(f"surfaces {surface_brief}")
     return "; ".join(parts)
 
 
 def build_chooser_style_prompt(prompt_text: str, profile: dict[str, Any]) -> str:
+    expanded_prompt = str(profile.get("expanded_prompt") or prompt_text or "").strip()
     style_label = str(profile.get("style_label") or "").replace("_", " ")
     palette_base = ", ".join(str(x) for x in (profile.get("palette_base") or [])[:4])
     preferred_colors = ", ".join(str(x) for x in (profile.get("preferred_colors") or [])[:4])
     material_family = ", ".join(str(x) for x in (profile.get("material_family") or [])[:4])
+    wall_palette = ", ".join(str(x) for x in (profile.get("wall_palette") or [])[:5])
+    floor_palette = ", ".join(str(x) for x in (profile.get("floor_palette") or [])[:5])
+    furniture_palette = ", ".join(str(x) for x in (profile.get("furniture_palette") or [])[:5])
+    surface_brief = str(profile.get("surface_design_brief") or "").strip()
     return (
-        str(prompt_text or "").strip()
+        expanded_prompt
         + "\n\n"
         + "STYLE_GUIDANCE:\n"
         + f"- selected style: {style_label}\n"
         + f"- preferred colors: {preferred_colors or palette_base or 'neutral'}\n"
         + f"- palette: {palette_base or 'neutral'}\n"
         + f"- material family: {material_family or 'mixed'}\n"
+        + f"- wall palette/material target: {wall_palette or preferred_colors or palette_base or 'neutral'}\n"
+        + f"- floor palette/material target: {floor_palette or preferred_colors or palette_base or 'neutral'}\n"
+        + f"- furniture palette/finish target: {furniture_palette or preferred_colors or palette_base or 'neutral'}\n"
+        + f"- surface design brief: {surface_brief or 'coherent walls, floors, and object finishes'}\n"
         + f"- style hint: {profile.get('style_hint') or build_style_hint(profile)}\n"
     )
 
@@ -507,11 +519,14 @@ def build_chooser_style_prompt(prompt_text: str, profile: dict[str, Any]) -> str
 def build_supplier_preferences(profile: dict[str, Any]) -> dict[str, Any]:
     preferred = [str(x) for x in (profile.get("preferred_colors") or []) if str(x).strip()]
     palette = [str(x) for x in (profile.get("palette_base") or []) if str(x).strip()]
+    furniture_palette = [str(x) for x in (profile.get("furniture_palette") or []) if str(x).strip()]
     avoid = [str(x) for x in (profile.get("palette_avoid") or []) if str(x).strip()]
     return {
         "global": {
-            "preferred_colors": (preferred or palette)[:4],
+            "preferred_colors": (furniture_palette or preferred or palette)[:6],
             "avoid_colors": avoid[:4],
+            "style_hint": profile.get("style_hint"),
+            "expanded_prompt": profile.get("expanded_prompt"),
             "require_model_url": True,
         }
     }
@@ -535,11 +550,22 @@ def compile_style_profile(analysis: dict[str, Any], *, prompt_text: str = "", ro
         "palette_avoid": [str(x) for x in (analysis.get("avoid_colors") or []) if str(x).strip()],
         "material_family": list(analysis.get("material_family") or profile.get("material_family") or []),
         "preferred_colors": [str(x) for x in (analysis.get("preferred_colors") or []) if str(x).strip()],
+        "expanded_prompt": str(analysis.get("expanded_prompt") or prompt_text or "").strip(),
+        "wall_palette": [str(x) for x in (analysis.get("wall_palette") or []) if str(x).strip()],
+        "floor_palette": [str(x) for x in (analysis.get("floor_palette") or []) if str(x).strip()],
+        "furniture_palette": [str(x) for x in (analysis.get("furniture_palette") or []) if str(x).strip()],
+        "surface_design_brief": str(analysis.get("surface_design_brief") or "").strip(),
         "keywords": list(profile.get("keywords") or []),
         "notes": str(analysis.get("notes") or "").strip(),
     }
     if not compiled["preferred_colors"]:
         compiled["preferred_colors"] = compiled["palette_base"][:4]
+    if not compiled["wall_palette"]:
+        compiled["wall_palette"] = compiled["preferred_colors"][:4]
+    if not compiled["floor_palette"]:
+        compiled["floor_palette"] = compiled["preferred_colors"][:4]
+    if not compiled["furniture_palette"]:
+        compiled["furniture_palette"] = compiled["preferred_colors"][:4]
     compiled["style_hint"] = build_style_hint(compiled)
     compiled["chooser_prompt"] = build_chooser_style_prompt(prompt_text, compiled)
     compiled["supplier_preferences"] = build_supplier_preferences(compiled)
@@ -562,7 +588,11 @@ def attach_style_hint_to_room_json(room_data: dict[str, Any], style_profile: dic
         "style_label": style_profile.get("style_label"),
         "room_type": style_profile.get("room_type"),
         "preferred_colors": style_profile.get("preferred_colors"),
+        "wall_palette": style_profile.get("wall_palette"),
+        "floor_palette": style_profile.get("floor_palette"),
+        "furniture_palette": style_profile.get("furniture_palette"),
         "material_family": style_profile.get("material_family"),
+        "surface_design_brief": style_profile.get("surface_design_brief"),
     }
     return out
 

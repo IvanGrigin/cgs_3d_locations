@@ -1310,7 +1310,7 @@ def _maybe_apply_flooring_to_scene(
     if not style_rules_path.is_absolute():
         style_rules_path = (Path.cwd() / style_rules_path).resolve()
 
-    if not materials_path.is_file():
+    if not (materials_path.is_file() or materials_path.is_dir()):
         print(f"⏭ flooring: каталог не найден, пропуск: {materials_path}")
         return scene_json_path, None
     if not style_rules_path.is_file():
@@ -1384,7 +1384,7 @@ def _maybe_apply_wall_material_to_scene(
     materials_path = Path(str(getattr(args, "wall_materials", "") or "")).expanduser()
     if not materials_path.is_absolute():
         materials_path = (Path.cwd() / materials_path).resolve()
-    if not materials_path.is_file():
+    if not (materials_path.is_file() or materials_path.is_dir()):
         print(f"⏭ wall material: каталог не найден, пропуск: {materials_path}")
         return scene_json_path, None
 
@@ -1438,13 +1438,24 @@ def _maybe_apply_wall_material_to_scene(
 
 
 def _flooring_prompt_for_selector(prompt_text: str, style_profile: dict[str, Any], run_dir: Path) -> str:
-    parts = [str(prompt_text or "").strip()]
+    parts = [str(style_profile.get("expanded_prompt") or prompt_text or "").strip()]
     style_hint = str(style_profile.get("style_hint") or "").strip()
     if style_hint:
         parts.append(f"Style/color context from style LLM: {style_hint}")
+    surface_brief = str(style_profile.get("surface_design_brief") or "").strip()
+    if surface_brief:
+        parts.append(f"Surface design brief: {surface_brief}")
     preferred_colors = style_profile.get("preferred_colors")
     if isinstance(preferred_colors, list) and preferred_colors:
         parts.append("Preferred room colors: " + ", ".join(str(x) for x in preferred_colors if str(x).strip()))
+    for key, label in (
+        ("wall_palette", "Wall color targets"),
+        ("floor_palette", "Floor color/material targets"),
+        ("furniture_palette", "Furniture/object color targets"),
+    ):
+        values = style_profile.get(key)
+        if isinstance(values, list) and values:
+            parts.append(f"{label}: " + ", ".join(str(x) for x in values if str(x).strip()))
     material_family = style_profile.get("material_family")
     if isinstance(material_family, list) and material_family:
         parts.append("Preferred materials: " + ", ".join(str(x) for x in material_family if str(x).strip()))
@@ -2193,7 +2204,12 @@ def build_cli() -> argparse.ArgumentParser:
 
     p.add_argument("--modes", default=None)
     p.add_argument("--supplier-bindings-json", default=None, help="Optional supplier_bindings json to apply after placement")
-    p.add_argument("--supplier-catalog-json", action="append", default=[], help="Supplier catalog export JSON for automatic binding search; can be repeated")
+    p.add_argument(
+        "--supplier-catalog-json",
+        action="append",
+        default=["data/sourse/suppliers/supplier_catalog_canonical.json"],
+        help="Supplier catalog export JSON for automatic binding search; can be repeated",
+    )
     p.add_argument("--supplier-site", action="append", default=None, help="Optional supplier source_site filter for automatic binding search")
     p.add_argument("--supplier-top-k", type=int, default=5, help="Top-K candidates for automatic supplier matcher")
     p.add_argument(
@@ -2216,7 +2232,7 @@ def build_cli() -> argparse.ArgumentParser:
     p.add_argument("--supplier-assets-blender", default=None, help="Optional Blender binary for supplier asset conversion")
 
     p.add_argument("--no-flooring", action="store_true", help="Disable supplier floor covering selection and Blender floor texture application")
-    p.add_argument("--flooring-materials", default="data/sourse/obi_floor_coverings_cards/normalized_floor_materials.jsonl")
+    p.add_argument("--flooring-materials", default="data/floor_materials")
     p.add_argument("--flooring-style-rules", default="config/flooring_style_rules.json")
     p.add_argument("--flooring-top-k", type=int, default=10)
     p.add_argument("--flooring-llm-provider", choices=["none", "ollama"], default="ollama")
@@ -2227,7 +2243,7 @@ def build_cli() -> argparse.ArgumentParser:
     p.add_argument("--flooring-ollama-num-ctx", type=int, default=8192)
     p.add_argument("--flooring-llm-top-n", type=int, default=5)
     p.add_argument("--no-wall-material", action="store_true", help="Disable supplier wall covering selection")
-    p.add_argument("--wall-materials", default="data/sourse/domlenta_wallpapers/normalized_wall_materials.jsonl")
+    p.add_argument("--wall-materials", default="data/floor_materials")
     p.add_argument("--wall-top-k", type=int, default=10)
     p.add_argument("--wall-llm-provider", choices=["none", "ollama"], default="ollama")
     p.add_argument("--wall-ollama-url", default=None)

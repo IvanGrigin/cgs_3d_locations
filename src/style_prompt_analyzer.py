@@ -68,20 +68,27 @@ def _infer_colors(prompt_text: str) -> list[str]:
 def _build_system_prompt() -> str:
     labels = ", ".join(style_label_choices())
     return (
-        "You classify an interior design prompt into one dominant room style.\n"
+        "You transform an interior prompt into one dominant style direction and concrete visual guidance.\n"
         "Return only JSON with fields:\n"
         "{\n"
         '  "style_label": "<one label>",\n'
         '  "room_type": "<Bedroom|LivingRoom|Kitchen|Bathroom|DiningRoom>",\n'
         '  "confidence": <0..1>,\n'
+        '  "expanded_prompt": "specific interior design prompt with style, mood, wall/floor/furniture colors and materials",\n'
         '  "preferred_colors": ["..."],\n'
         '  "avoid_colors": ["..."],\n'
         '  "material_family": ["..."],\n'
+        '  "wall_palette": ["..."],\n'
+        '  "floor_palette": ["..."],\n'
+        '  "furniture_palette": ["..."],\n'
+        '  "surface_design_brief": "short guidance for choosing wall/floor coverings and furniture finishes",\n'
         '  "notes": "short summary"\n'
         "}\n"
         f"Allowed style labels: {labels}\n"
         "Choose the single best dominant style even if the prompt is mixed.\n"
         "Prefer concrete style words from the prompt over generic defaults.\n"
+        "Actively enrich underspecified prompts into a coherent visual scheme instead of repeating the prompt.\n"
+        "Make wall_palette, floor_palette and furniture_palette compatible but not identical.\n"
         "No markdown. JSON only."
     )
 
@@ -91,6 +98,11 @@ def _build_user_prompt(prompt_text: str, room_type_hint: str) -> str:
         "task": "Analyze an interior prompt and pick the best dominant style profile.",
         "prompt": prompt_text,
         "room_type_hint": room_type_hint,
+        "enrichment_goal": (
+            "Rewrite the prompt into a stronger interior design brief. "
+            "Specify wall colors/materials, floor colors/materials, furniture/object finish direction, "
+            "and compatible accents. This enriched prompt will drive supplier furniture and surface material selection."
+        ),
         "allowed_style_labels": style_label_choices(),
         "allowed_room_types": ["Bedroom", "LivingRoom", "Kitchen", "Bathroom", "DiningRoom"],
     }
@@ -115,9 +127,14 @@ def _normalize_analysis_obj(obj: Any, *, prompt_text: str, room_path: str | None
         "style_label": style_label,
         "room_type": room_type,
         "confidence": max(0.0, min(1.0, confidence)),
+        "expanded_prompt": str(obj.get("expanded_prompt") or "").strip(),
         "preferred_colors": [str(x).strip() for x in (obj.get("preferred_colors") or []) if str(x).strip()],
         "avoid_colors": [str(x).strip() for x in (obj.get("avoid_colors") or []) if str(x).strip()],
         "material_family": [str(x).strip() for x in (obj.get("material_family") or []) if str(x).strip()],
+        "wall_palette": [str(x).strip() for x in (obj.get("wall_palette") or []) if str(x).strip()],
+        "floor_palette": [str(x).strip() for x in (obj.get("floor_palette") or []) if str(x).strip()],
+        "furniture_palette": [str(x).strip() for x in (obj.get("furniture_palette") or []) if str(x).strip()],
+        "surface_design_brief": str(obj.get("surface_design_brief") or "").strip(),
         "notes": str(obj.get("notes") or "").strip(),
     }
     return ValidationResult(ok=True, normalized=compile_style_profile(normalized, prompt_text=prompt_text, room_path=room_path))
@@ -153,9 +170,14 @@ def heuristic_style_profile(prompt_text: str, room_path: str | None = None) -> d
         "style_label": best_label,
         "room_type": room_type,
         "confidence": 0.35 if best_score <= 0 else min(0.85, 0.45 + 0.08 * best_score),
+        "expanded_prompt": prompt_text,
         "preferred_colors": _infer_colors(prompt_text),
         "avoid_colors": [],
         "material_family": [],
+        "wall_palette": [],
+        "floor_palette": [],
+        "furniture_palette": [],
+        "surface_design_brief": "",
         "notes": "heuristic fallback",
     }
     return compile_style_profile(analysis, prompt_text=prompt_text, room_path=room_path)
@@ -190,12 +212,30 @@ def analyze_prompt_to_style_profile(
             "style_label": {"type": "string", "enum": style_label_choices()},
             "room_type": {"type": "string", "enum": ["Bedroom", "LivingRoom", "Kitchen", "Bathroom", "DiningRoom"]},
             "confidence": {"type": "number"},
+            "expanded_prompt": {"type": "string"},
             "preferred_colors": {"type": "array", "items": {"type": "string"}},
             "avoid_colors": {"type": "array", "items": {"type": "string"}},
             "material_family": {"type": "array", "items": {"type": "string"}},
+            "wall_palette": {"type": "array", "items": {"type": "string"}},
+            "floor_palette": {"type": "array", "items": {"type": "string"}},
+            "furniture_palette": {"type": "array", "items": {"type": "string"}},
+            "surface_design_brief": {"type": "string"},
             "notes": {"type": "string"},
         },
-        "required": ["style_label", "room_type", "confidence", "preferred_colors", "avoid_colors", "material_family", "notes"],
+        "required": [
+            "style_label",
+            "room_type",
+            "confidence",
+            "expanded_prompt",
+            "preferred_colors",
+            "avoid_colors",
+            "material_family",
+            "wall_palette",
+            "floor_palette",
+            "furniture_palette",
+            "surface_design_brief",
+            "notes",
+        ],
         "additionalProperties": False,
     }
 

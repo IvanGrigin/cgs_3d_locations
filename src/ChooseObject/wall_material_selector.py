@@ -23,6 +23,7 @@ class WallMaterialRequest:
     preferred_colors: list[str] = field(default_factory=list)
     preferred_tones: list[str] = field(default_factory=list)
     preferred_patterns: list[str] = field(default_factory=list)
+    preferred_material_types: list[str] = field(default_factory=list)
     avoid_colors: list[str] = field(default_factory=list)
     avoid_patterns: list[str] = field(default_factory=list)
     nice_to_have_terms: list[str] = field(default_factory=list)
@@ -154,6 +155,11 @@ class WallPromptAnalyzer:
         if "без рисун" in text:
             patterns.append("plain")
             avoid_patterns.extend(["floral", "ornament", "damask", "kids"])
+        preferred_material_types: list[str] = []
+        if any(x in text for x in ("wallpaper", "обои", "тактильн", "textile wall", "painted-look", "painted look")):
+            preferred_material_types.append("wallpaper")
+        if any(x in text for x in ("painted-look", "painted look", "крашен", "штукатур", "plaster")):
+            preferred_material_types.append("wallpaper")
         nice_terms = [w for w in re.findall(r"[а-яa-zA-Z0-9]+", text) if len(w) >= 4][:24]
         return WallMaterialRequest(
             prompt=prompt,
@@ -163,6 +169,7 @@ class WallPromptAnalyzer:
             preferred_colors=list(dict.fromkeys(colors)),
             preferred_tones=list(dict.fromkeys(tones)),
             preferred_patterns=list(dict.fromkeys(patterns)),
+            preferred_material_types=list(dict.fromkeys(preferred_material_types)),
             avoid_colors=[c for c in dict.fromkeys(avoid_colors) if c not in colors],
             avoid_patterns=list(dict.fromkeys(avoid_patterns)),
             nice_to_have_terms=nice_terms,
@@ -257,7 +264,7 @@ class WallMaterialSelector:
 
     def __init__(self, materials_path: Path):
         self.materials_path = Path(materials_path)
-        self.materials_base_dir = self.materials_path.parent
+        self.materials_base_dir = self.materials_path if self.materials_path.is_dir() else self.materials_path.parent
         self.materials = load_normalized_wall_materials(materials_path)
         self.analyzer = WallPromptAnalyzer()
 
@@ -273,8 +280,14 @@ class WallMaterialSelector:
     ) -> WallMaterialSelection:
         request = self.analyzer.build_request(prompt, style, room_type, room_description)
         source = self.filter_materials(self.materials, request)
-        candidates = [self.score_material(self._ensure_color_analysis(m), request) for m in source]
+        candidates = [self.score_material(m, request) for m in source]
         candidates.sort(key=lambda c: c.final_score, reverse=True)
+        shortlist_n = max(max(1, top_k) * 4, int((llm_settings or {}).get("top_n") or 5), 32)
+        shortlist = candidates[:shortlist_n]
+        if shortlist:
+            rescored = [self.score_material(self._ensure_color_analysis(c.material), request) for c in shortlist]
+            rescored.sort(key=lambda c: c.final_score, reverse=True)
+            candidates = rescored + candidates[shortlist_n:]
         top = candidates[:max(1, top_k)]
         top, llm_rerank = self._llm_rerank_candidates(top, request, llm_settings)
         selected = top[0] if top else None
@@ -311,7 +324,11 @@ class WallMaterialSelector:
         if request.preferred_colors:
             color_matched = [m for m in base if m.color in request.preferred_colors]
             if color_matched:
-                return color_matched
+                base = color_matched
+        if request.preferred_material_types:
+            type_matched = [m for m in base if m.material_type in request.preferred_material_types]
+            if len(type_matched) >= 3:
+                base = type_matched
         return base
 
     def _ensure_color_analysis(self, material: WallMaterial) -> WallMaterial:
@@ -359,6 +376,12 @@ class WallMaterialSelector:
         if m.pattern in r.preferred_patterns:
             score += 0.20
             matched.append(m.pattern or "")
+        if m.material_type in r.preferred_material_types:
+            score += 0.22
+            matched.append(m.material_type)
+        elif r.preferred_material_types:
+            score -= 0.18
+            penalties.append(f"material_type_not_preferred:{m.material_type}")
         if m.color in r.avoid_colors:
             score -= 0.22
             penalties.append(f"avoid_color:{m.color}")

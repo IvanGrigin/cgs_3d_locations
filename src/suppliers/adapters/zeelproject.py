@@ -57,6 +57,9 @@ class ZeelProjectAdapter(SupplierAdapter):
         credits_required = self.extract_credit_requirement(soup)
         availability = self.extract_availability(soup)
         price_value, price_currency = self.extract_price(soup)
+        if price_value is None and credits_required is not None:
+            price_value = float(credits_required)
+            price_currency = "CREDIT"
         external_id = self.extract_external_id(final_url)
 
         if not title or not model_download_landing_url:
@@ -150,14 +153,14 @@ class ZeelProjectAdapter(SupplierAdapter):
         if parts:
             return " > ".join(parts[-2:])
 
-        option = self.extract_option_value(soup, "Category")
+        option = self.extract_option_value(soup, "Category", "Категория")
         return option
 
     def extract_materials(self, soup: BeautifulSoup) -> Optional[str]:
-        return self.extract_option_value(soup, "Material")
+        return self.extract_option_value(soup, "Material", "Материал")
 
     def extract_style(self, soup: BeautifulSoup) -> Optional[str]:
-        return self.extract_option_value(soup, "Style")
+        return self.extract_option_value(soup, "Style", "Стиль")
 
     def extract_description(self, soup: BeautifulSoup) -> Optional[str]:
         node = soup.select_one(".full_description p.full_story")
@@ -168,7 +171,7 @@ class ZeelProjectAdapter(SupplierAdapter):
         description_lines = [
             line
             for line in lines
-            if not re.match(r"^(Diameter|Height|Cable height)\s*[-:]", line, flags=re.IGNORECASE)
+            if not re.match(r"^(Diameter|Height|Cable height|Ширина|Глубина|Высота)\s*[-:]", line, flags=re.IGNORECASE)
         ]
         if not description_lines:
             return None
@@ -177,17 +180,18 @@ class ZeelProjectAdapter(SupplierAdapter):
     def extract_dimensions(self, soup: BeautifulSoup) -> tuple[Optional[float], Optional[float], Optional[float]]:
         node = soup.select_one(".full_description p.full_story")
         text = node.get_text("\n", strip=True) if node else soup.get_text("\n", strip=True)
-        diameter = self.parse_dim(text, "Diameter")
-        height = self.parse_dim(text, "Height")
-        width = diameter
-        depth = diameter
+        diameter = self.parse_dim(text, "Diameter", "Диаметр")
+        width = self.parse_dim(text, "Width", "Ширина") or diameter
+        depth = self.parse_dim(text, "Depth", "Глубина", "Length", "Длина") or diameter
+        height = self.parse_dim(text, "Height", "Высота")
         return width, depth, height
 
     def extract_download_landing_url(self, soup: BeautifulSoup, base_url: str) -> Optional[str]:
         for a in soup.select(".down_bottons a[href]"):
             title = self.norm_space(a.select_one(".dttl").get_text(" ", strip=True)) if a.select_one(".dttl") else ""
             href = str(a.get("href") or "").strip()
-            if href and title == "Download 3D Model":
+            title_key = title.casefold()
+            if href and ("download 3d model" in title_key or "скачать 3d модель" in title_key):
                 return urljoin(base_url, href)
         return None
 
@@ -195,13 +199,19 @@ class ZeelProjectAdapter(SupplierAdapter):
         for a in soup.select(".down_bottons a[href]"):
             title = self.norm_space(a.select_one(".dttl").get_text(" ", strip=True)) if a.select_one(".dttl") else ""
             href = str(a.get("href") or "").strip()
-            if href and title == "Download SketchUp":
+            title_key = title.casefold()
+            if href and ("download sketchup" in title_key or "скачать sketchup" in title_key):
                 return urljoin(base_url, href)
         return None
 
     def extract_credit_requirement(self, soup: BeautifulSoup) -> Optional[int]:
-        text = soup.get_text(" ", strip=True)
+        status = self.extract_availability(soup) or ""
+        if re.search(r"\bfree\b|бесплат", status, flags=re.IGNORECASE):
+            return 0
+        text = status or soup.get_text(" ", strip=True)
         m = re.search(r"(\d+)\s+credit\s+required", text, flags=re.IGNORECASE)
+        if not m:
+            m = re.search(r"требуется\s+(\d+)\s+кредит", text, flags=re.IGNORECASE)
         if not m:
             return None
         try:
@@ -319,14 +329,15 @@ class ZeelProjectAdapter(SupplierAdapter):
         return value
 
     @staticmethod
-    def extract_option_value(soup: BeautifulSoup, label: str) -> Optional[str]:
+    def extract_option_value(soup: BeautifulSoup, *labels: str) -> Optional[str]:
+        label_set = {SupplierAdapter.norm_space(label).casefold() for label in labels if label}
         for option in soup.select(".model_options .option"):
             label_node = option.select_one(".option_bold")
             value_node = option.select_one(".option_name")
             if not label_node or not value_node:
                 continue
             option_label = SupplierAdapter.norm_space(label_node.get_text(" ", strip=True))
-            if option_label != label:
+            if option_label.casefold() not in label_set:
                 continue
             texts = [
                 SupplierAdapter.norm_space(node.get_text(" ", strip=True))
@@ -340,14 +351,29 @@ class ZeelProjectAdapter(SupplierAdapter):
         return None
 
     @staticmethod
-    def parse_dim(text: str, label: str) -> Optional[float]:
-        m = re.search(rf"{re.escape(label)}\s*[-:]\s*(\d+(?:[.,]\d+)?)\s*cm", text, flags=re.IGNORECASE)
-        if not m:
-            return None
-        try:
-            return float(m.group(1).replace(",", "."))
-        except Exception:
-            return None
+    def parse_dim(text: str, *labels: str) -> Optional[float]:
+        units = r"(cm|см|mm|мм)"
+        for label in labels:
+            m = re.search(
+                rf"{re.escape(label)}[^0-9\n]*([0-9]+(?:[.,][0-9]+)?(?:\s*/\s*[0-9]+(?:[.,][0-9]+)?)*)\s*{units}",
+                text,
+                flags=re.IGNORECASE,
+            )
+            if not m:
+                continue
+            try:
+                values = [
+                    float(part.replace(",", "."))
+                    for part in re.split(r"\s*/\s*", m.group(1))
+                    if part.strip()
+                ]
+                value = max(values)
+                if m.group(2).lower() in {"mm", "мм"}:
+                    value = value / 10.0
+                return value
+            except Exception:
+                return None
+        return None
 
     @staticmethod
     def unique_keep_order(values: list[str]) -> list[str]:

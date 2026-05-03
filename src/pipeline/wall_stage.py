@@ -16,8 +16,9 @@ def _resolve_texture_path(raw_path: str | None, materials_path: Path) -> str | N
         return text
     path = Path(text).expanduser()
     candidates = [path]
+    base_dir = materials_path if materials_path.is_dir() else materials_path.parent
     if not path.is_absolute():
-        candidates.append(materials_path.parent / path)
+        candidates.append(base_dir / path)
         candidates.append(Path.cwd() / path)
     for candidate in candidates:
         try:
@@ -26,7 +27,7 @@ def _resolve_texture_path(raw_path: str | None, materials_path: Path) -> str | N
             resolved = candidate
         if resolved.is_file():
             return str(resolved)
-    return str(path.resolve() if path.is_absolute() else (materials_path.parent / path).resolve())
+    return str(path.resolve() if path.is_absolute() else (base_dir / path).resolve())
 
 
 def run_wall_selection(

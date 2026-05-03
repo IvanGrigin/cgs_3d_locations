@@ -7,6 +7,7 @@ import argparse
 from copy import deepcopy
 import math
 from pathlib import Path
+import sqlite3
 from typing import Any
 
 try:
@@ -446,6 +447,8 @@ def _should_apply_candidate_geometry(
     semantic_group = str(binding.get("semantic_group") or "").strip().lower()
     if mount_type == "ceiling" or semantic_group == "lamp_ceiling":
         return True
+    if semantic_group == "computer":
+        return True
     return not _item_has_scene_geometry(item)
 
 
@@ -479,6 +482,1294 @@ def _compact_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
         "score_breakdown",
     ]
     return {k: deepcopy(candidate.get(k)) for k in keys if k in candidate}
+
+
+def _semantic_group_for_item(item: dict[str, Any], binding: dict[str, Any] | None = None) -> str:
+    def normalize_group(raw: Any) -> str:
+        text = str(raw or "").strip().lower()
+        if not text:
+            return ""
+        known = {
+            "lamp_ceiling",
+            "lamp_table",
+            "lamp_floor",
+            "lamp_wall",
+            "desk",
+            "dining_table",
+            "coffee_table",
+            "side_table",
+            "armchair",
+            "chair",
+            "sofa",
+            "bed",
+            "tv_stand",
+            "tv_projector_screen",
+            "computer",
+        }
+        if text in known:
+            return text
+        token_map = (
+            ("ceilinglightfactory", "lamp_ceiling"),
+            ("ceiling light", "lamp_ceiling"),
+            ("chandelier", "lamp_ceiling"),
+            ("люстр", "lamp_ceiling"),
+            ("desklampfactory", "lamp_table"),
+            ("desk lamp", "lamp_table"),
+            ("floorlampfactory", "lamp_floor"),
+            ("floor lamp", "lamp_floor"),
+            ("simpledeskfactory", "desk"),
+            ("deskfactory", "desk"),
+            ("diningtablefactory", "dining_table"),
+            ("coffeetablefactory", "coffee_table"),
+            ("sidetablefactory", "side_table"),
+            ("armchairfactory", "armchair"),
+            ("chairfactory", "chair"),
+            ("sofafactory", "sofa"),
+            ("sofa", "sofa"),
+            ("bedfactory", "bed"),
+            ("bed", "bed"),
+            ("tvstand", "tv_stand"),
+            ("tv stand", "tv_stand"),
+            ("tv_stand", "tv_stand"),
+            ("wallmountedtvfactory", "tv_projector_screen"),
+            ("television", "tv_projector_screen"),
+            ("телевиз", "tv_projector_screen"),
+            ("monitorfactory", "computer"),
+            ("monitor factory", "computer"),
+            ("computer", "computer"),
+            ("laptop", "computer"),
+            ("macbook", "computer"),
+            ("imac", "computer"),
+        )
+        for token, semantic in token_map:
+            if token in text:
+                return semantic
+        return text
+
+    meta = item.get("meta") or {}
+    supplier_candidate = meta.get("supplier_candidate") if isinstance(meta.get("supplier_candidate"), dict) else {}
+    group = normalize_group(
+        supplier_candidate.get("semantic_group")
+        or (binding or {}).get("semantic_group")
+        or item.get("semantic_group")
+        or ""
+    )
+    if group:
+        return group
+
+    category = str(item.get("category") or "").strip().lower()
+    name = str(item.get("name") or "").strip().lower()
+    text = f"{category} {name}"
+    mapping = (
+        ("ceilinglightfactory", "lamp_ceiling"),
+        ("desklampfactory", "lamp_table"),
+        ("floorlampfactory", "lamp_floor"),
+        ("simpledeskfactory", "desk"),
+        ("deskfactory", "desk"),
+        ("diningtablefactory", "dining_table"),
+        ("coffeetablefactory", "coffee_table"),
+        ("sidetablefactory", "side_table"),
+        ("armchairfactory", "armchair"),
+        ("chairfactory", "chair"),
+        ("sofafactory", "sofa"),
+        ("bedfactory", "bed"),
+        ("tvstand", "tv_stand"),
+        ("television", "tv_projector_screen"),
+        ("monitorfactory", "computer"),
+        ("computer", "computer"),
+        ("laptop", "computer"),
+        ("macbook", "computer"),
+        ("imac", "computer"),
+    )
+    for token, semantic in mapping:
+        if token in text:
+            return semantic
+    if "tv stand" in text or "tv_stand" in text or ("тумб" in text and ("tv" in text or "тв" in text or "телевиз" in text)):
+        return "tv_stand"
+    if "tv" in text or "television" in text or "телевиз" in text:
+        return "tv_projector_screen"
+    if "bed" in text or "кровать" in text:
+        return "bed"
+    if "sofa" in text or "couch" in text or "диван" in text:
+        return "sofa"
+    if "люстр" in text or "chandelier" in text or "ceiling light" in text:
+        return "lamp_ceiling"
+    if "desk lamp" in text or "настоль" in text:
+        return "lamp_table"
+    if "dining" in text and "table" in text:
+        return "dining_table"
+    if "coffee" in text and "table" in text:
+        return "coffee_table"
+    if "desk" in text:
+        return "desk"
+    if "monitor" in text or "computer" in text or "laptop" in text or "keyboard" in text or "macbook" in text or "imac" in text:
+        return "computer"
+    if "chair" in text or "стул" in text:
+        return "chair"
+    if "armchair" in text or "кресл" in text:
+        return "armchair"
+    return ""
+
+
+def _candidate_from_supplier_catalog_json(category_norms: set[str], target_size: list[float]) -> dict[str, Any] | None:
+    catalog_path = Path("data/sourse/suppliers/supplier_catalog_one_table.json")
+    if not catalog_path.is_file():
+        return None
+    try:
+        payload = read_json(catalog_path)
+    except Exception:
+        return None
+    items = payload.get("items") if isinstance(payload, dict) else None
+    if not isinstance(items, list):
+        return None
+
+    target_w, target_d, target_h = target_size
+    wants_tv = "tv_projector_screen" in category_norms
+    wants_computer = bool(category_norms & {"computer", "laptop_computer_keyboard_mouse", "computer_monitor"})
+    best: tuple[float, dict[str, Any]] | None = None
+    for row in items:
+        if not isinstance(row, dict):
+            continue
+        category_norm = str(row.get("category_norm") or "").strip()
+        if category_norm not in category_norms:
+            continue
+        candidate = dict(row)
+        if not _candidate_has_supported_local_asset(candidate):
+            continue
+        text = " ".join(
+            str(candidate.get(key) or "").lower()
+            for key in ("title", "category_raw", "description", "product_url")
+        )
+        if wants_tv:
+            tv_words = ("tv", "television", "телевиз", "smart tv", "oled", "uhd", "samsung", "lg")
+            reject_words = ("monitor", "монитор", "projector", "проектор")
+            if not any(word in text for word in tv_words) or any(word in text for word in reject_words):
+                continue
+        if wants_computer:
+            computer_words = ("mac", "imac", "macbook", "computer", "laptop", "keyboard", "ноутбук", "компьютер")
+            reject_words = ("washing", "стираль", "router", "роутер", "coffee", "кофемаш")
+            if not any(word in text for word in computer_words) or any(word in text for word in reject_words):
+                continue
+        try:
+            cw = float(candidate.get("width_cm") or target_w * 100.0) / 100.0
+            cd = float(candidate.get("depth_cm") or target_d * 100.0) / 100.0
+            ch = float(candidate.get("height_cm") or target_h * 100.0) / 100.0
+        except Exception:
+            cw, cd, ch = target_w, target_d, target_h
+        size_score = abs(cw - target_w) + abs(cd - target_d) * 1.5 + abs(ch - target_h)
+        if wants_tv:
+            if cw < max(0.8, target_w * 0.72):
+                size_score += 1.2
+            if cd > 0.18:
+                size_score += 0.45
+        if wants_computer:
+            title = str(candidate.get("title") or "").lower()
+            if "imac" in title:
+                size_score -= 0.35
+            elif "macbook" in title:
+                size_score -= 0.18
+        ready_bonus = -0.2 if str(candidate.get("asset_status") or "") == "local_dir_preferred" else 0.0
+        source_bonus = -0.05 if str(candidate.get("source_site") or "") == "3ddd" else 0.0
+        score = size_score + ready_bonus + source_bonus
+        if wants_tv:
+            candidate["semantic_group"] = "tv_projector_screen"
+        elif wants_computer:
+            candidate["semantic_group"] = "computer"
+        if best is None or score < best[0]:
+            best = (score, candidate)
+    return best[1] if best is not None else None
+
+
+def _room_center_xy(data: dict[str, Any], items: list[dict[str, Any]]) -> tuple[float, float]:
+    room = data.get("room") or {}
+    poly = room.get("floor_polygon") if isinstance(room, dict) else None
+    pts: list[tuple[float, float]] = []
+    if isinstance(poly, list):
+        for pt in poly:
+            if isinstance(pt, dict) and "x" in pt and "y" in pt:
+                pts.append((float(pt["x"]), float(pt["y"])))
+            elif isinstance(pt, list) and len(pt) >= 2:
+                pts.append((float(pt[0]), float(pt[1])))
+    if pts:
+        return sum(x for x, _ in pts) / len(pts), sum(y for _, y in pts) / len(pts)
+
+    aabbs = [_item_aabb(item) for item in items if isinstance(item, dict)]
+    aabbs = [aabb for aabb in aabbs if aabb is not None]
+    if aabbs:
+        return (
+            0.5 * (min(a["x_min"] for a in aabbs) + max(a["x_max"] for a in aabbs)),
+            0.5 * (min(a["y_min"] for a in aabbs) + max(a["y_max"] for a in aabbs)),
+        )
+    return 0.0, 0.0
+
+
+def _room_xy_bounds(data: dict[str, Any], items: list[dict[str, Any]]) -> dict[str, float] | None:
+    room = data.get("room") or {}
+    poly = room.get("floor_polygon") if isinstance(room, dict) else None
+    points: list[tuple[float, float]] = []
+    if isinstance(poly, list):
+        for p in poly:
+            if isinstance(p, dict) and "x" in p and "y" in p:
+                points.append((float(p["x"]), float(p["y"])))
+            elif isinstance(p, list) and len(p) >= 2:
+                points.append((float(p[0]), float(p[1])))
+    if not points:
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            aabb = _item_aabb(item)
+            if aabb:
+                points.extend([(aabb["x_min"], aabb["y_min"]), (aabb["x_max"], aabb["y_max"])])
+    if not points:
+        return None
+    xs = [p[0] for p in points]
+    ys = [p[1] for p in points]
+    return {"x_min": min(xs), "x_max": max(xs), "y_min": min(ys), "y_max": max(ys)}
+
+
+def _point_in_room_xy(data: dict[str, Any], x: float, y: float) -> bool:
+    room = data.get("room") or {}
+    poly = room.get("floor_polygon") if isinstance(room, dict) else None
+    points: list[tuple[float, float]] = []
+    if isinstance(poly, list):
+        for p in poly:
+            if isinstance(p, dict) and "x" in p and "y" in p:
+                points.append((float(p["x"]), float(p["y"])))
+            elif isinstance(p, list) and len(p) >= 2:
+                points.append((float(p[0]), float(p[1])))
+    if len(points) < 3:
+        return True
+    inside = False
+    j = len(points) - 1
+    for i, (xi, yi) in enumerate(points):
+        xj, yj = points[j]
+        if ((yi > y) != (yj > y)) and (x < (xj - xi) * (y - yi) / max(yj - yi, 1e-9) + xi):
+            inside = not inside
+        j = i
+    return inside
+
+
+def _set_item_center_xy(item: dict[str, Any], cx: float, cy: float) -> None:
+    aabb = _item_aabb(item)
+    pos = _item_position(item)
+    if aabb is None or pos is None:
+        return
+    dx = float(cx) - pos[0]
+    dy = float(cy) - pos[1]
+    item["position_m"] = [float(cx), float(cy), pos[2]]
+    item["aabb"] = {
+        "x_min": aabb["x_min"] + dx,
+        "x_max": aabb["x_max"] + dx,
+        "y_min": aabb["y_min"] + dy,
+        "y_max": aabb["y_max"] + dy,
+        "z_min": aabb["z_min"],
+        "z_max": aabb["z_max"],
+    }
+
+
+def _collapse_ceiling_lights(
+    data: dict[str, Any],
+    items: list[dict[str, Any]],
+    by_target_id: dict[str, dict[str, Any]],
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    ceiling_groups: dict[str, list[int]] = {}
+    for idx, item in enumerate(items):
+        if not isinstance(item, dict):
+            continue
+        item_id = str(item.get("id") or "").strip()
+        if _semantic_group_for_item(item, by_target_id.get(item_id)) != "lamp_ceiling":
+            continue
+        meta = item.get("meta") or {}
+        candidate = meta.get("supplier_candidate") if isinstance(meta.get("supplier_candidate"), dict) else {}
+        asset = item.get("asset") if isinstance(item.get("asset"), dict) else {}
+        signature = str(
+            candidate.get("unique_key")
+            or asset.get("mesh_path")
+            or candidate.get("title")
+            or ""
+        ).strip()
+        if not signature:
+            signature = f"generated::{item.get('category') or item.get('name') or 'ceiling_light'}"
+        ceiling_groups.setdefault(signature, []).append(idx)
+
+    moved: list[dict[str, Any]] = []
+    kept_ids = [
+        str(items[idx].get("id") or "").strip()
+        for indices in ceiling_groups.values()
+        for idx in indices
+    ]
+    if kept_ids:
+        indices = [
+            idx
+            for indices in ceiling_groups.values()
+            for idx in indices
+        ]
+        centers, coverage_radius = _ceiling_coverage_points(data, len(indices))
+        for idx, center in zip(indices, centers):
+            item = items[idx]
+            old_pos = _item_position(item)
+            if old_pos is None:
+                continue
+            _set_item_center_xy(item, center[0], center[1])
+            meta = item.setdefault("meta", {})
+            if isinstance(meta, dict):
+                meta["ceiling_supplier_coverage_normalized"] = True
+                meta["ceiling_supplier_min_wall_clearance_m"] = 1.0
+                meta["ceiling_supplier_coverage_radius_m"] = round(coverage_radius, 3)
+            moved.append(
+                {
+                    "id": item.get("id"),
+                    "old_xy": [round(old_pos[0], 4), round(old_pos[1], 4)],
+                    "new_xy": [round(center[0], 4), round(center[1], 4)],
+                }
+            )
+    return items, {
+        "removed_count": 0,
+        "kept_id": None,
+        "kept_ids": [kid for kid in kept_ids if kid],
+        "removed_ids": [],
+        "count_preserved": True,
+        "moved": moved,
+    }
+
+
+def _room_polygon_points(data: dict[str, Any]) -> list[tuple[float, float]]:
+    room = data.get("room") if isinstance(data.get("room"), dict) else {}
+    poly = room.get("floor_polygon") if isinstance(room.get("floor_polygon"), list) else []
+    points: list[tuple[float, float]] = []
+    for p in poly:
+        if isinstance(p, dict) and "x" in p and "y" in p:
+            points.append((float(p["x"]), float(p["y"])))
+        elif isinstance(p, list) and len(p) >= 2:
+            points.append((float(p[0]), float(p[1])))
+    return points
+
+
+def _point_segment_distance(px: float, py: float, ax: float, ay: float, bx: float, by: float) -> float:
+    vx, vy = bx - ax, by - ay
+    wx, wy = px - ax, py - ay
+    denom = vx * vx + vy * vy
+    t = 0.0 if denom <= 1e-9 else max(0.0, min(1.0, (wx * vx + wy * vy) / denom))
+    qx, qy = ax + t * vx, ay + t * vy
+    return math.hypot(px - qx, py - qy)
+
+
+def _dist_to_room_edges(points: list[tuple[float, float]], x: float, y: float) -> float:
+    if len(points) < 2:
+        return 999.0
+    return min(
+        _point_segment_distance(x, y, ax, ay, bx, by)
+        for (ax, ay), (bx, by) in zip(points, points[1:] + points[:1])
+    )
+
+
+def _ceiling_coverage_points(data: dict[str, Any], count: int) -> tuple[list[tuple[float, float]], float]:
+    points = _room_polygon_points(data)
+    bounds = _room_xy_bounds(data, [])
+    if count <= 0 or bounds is None:
+        return [], 0.0
+    sample_step = 0.3
+    candidates: list[tuple[float, float]] = []
+    x = bounds["x_min"]
+    while x <= bounds["x_max"] + 1e-9:
+        y = bounds["y_min"]
+        while y <= bounds["y_max"] + 1e-9:
+            if _point_in_room_xy(data, x, y) and _dist_to_room_edges(points, x, y) >= 1.0:
+                candidates.append((x, y))
+            y += sample_step
+        x += sample_step
+    if not candidates:
+        cx, cy = _room_center_xy(data, [])
+        return [(cx, cy)] * count, 0.0
+
+    coverage_points = [
+        (x, y)
+        for x, y in candidates
+    ]
+
+    def greedy_from(seed: tuple[float, float]) -> list[tuple[float, float]]:
+        selected = [seed]
+        while len(selected) < count:
+            selected.append(max(candidates, key=lambda p: min(math.hypot(p[0] - s[0], p[1] - s[1]) for s in selected)))
+        return selected
+
+    seed_pool = candidates[:: max(1, len(candidates) // 12)] or candidates
+    best_centers: list[tuple[float, float]] | None = None
+    best_score: tuple[float, float] | None = None
+    for seed in seed_pool:
+        centers = greedy_from(seed)
+        radius = max(min(math.hypot(p[0] - c[0], p[1] - c[1]) for c in centers) for p in coverage_points)
+        min_pair = min(
+            (math.hypot(a[0] - b[0], a[1] - b[1]) for i, a in enumerate(centers) for b in centers[i + 1 :]),
+            default=0.0,
+        )
+        score = (radius, -min_pair)
+        if best_score is None or score < best_score:
+            best_score = score
+            best_centers = centers
+    return best_centers or candidates[:count], float(best_score[0] if best_score else 0.0)
+
+
+def _table_requires_chair(item: dict[str, Any], group: str) -> bool:
+    if group in {"desk", "dining_table"}:
+        return True
+    category = str(item.get("category") or "").strip().lower()
+    name = str(item.get("name") or "").strip().lower()
+    text = f"{category} {name}"
+    if "simpledeskfactory" in text or "deskfactory" in text or "diningtablefactory" in text:
+        return True
+    if "coffee" in text or "side table" in text or "sidetable" in text or "nightstand" in text:
+        return False
+    return False
+
+
+def _has_nearby_chair(item: dict[str, Any], items: list[dict[str, Any]], by_target_id: dict[str, dict[str, Any]]) -> bool:
+    item_pos = _item_position(item)
+    if item_pos is None:
+        return False
+    for other in items:
+        if not isinstance(other, dict) or other is item:
+            continue
+        other_id = str(other.get("id") or "").strip()
+        group = _semantic_group_for_item(other, by_target_id.get(other_id))
+        if group not in {"chair", "armchair"}:
+            continue
+        other_pos = _item_position(other)
+        if other_pos is None:
+            continue
+        if math.hypot(other_pos[0] - item_pos[0], other_pos[1] - item_pos[1]) <= 1.35:
+            return True
+    return False
+
+
+def _has_usable_nearby_chair(item: dict[str, Any], items: list[dict[str, Any]], by_target_id: dict[str, dict[str, Any]]) -> bool:
+    item_pos = _item_position(item)
+    table_aabb = _item_aabb(item)
+    if item_pos is None or table_aabb is None:
+        return False
+    for other in items:
+        if not isinstance(other, dict) or other is item:
+            continue
+        other_id = str(other.get("id") or "").strip()
+        group = _semantic_group_for_item(other, by_target_id.get(other_id))
+        if group not in {"chair", "armchair"}:
+            continue
+        other_pos = _item_position(other)
+        other_aabb = _item_aabb(other)
+        if other_pos is None or other_aabb is None:
+            continue
+        if math.hypot(other_pos[0] - item_pos[0], other_pos[1] - item_pos[1]) <= 1.35 and _chair_is_on_table_long_edge(table_aabb, other_aabb):
+            return True
+    return False
+
+
+def _xy_aabb_overlap(a: dict[str, float], b: dict[str, float], margin: float = 0.0) -> bool:
+    return (
+        a["x_max"] > b["x_min"] - margin
+        and a["x_min"] < b["x_max"] + margin
+        and a["y_max"] > b["y_min"] - margin
+        and a["y_min"] < b["y_max"] + margin
+    )
+
+
+def _door_keepout_aabbs(data: dict[str, Any], *, depth_m: float = 1.05, side_margin_m: float = 0.35) -> list[dict[str, float]]:
+    room = data.get("room") if isinstance(data.get("room"), dict) else {}
+    doors = room.get("doors") if isinstance(room.get("doors"), list) else []
+    keepouts: list[dict[str, float]] = []
+    for door in doors:
+        if not isinstance(door, dict):
+            continue
+        segment = door.get("segment") if isinstance(door.get("segment"), dict) else {}
+        try:
+            x1 = float(segment["x1"])
+            y1 = float(segment["y1"])
+            x2 = float(segment["x2"])
+            y2 = float(segment["y2"])
+        except Exception:
+            continue
+        if abs(y2 - y1) <= abs(x2 - x1):
+            x_min = min(x1, x2) - side_margin_m
+            x_max = max(x1, x2) + side_margin_m
+            if y1 <= 0.05:
+                y_min, y_max = 0.0, depth_m
+            else:
+                y_min, y_max = y1 - depth_m, y1
+        else:
+            y_min = min(y1, y2) - side_margin_m
+            y_max = max(y1, y2) + side_margin_m
+            if x1 <= 0.05:
+                x_min, x_max = 0.0, depth_m
+            else:
+                x_min, x_max = x1 - depth_m, x1
+        keepouts.append({"x_min": x_min, "x_max": x_max, "y_min": y_min, "y_max": y_max, "z_min": 0.0, "z_max": 2.2})
+    return keepouts
+
+
+def _chair_side_for_table(table_aabb: dict[str, float], chair_aabb: dict[str, float]) -> str:
+    table_cx = 0.5 * (table_aabb["x_min"] + table_aabb["x_max"])
+    table_cy = 0.5 * (table_aabb["y_min"] + table_aabb["y_max"])
+    chair_cx = 0.5 * (chair_aabb["x_min"] + chair_aabb["x_max"])
+    chair_cy = 0.5 * (chair_aabb["y_min"] + chair_aabb["y_max"])
+    dx = chair_cx - table_cx
+    dy = chair_cy - table_cy
+    if abs(dx) >= abs(dy):
+        return "east" if dx >= 0 else "west"
+    return "north" if dy >= 0 else "south"
+
+
+def _chair_is_on_table_long_edge(table_aabb: dict[str, float], chair_aabb: dict[str, float]) -> bool:
+    table_width = table_aabb["x_max"] - table_aabb["x_min"]
+    table_depth = table_aabb["y_max"] - table_aabb["y_min"]
+    side = _chair_side_for_table(table_aabb, chair_aabb)
+    broad_sides = {"north", "south"} if table_width >= table_depth else {"east", "west"}
+    return side in broad_sides
+
+
+def _set_item_pose_from_aabb(
+    item: dict[str, Any],
+    aabb: dict[str, float],
+    *,
+    yaw_deg: float,
+) -> None:
+    size = [
+        max(float(aabb["x_max"]) - float(aabb["x_min"]), 1e-6),
+        max(float(aabb["y_max"]) - float(aabb["y_min"]), 1e-6),
+        max(float(aabb["z_max"]) - float(aabb["z_min"]), 1e-6),
+    ]
+    center = _aabb_center(aabb)
+    item["position_m"] = center
+    item["size_m"] = size
+    item["rotation_deg"] = float(yaw_deg)
+    item["yaw_deg"] = float(yaw_deg)
+    item["yaw_rad"] = math.radians(float(yaw_deg))
+    item["aabb"] = {k: float(v) for k, v in aabb.items()}
+
+
+def _catalog_candidate_asset(candidate: dict[str, Any]) -> dict[str, Any]:
+    mesh_path = str(candidate.get("asset_local_path") or candidate.get("mesh_local_path") or "").strip()
+    if mesh_path and Path(mesh_path).expanduser().is_file():
+        return {"mesh_path": str(Path(mesh_path).expanduser().resolve()), "mesh_fit_mode": "uniform"}
+    return {}
+
+
+def _candidate_from_supplier_db(group: str, target_size: list[float]) -> dict[str, Any] | None:
+    target_w, target_d, target_h = target_size
+    groups = ("chair",) if group == "chair" else ("chair", "armchair")
+    candidates: list[dict[str, Any]] = []
+
+    db_path = Path("data/sourse/suppliers/unified_supplier_mesh_catalog.db")
+    if db_path.is_file():
+        placeholders = ",".join("?" for _ in groups)
+        sql = f"""
+        SELECT unique_key, source_site, title, brand, collection, category_raw, category_norm,
+               semantic_group, product_url, model_page_url, model_download_url,
+               model_download_landing_url, model_vendor_url, asset_status, asset_format,
+               asset_local_path, mesh_local_path, mesh_format, width_cm, depth_cm, height_cm,
+               price_value, price_currency, style, color, materials, description
+        FROM supplier_mesh_catalog
+        WHERE semantic_group IN ({placeholders})
+          AND COALESCE(asset_local_path, mesh_local_path, '') != ''
+    """
+        try:
+            with sqlite3.connect(str(db_path)) as con:
+                con.row_factory = sqlite3.Row
+                candidates.extend(dict(row) for row in con.execute(sql, groups))
+        except sqlite3.Error:
+            pass
+
+    for asset_db in [
+        Path("data/sourse/suppliers/site_assets_imodern_textured.db"),
+        Path("data/sourse/suppliers/site_assets_run.db"),
+        Path("data/sourse/suppliers/site_assets_homeconcept_mix.db"),
+    ]:
+        if not asset_db.is_file():
+            continue
+        try:
+            with sqlite3.connect(str(asset_db)) as con:
+                con.row_factory = sqlite3.Row
+                rows = con.execute(
+                    """
+                    SELECT
+                        a.unique_key, a.source_site, a.title, a.product_url,
+                        a.asset_status, a.asset_format, a.asset_local_path,
+                        json_extract(a.extra_json, '$.model_page_url') AS model_page_url,
+                        json_extract(a.extra_json, '$.model_download_url') AS model_download_url,
+                        p.brand, p.collection, p.category_raw, p.category_norm, p.width_cm,
+                        p.depth_cm, p.height_cm, p.price_value, p.price_currency, p.style,
+                        p.color, p.materials, p.description
+                    FROM supplier_asset a
+                    LEFT JOIN supplier_product p ON p.unique_key = a.unique_key
+                    WHERE a.asset_local_path IS NOT NULL
+                      AND a.asset_local_path != ''
+                      AND (
+                        lower(COALESCE(p.category_norm, '')) LIKE '%chair%'
+                        OR lower(COALESCE(a.title, '')) LIKE '%chair%'
+                        OR lower(COALESCE(a.title, '')) LIKE '%стул%'
+                        OR lower(COALESCE(a.title, '')) LIKE '%кресл%'
+                      )
+                    """
+                )
+                for row in rows:
+                    item = dict(row)
+                    text = f"{item.get('category_norm') or ''} {item.get('title') or ''}".lower()
+                    item["semantic_group"] = "chair" if ("стул" in text or "chair" in text and "armchair" not in text) else "armchair"
+                    candidates.append(item)
+        except sqlite3.Error:
+            pass
+
+    best: tuple[float, dict[str, Any]] | None = None
+    for row in candidates:
+        asset_path = str(row.get("asset_local_path") or row.get("mesh_local_path") or "").strip()
+        if not asset_path or not Path(asset_path).expanduser().is_file():
+            continue
+        fmt = str(row.get("asset_format") or row.get("mesh_format") or Path(asset_path).suffix.lstrip(".")).lower()
+        if fmt not in {"obj", "fbx", "glb", "gltf"}:
+            continue
+        cw = float(row.get("width_cm") or target_w * 100.0) / 100.0
+        cd = float(row.get("depth_cm") or target_d * 100.0) / 100.0
+        ch = float(row.get("height_cm") or target_h * 100.0) / 100.0
+        size_score = abs(cw - target_w) + abs(cd - target_d) + abs(ch - target_h) * 0.6
+        group_score = 0.0 if str(row.get("semantic_group") or "") == group else 0.35
+        score = group_score + size_score
+        candidate = {
+            "unique_key": row.get("unique_key"),
+            "source_site": row.get("source_site"),
+            "title": row.get("title") or "Supplier Chair",
+            "brand": row.get("brand"),
+            "collection": row.get("collection"),
+            "category_raw": row.get("category_raw"),
+            "category_norm": row.get("category_norm"),
+            "semantic_group": row.get("semantic_group") or group,
+            "product_url": row.get("product_url"),
+            "model_page_url": row.get("model_page_url"),
+            "model_download_url": row.get("model_download_url"),
+            "model_download_landing_url": row.get("model_download_landing_url"),
+            "model_vendor_url": row.get("model_vendor_url"),
+            "asset_status": row.get("asset_status") or "local_supplier_asset",
+            "asset_format": fmt,
+            "asset_local_path": asset_path,
+            "price_value": row.get("price_value"),
+            "price_currency": row.get("price_currency"),
+            "style": row.get("style"),
+            "color": row.get("color"),
+            "materials": row.get("materials"),
+            "width_cm": cw * 100.0,
+            "depth_cm": cd * 100.0,
+            "height_cm": ch * 100.0,
+            "description": row.get("description"),
+        }
+        if best is None or score < best[0]:
+            best = (score, candidate)
+    return best[1] if best is not None else None
+
+
+def _make_supplier_chair_for_table(
+    table: dict[str, Any],
+    chair_id: str,
+    candidate: dict[str, Any],
+    chair_aabb: dict[str, float],
+    *,
+    yaw_deg: float,
+    status: str,
+    collision_count: int,
+    tuck_depth_m: float,
+) -> dict[str, Any]:
+    table_id = str(table.get("id") or "").strip()
+    group = str(candidate.get("semantic_group") or "chair").strip().lower()
+    item = {
+        "id": chair_id,
+        "name": str(candidate.get("title") or "Supplier Chair"),
+        "category": "ArmChairFactory" if group == "armchair" else "ChairFactory",
+        "constraints": {},
+        "asset": _catalog_candidate_asset(candidate),
+        "source": {
+            "placement_source": "supplier_affordance_postprocess",
+            "generated_for_table_id": table_id,
+            "asset_source": "supplier_catalog_local_asset",
+            "supplier_replaced": True,
+            "supplier_unique_key": candidate.get("unique_key"),
+            "supplier_source_site": candidate.get("source_site"),
+            "supplier_product_url": candidate.get("product_url") or candidate.get("model_page_url"),
+            "supplier_model_url": candidate.get("model_download_url"),
+            "placeholder_bbox": False,
+        },
+        "meta": {
+            "supplier_binding_applied": True,
+            "supplier_affordance_added": True,
+            "affordance": "table_chair",
+            "target_table_id": table_id,
+            "placeholder_bbox": False,
+            "supplier_candidate": _compact_candidate(candidate),
+            "placement_status": status,
+            "collision_count": collision_count,
+            "tuck_depth_m": tuck_depth_m,
+        },
+    }
+    _set_item_pose_from_aabb(item, chair_aabb, yaw_deg=yaw_deg)
+    return item
+
+
+def _ensure_table_chair_affordances(
+    data: dict[str, Any],
+    items: list[dict[str, Any]],
+    by_target_id: dict[str, dict[str, Any]],
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    existing_ids = {str(item.get("id") or "").strip() for item in items if isinstance(item, dict)}
+    room_bounds = _room_xy_bounds(data, items)
+    door_keepouts = _door_keepout_aabbs(data)
+    added: list[dict[str, Any]] = []
+    moved: list[dict[str, Any]] = []
+    tables: list[dict[str, Any]] = []
+
+    for item in list(items):
+        if not isinstance(item, dict):
+            continue
+        item_id = str(item.get("id") or "").strip()
+        group = _semantic_group_for_item(item, by_target_id.get(item_id))
+        if not (item_id and _table_requires_chair(item, group) and not _has_usable_nearby_chair(item, items + added, by_target_id)):
+            continue
+        table_aabb = _item_aabb(item)
+        if not table_aabb:
+            continue
+
+        base_id = f"auto_chair_for_{item_id}"
+        chair_id = base_id
+        suffix = 2
+        while chair_id in existing_ids:
+            chair_id = f"{base_id}_{suffix}"
+            suffix += 1
+        existing_ids.add(chair_id)
+
+        candidate_item: dict[str, Any] | None = None
+        candidate_source = "supplier_catalog"
+        existing_chairs: list[dict[str, Any]] = []
+        for other in items:
+            if not isinstance(other, dict) or other is item:
+                continue
+            other_id = str(other.get("id") or "").strip()
+            other_group = _semantic_group_for_item(other, by_target_id.get(other_id))
+            if other_group in {"chair", "armchair"} and _item_aabb(other):
+                existing_chairs.append(other)
+
+        if existing_chairs:
+            item_pos = _item_position(item) or _aabb_center(table_aabb)
+            candidate_item = min(
+                existing_chairs,
+                key=lambda other: math.hypot((_item_position(other) or [0, 0, 0])[0] - item_pos[0], (_item_position(other) or [0, 0, 0])[1] - item_pos[1]),
+            )
+            candidate_source = "existing_scene_item"
+            source_aabb = _item_aabb(candidate_item) or {}
+            sx = max(source_aabb.get("x_max", 0.5) - source_aabb.get("x_min", 0.0), 0.42)
+            sy = max(source_aabb.get("y_max", 0.52) - source_aabb.get("y_min", 0.0), 0.42)
+            sz = max(source_aabb.get("z_max", 0.9) - source_aabb.get("z_min", 0.0), 0.72)
+            z_min = min(float(table_aabb.get("z_min", 0.0)), 0.0)
+        else:
+            target_size = [0.48, 0.55, 0.9]
+            catalog_candidate = _candidate_from_supplier_db("chair", target_size)
+            if not catalog_candidate:
+                tables.append({"table_id": item_id, "chair_id": None, "placement_status": "missing_supplier_asset"})
+                continue
+            sx = max(float(catalog_candidate.get("width_cm") or 48.0) / 100.0, 0.42)
+            sy = max(float(catalog_candidate.get("depth_cm") or 55.0) / 100.0, 0.42)
+            sz = max(float(catalog_candidate.get("height_cm") or 90.0) / 100.0, 0.72)
+            z_min = min(float(table_aabb.get("z_min", 0.0)), 0.0)
+
+        tuck_depth = 0.18
+        room_cx, room_cy = _room_center_xy(data, items)
+        table_cx = 0.5 * (table_aabb["x_min"] + table_aabb["x_max"])
+        table_cy = 0.5 * (table_aabb["y_min"] + table_aabb["y_max"])
+        table_width = table_aabb["x_max"] - table_aabb["x_min"]
+        table_depth = table_aabb["y_max"] - table_aabb["y_min"]
+        broad_sides = {"north", "south"} if table_width >= table_depth else {"east", "west"}
+        candidates = [
+            ("south", table_cx, table_aabb["y_min"] - 0.5 * sy + tuck_depth, 180.0),
+            ("north", table_cx, table_aabb["y_max"] + 0.5 * sy - tuck_depth, 0.0),
+            ("west", table_aabb["x_min"] - 0.5 * sx + tuck_depth, table_cy, 90.0),
+            ("east", table_aabb["x_max"] + 0.5 * sx - tuck_depth, table_cy, 270.0),
+        ]
+        candidates.sort(key=lambda c: (0 if c[0] in broad_sides else 1, math.hypot(c[1] - room_cx, c[2] - room_cy)))
+
+        best: tuple[int, float, float, float, str, float, dict[str, float]] | None = None
+        for side, cx, cy, yaw in candidates:
+            if room_bounds:
+                cx = min(max(cx, room_bounds["x_min"] + 0.5 * sx), room_bounds["x_max"] - 0.5 * sx)
+                cy = min(max(cy, room_bounds["y_min"] + 0.5 * sy), room_bounds["y_max"] - 0.5 * sy)
+            chair_aabb = {
+                "x_min": cx - 0.5 * sx,
+                "x_max": cx + 0.5 * sx,
+                "y_min": cy - 0.5 * sy,
+                "y_max": cy + 0.5 * sy,
+                "z_min": z_min,
+                "z_max": z_min + sz,
+            }
+            corners = [
+                (chair_aabb["x_min"], chair_aabb["y_min"]),
+                (chair_aabb["x_min"], chair_aabb["y_max"]),
+                (chair_aabb["x_max"], chair_aabb["y_min"]),
+                (chair_aabb["x_max"], chair_aabb["y_max"]),
+            ]
+            if side == "south":
+                actual_tuck = max(0.0, chair_aabb["y_max"] - table_aabb["y_min"])
+            elif side == "north":
+                actual_tuck = max(0.0, table_aabb["y_max"] - chair_aabb["y_min"])
+            elif side == "west":
+                actual_tuck = max(0.0, chair_aabb["x_max"] - table_aabb["x_min"])
+            else:
+                actual_tuck = max(0.0, table_aabb["x_max"] - chair_aabb["x_min"])
+            back_clear = actual_tuck <= tuck_depth + 1e-6
+            inside_room = all(_point_in_room_xy(data, x, y) for x, y in corners)
+            inside_bounds = True
+            if room_bounds:
+                inside_bounds = (
+                    chair_aabb["x_min"] >= room_bounds["x_min"]
+                    and chair_aabb["x_max"] <= room_bounds["x_max"]
+                    and chair_aabb["y_min"] >= room_bounds["y_min"]
+                    and chair_aabb["y_max"] <= room_bounds["y_max"]
+                )
+            collisions = 0
+            for occ in items + added:
+                if not isinstance(occ, dict):
+                    continue
+                occ_id = str(occ.get("id") or "").strip()
+                if occ_id == item_id or (candidate_item is not None and occ is candidate_item):
+                    continue
+                occ_aabb = _item_aabb(occ)
+                z_overlaps = bool(
+                    occ_aabb
+                    and chair_aabb["z_max"] > occ_aabb["z_min"] + 0.03
+                    and chair_aabb["z_min"] < occ_aabb["z_max"] - 0.03
+                )
+                if occ_aabb and z_overlaps and _xy_aabb_overlap(chair_aabb, occ_aabb, margin=0.04):
+                    collisions += 1
+            door_conflicts = sum(1 for keepout in door_keepouts if _xy_aabb_overlap(chair_aabb, keepout, margin=0.0))
+            collisions += door_conflicts * 5
+            status = "valid" if inside_room and inside_bounds and back_clear and collisions == 0 else "best_effort"
+            score = collisions + (0 if inside_room and inside_bounds and back_clear else 100)
+            if best is None or score < best[0]:
+                best = (score, cx, cy, yaw, status, actual_tuck, chair_aabb)
+            if status == "valid":
+                break
+
+        if best is None:
+            continue
+        score, cx, cy, yaw, status, actual_tuck, chair_aabb = best
+        collision_count = max(0, score if score < 100 else score - 100)
+        if candidate_item is not None:
+            moved_item = deepcopy(candidate_item)
+            _set_item_pose_from_aabb(moved_item, chair_aabb, yaw_deg=yaw)
+            meta = deepcopy(moved_item.get("meta") or {})
+            meta["supplier_affordance_moved"] = True
+            meta["affordance"] = "table_chair"
+            meta["target_table_id"] = item_id
+            meta["placement_status"] = status
+            meta["collision_count"] = collision_count
+            meta["tuck_depth_m"] = actual_tuck
+            moved_item["meta"] = meta
+            for idx, existing in enumerate(items):
+                if existing is candidate_item:
+                    items[idx] = moved_item
+                    break
+            moved.append({"chair_id": str(moved_item.get("id") or ""), "table_id": item_id, "placement_status": status})
+            tables.append({"table_id": item_id, "chair_id": str(moved_item.get("id") or ""), "placement_status": status, "source": candidate_source})
+            continue
+
+        catalog_candidate = _candidate_from_supplier_db("chair", [sx, sy, sz])
+        if not catalog_candidate:
+            tables.append({"table_id": item_id, "chair_id": None, "placement_status": "missing_supplier_asset"})
+            continue
+        supplier_chair = _make_supplier_chair_for_table(
+            item,
+            chair_id,
+            catalog_candidate,
+            chair_aabb,
+            yaw_deg=yaw,
+            status=status,
+            collision_count=collision_count,
+            tuck_depth_m=actual_tuck,
+        )
+        added.append(supplier_chair)
+        tables.append({"table_id": item_id, "chair_id": chair_id, "placement_status": status, "source": candidate_source})
+
+    if not added:
+        return items, {"added_count": 0, "added_ids": [], "moved_count": len(moved), "moved": moved, "tables": tables}
+    return items + added, {
+        "added_count": len(added),
+        "added_ids": [item["id"] for item in added],
+        "moved_count": len(moved),
+        "moved": moved,
+        "tables": tables,
+    }
+
+
+def _scene_has_tv(items: list[dict[str, Any]], by_target_id: dict[str, dict[str, Any]]) -> bool:
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        item_id = str(item.get("id") or "").strip()
+        group = _semantic_group_for_item(item, by_target_id.get(item_id))
+        if group == "tv_projector_screen":
+            return True
+        meta = item.get("meta") or {}
+        candidate = meta.get("supplier_candidate") if isinstance(meta.get("supplier_candidate"), dict) else {}
+        if str(candidate.get("category_norm") or "") == "tv_projector_screen":
+            return True
+    return False
+
+
+def _has_clear_tv_volume(aabb: dict[str, float], items: list[dict[str, Any]], *, ignore_id: str | None = None) -> bool:
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        if ignore_id and str(item.get("id") or "").strip() == ignore_id:
+            continue
+        other = _item_aabb(item)
+        if other and _xy_aabb_overlap(aabb, other, margin=0.04):
+            z_overlap = aabb["z_max"] > other["z_min"] + 0.02 and aabb["z_min"] < other["z_max"] - 0.02
+            if z_overlap:
+                return False
+    return True
+
+
+def _next_generated_id(prefix: str, existing_ids: set[str]) -> str:
+    item_id = prefix
+    suffix = 2
+    while item_id in existing_ids:
+        item_id = f"{prefix}_{suffix}"
+        suffix += 1
+    existing_ids.add(item_id)
+    return item_id
+
+
+def _make_supplier_tv_item(
+    *,
+    tv_id: str,
+    candidate: dict[str, Any],
+    aabb: dict[str, float],
+    yaw_deg: float,
+    affordance: str,
+    anchor_id: str,
+    placement_status: str,
+) -> dict[str, Any]:
+    item = {
+        "id": tv_id,
+        "name": str(candidate.get("title") or "Supplier TV"),
+        "category": "WallMountedTVFactory",
+        "constraints": {"mount_type": "wall"},
+        "asset": _catalog_candidate_asset(candidate),
+        "source": {
+            "placement_source": "supplier_affordance_postprocess",
+            "generated_for_anchor_id": anchor_id,
+            "asset_source": "supplier_catalog_local_asset",
+            "supplier_replaced": True,
+            "supplier_unique_key": candidate.get("unique_key"),
+            "supplier_source_site": candidate.get("source_site"),
+            "supplier_product_url": candidate.get("product_url") or candidate.get("model_page_url"),
+            "supplier_model_url": candidate.get("model_download_url"),
+            "placeholder_bbox": False,
+        },
+        "meta": {
+            "supplier_binding_applied": True,
+            "supplier_affordance_added": True,
+            "affordance": affordance,
+            "target_anchor_id": anchor_id,
+            "placeholder_bbox": False,
+            "supplier_candidate": _compact_candidate(candidate),
+            "placement_status": placement_status,
+        },
+    }
+    _set_item_pose_from_aabb(item, aabb, yaw_deg=yaw_deg)
+    return item
+
+
+def _candidate_tv_size(candidate: dict[str, Any] | None) -> tuple[float, float, float]:
+    if not isinstance(candidate, dict):
+        return 1.1, 0.06, 0.65
+    try:
+        width = max(float(candidate.get("width_cm") or 110.0) / 100.0, 0.65)
+        height = max(float(candidate.get("height_cm") or 65.0) / 100.0, 0.36)
+        depth = max(min(float(candidate.get("depth_cm") or 6.0) / 100.0, 0.16), 0.035)
+        return width, depth, height
+    except Exception:
+        return 1.1, 0.06, 0.65
+
+
+def _candidate_size_m_or_fallback(candidate: dict[str, Any], fallback: list[float]) -> tuple[float, float, float]:
+    try:
+        return (
+            max(float(candidate.get("width_cm") or fallback[0] * 100.0) / 100.0, 0.02),
+            max(float(candidate.get("depth_cm") or fallback[1] * 100.0) / 100.0, 0.02),
+            max(float(candidate.get("height_cm") or fallback[2] * 100.0) / 100.0, 0.02),
+        )
+    except Exception:
+        return float(fallback[0]), float(fallback[1]), float(fallback[2])
+
+
+def _ensure_computer_replacements(
+    items: list[dict[str, Any]],
+    by_target_id: dict[str, dict[str, Any]],
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    replaced: list[dict[str, Any]] = []
+    out: list[dict[str, Any]] = []
+    for item in items:
+        if not isinstance(item, dict):
+            out.append(item)
+            continue
+        item_id = str(item.get("id") or "").strip()
+        if _semantic_group_for_item(item, by_target_id.get(item_id)) != "computer":
+            out.append(item)
+            continue
+        meta = item.get("meta") if isinstance(item.get("meta"), dict) else {}
+        if isinstance(meta.get("supplier_candidate"), dict) and item.get("asset"):
+            out.append(item)
+            continue
+        aabb = _item_aabb(item)
+        if aabb is None:
+            out.append(item)
+            continue
+        raw_size = item.get("size_m") if isinstance(item.get("size_m"), list) and len(item.get("size_m")) >= 3 else None
+        target_size = [float(raw_size[0]), float(raw_size[1]), float(raw_size[2])] if raw_size else [
+            aabb["x_max"] - aabb["x_min"],
+            aabb["y_max"] - aabb["y_min"],
+            aabb["z_max"] - aabb["z_min"],
+        ]
+        candidate = _candidate_from_supplier_catalog_json(
+            {"laptop_computer_keyboard_mouse", "computer", "computer_monitor"},
+            target_size,
+        )
+        if not candidate:
+            out.append(item)
+            continue
+
+        width, depth, height = _candidate_size_m_or_fallback(candidate, target_size)
+        yaw = float(item.get("yaw_deg", item.get("rotation_deg", 0.0)) or 0.0)
+        yaw_mod = yaw % 180.0
+        if abs(yaw_mod - 90.0) < 45.0:
+            sx, sy = width, depth
+        else:
+            sx, sy = depth, width
+        cx = 0.5 * (aabb["x_min"] + aabb["x_max"])
+        cy = 0.5 * (aabb["y_min"] + aabb["y_max"])
+        z_min = float(aabb["z_min"])
+        new_aabb = {
+            "x_min": cx - 0.5 * sx,
+            "x_max": cx + 0.5 * sx,
+            "y_min": cy - 0.5 * sy,
+            "y_max": cy + 0.5 * sy,
+            "z_min": z_min,
+            "z_max": z_min + height,
+        }
+        updated = deepcopy(item)
+        updated["name"] = str(candidate.get("title") or item.get("name") or "Computer")
+        updated["asset"] = _catalog_candidate_asset(candidate)
+        updated["source"] = {
+            **(updated.get("source") if isinstance(updated.get("source"), dict) else {}),
+            "asset_source": "supplier_catalog_local_asset",
+            "supplier_replaced": True,
+            "supplier_target_id": item_id,
+            "supplier_unique_key": candidate.get("unique_key"),
+            "supplier_source_site": candidate.get("source_site"),
+            "supplier_product_url": candidate.get("product_url") or candidate.get("model_page_url"),
+            "supplier_model_url": candidate.get("model_download_url"),
+            "placeholder_bbox": False,
+        }
+        _set_item_pose_from_aabb(updated, new_aabb, yaw_deg=yaw)
+        updated_meta = deepcopy(meta)
+        updated_meta["supplier_binding_applied"] = True
+        updated_meta["supplier_affordance_replaced"] = True
+        updated_meta["affordance"] = "computer_replacement"
+        updated_meta["placeholder_bbox"] = False
+        updated_meta["supplier_candidate"] = _compact_candidate(candidate)
+        updated["meta"] = updated_meta
+        out.append(updated)
+        replaced.append({"id": item_id, "title": candidate.get("title"), "unique_key": candidate.get("unique_key")})
+    return out, {"replaced_count": len(replaced), "replaced": replaced}
+
+
+def _tv_aabb_on_stand(stand_aabb: dict[str, float], tv_size: tuple[float, float, float]) -> tuple[dict[str, float], float]:
+    tv_w, tv_d, tv_h = tv_size
+    cx = 0.5 * (stand_aabb["x_min"] + stand_aabb["x_max"])
+    cy = 0.5 * (stand_aabb["y_min"] + stand_aabb["y_max"])
+    z_min = max(stand_aabb["z_max"] + 0.08, 0.78)
+    z_max = z_min + tv_h
+    stand_w = stand_aabb["x_max"] - stand_aabb["x_min"]
+    stand_d = stand_aabb["y_max"] - stand_aabb["y_min"]
+    if stand_d > stand_w:
+        aabb = {
+            "x_min": cx - 0.5 * tv_d,
+            "x_max": cx + 0.5 * tv_d,
+            "y_min": cy - 0.5 * tv_w,
+            "y_max": cy + 0.5 * tv_w,
+            "z_min": z_min,
+            "z_max": z_max,
+        }
+        return aabb, 90.0
+    aabb = {
+        "x_min": cx - 0.5 * tv_w,
+        "x_max": cx + 0.5 * tv_w,
+        "y_min": cy - 0.5 * tv_d,
+        "y_max": cy + 0.5 * tv_d,
+        "z_min": z_min,
+        "z_max": z_max,
+    }
+    return aabb, 0.0
+
+
+def _wall_tv_pose_for_anchor(
+    data: dict[str, Any],
+    items: list[dict[str, Any]],
+    anchor: dict[str, Any],
+    tv_size: tuple[float, float, float],
+    *,
+    anchor_group: str,
+) -> tuple[dict[str, float], float] | None:
+    bounds = _room_xy_bounds(data, items)
+    anchor_pos = _item_position(anchor)
+    if bounds is None or anchor_pos is None:
+        return None
+    room_cx, room_cy = _room_center_xy(data, items)
+    yaw_rad = math.radians(float(anchor.get("rotation_deg", anchor.get("yaw_deg", 0.0)) or 0.0))
+    dx = math.sin(yaw_rad)
+    dy = -math.cos(yaw_rad)
+    if abs(dx) < 0.2 and abs(dy) < 0.2:
+        dx = room_cx - anchor_pos[0]
+        dy = room_cy - anchor_pos[1]
+    if abs(dx) < 1e-6 and abs(dy) < 1e-6:
+        dy = -1.0
+
+    tv_w, tv_d, tv_h = tv_size
+    z_center = 1.45 if anchor_group == "bed" else 1.35
+    z_min = max(0.75, z_center - 0.5 * tv_h)
+    z_max = z_min + tv_h
+    margin = 0.08
+
+    if abs(dx) >= abs(dy):
+        if dx >= 0:
+            x_min = bounds["x_max"] - margin - tv_d
+            x_max = bounds["x_max"] - margin
+            yaw = 90.0
+        else:
+            x_min = bounds["x_min"] + margin
+            x_max = bounds["x_min"] + margin + tv_d
+            yaw = 270.0
+        cy = max(bounds["y_min"] + 0.5 * tv_w, min(bounds["y_max"] - 0.5 * tv_w, anchor_pos[1]))
+        aabb = {
+            "x_min": x_min,
+            "x_max": x_max,
+            "y_min": cy - 0.5 * tv_w,
+            "y_max": cy + 0.5 * tv_w,
+            "z_min": z_min,
+            "z_max": z_max,
+        }
+        return aabb, yaw
+
+    if dy >= 0:
+        y_min = bounds["y_max"] - margin - tv_d
+        y_max = bounds["y_max"] - margin
+        yaw = 180.0
+    else:
+        y_min = bounds["y_min"] + margin
+        y_max = bounds["y_min"] + margin + tv_d
+        yaw = 0.0
+    cx = max(bounds["x_min"] + 0.5 * tv_w, min(bounds["x_max"] - 0.5 * tv_w, anchor_pos[0]))
+    aabb = {
+        "x_min": cx - 0.5 * tv_w,
+        "x_max": cx + 0.5 * tv_w,
+        "y_min": y_min,
+        "y_max": y_max,
+        "z_min": z_min,
+        "z_max": z_max,
+    }
+    return aabb, yaw
+
+
+def _ensure_tv_affordance(
+    data: dict[str, Any],
+    items: list[dict[str, Any]],
+    by_target_id: dict[str, dict[str, Any]],
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    if _scene_has_tv(items, by_target_id):
+        return items, {"added_count": 0, "added_ids": [], "skipped_reason": "tv_already_present"}
+
+    candidate = _candidate_from_supplier_catalog_json({"tv_projector_screen"}, [1.1, 0.06, 0.65])
+    if not candidate:
+        return items, {"added_count": 0, "added_ids": [], "skipped_reason": "missing_supplier_tv_asset"}
+
+    tv_size = _candidate_tv_size(candidate)
+    existing_ids = {str(item.get("id") or "").strip() for item in items if isinstance(item, dict)}
+    attempts: list[dict[str, Any]] = []
+
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        item_id = str(item.get("id") or "").strip()
+        if _semantic_group_for_item(item, by_target_id.get(item_id)) != "tv_stand":
+            continue
+        stand_aabb = _item_aabb(item)
+        if not stand_aabb:
+            continue
+        tv_aabb, tv_yaw = _tv_aabb_on_stand(stand_aabb, tv_size)
+        clear = _has_clear_tv_volume(tv_aabb, items, ignore_id=item_id)
+        attempts.append({"anchor_id": item_id, "mode": "tv_stand_top", "clear": clear})
+        if not clear:
+            continue
+        tv_id = _next_generated_id(f"auto_tv_for_{item_id}", existing_ids)
+        tv_item = _make_supplier_tv_item(
+            tv_id=tv_id,
+            candidate=candidate,
+            aabb=tv_aabb,
+            yaw_deg=tv_yaw,
+            affordance="tv_on_stand",
+            anchor_id=item_id,
+            placement_status="valid",
+        )
+        return items + [tv_item], {
+            "added_count": 1,
+            "added_ids": [tv_id],
+            "anchor_id": item_id,
+            "mode": "tv_stand_top",
+            "attempts": attempts,
+        }
+
+    anchors: list[tuple[int, dict[str, Any], str]] = []
+    for idx, item in enumerate(items):
+        if not isinstance(item, dict):
+            continue
+        item_id = str(item.get("id") or "").strip()
+        group = _semantic_group_for_item(item, by_target_id.get(item_id))
+        if group in {"sofa", "bed"}:
+            anchors.append((0 if group == "sofa" else 1, item, group))
+    anchors.sort(key=lambda x: x[0])
+
+    for _rank, anchor, group in anchors:
+        anchor_id = str(anchor.get("id") or "").strip()
+        pose = _wall_tv_pose_for_anchor(data, items, anchor, tv_size, anchor_group=group)
+        if pose is None:
+            attempts.append({"anchor_id": anchor_id, "mode": f"opposite_{group}", "clear": False, "reason": "no_wall_pose"})
+            continue
+        tv_aabb, yaw = pose
+        clear = _has_clear_tv_volume(tv_aabb, items, ignore_id=anchor_id)
+        attempts.append({"anchor_id": anchor_id, "mode": f"opposite_{group}", "clear": clear})
+        if not clear:
+            continue
+        tv_id = _next_generated_id(f"auto_tv_opposite_{anchor_id}", existing_ids)
+        tv_item = _make_supplier_tv_item(
+            tv_id=tv_id,
+            candidate=candidate,
+            aabb=tv_aabb,
+            yaw_deg=yaw,
+            affordance=f"tv_opposite_{group}",
+            anchor_id=anchor_id,
+            placement_status="valid",
+        )
+        return items + [tv_item], {
+            "added_count": 1,
+            "added_ids": [tv_id],
+            "anchor_id": anchor_id,
+            "mode": f"opposite_{group}",
+            "attempts": attempts,
+        }
+
+    return items, {"added_count": 0, "added_ids": [], "skipped_reason": "no_clear_tv_location", "attempts": attempts}
 
 
 def apply_supplier_bindings_to_data(
@@ -681,6 +1972,10 @@ def apply_supplier_bindings_to_data(
         adjusted_items.append(updated)
 
     new_items = adjusted_items
+    new_items, ceiling_light_postprocess = _collapse_ceiling_lights(out, new_items, by_target_id)
+    new_items, computer_postprocess = _ensure_computer_replacements(new_items, by_target_id)
+    new_items, table_chair_postprocess = _ensure_table_chair_affordances(out, new_items, by_target_id)
+    new_items, tv_postprocess = _ensure_tv_affordance(out, new_items, by_target_id)
 
     if "placements" in out and isinstance(out.get("placements"), list):
         out["placements"] = new_items
@@ -694,7 +1989,19 @@ def apply_supplier_bindings_to_data(
         "local_asset_replaced_count": local_asset_replaced,
         "suppressed_generated_related_count": suppressed_generated_count,
         "reanchored_generated_related_count": reanchored_count,
+        "ceiling_light_deduplicated_count": int(ceiling_light_postprocess.get("removed_count", 0) or 0),
+        "missing_table_chair_added_count": int(table_chair_postprocess.get("added_count", 0) or 0),
+        "table_chair_moved_count": int(table_chair_postprocess.get("moved_count", 0) or 0),
+        "missing_tv_added_count": int(tv_postprocess.get("added_count", 0) or 0),
+        "computer_replaced_count": int(computer_postprocess.get("replaced_count", 0) or 0),
+        "unusable_table_suppressed_count": 0,
         "require_local_asset": bool(require_local_asset),
+    }
+    meta["supplier_postprocess"] = {
+        "ceiling_lights": ceiling_light_postprocess,
+        "computer_replacements": computer_postprocess,
+        "table_chair_affordance": table_chair_postprocess,
+        "tv_affordance": tv_postprocess,
     }
     out["meta"] = meta
     return out

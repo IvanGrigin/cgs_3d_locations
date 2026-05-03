@@ -373,10 +373,150 @@ def normalize_domlenta_wallpapers_catalog(products_csv: Path, out_jsonl: Path, a
 
 
 def load_normalized_wall_materials(path: Path) -> list[WallMaterial]:
+    path = Path(path).expanduser()
+    if path.is_dir():
+        return _load_wall_materials_from_dir(path)
     materials: list[WallMaterial] = []
     with Path(path).open("r", encoding="utf-8") as f:
         for line in f:
             line = line.strip()
-            if line:
-                materials.append(WallMaterial.from_dict(json.loads(line)))
-    return materials
+            if not line:
+                continue
+            item = json.loads(line)
+            material = _wall_material_from_catalog_item(item, path.parent)
+            if material is not None:
+                materials.append(material)
+    return _dedupe_wall_materials(materials)
+
+
+def _surface_catalog_paths(root: Path) -> list[Path]:
+    preferred_names = {"normalized_wall_materials.jsonl"}
+    out: list[Path] = []
+    for file_path in sorted(root.rglob("*.jsonl")):
+        name = file_path.name
+        if name in preferred_names:
+            out.append(file_path)
+            continue
+        if "surface_materials" in name and "test" not in name:
+            out.append(file_path)
+    return out
+
+
+def _load_wall_materials_from_dir(root: Path) -> list[WallMaterial]:
+    materials: list[WallMaterial] = []
+    for file_path in _surface_catalog_paths(root):
+        try:
+            materials.extend(load_normalized_wall_materials(file_path))
+        except Exception:
+            continue
+    return _dedupe_wall_materials(materials)
+
+
+def _dedupe_wall_materials(materials: list[WallMaterial]) -> list[WallMaterial]:
+    out: list[WallMaterial] = []
+    seen: set[tuple[str, str, str]] = set()
+    for material in materials:
+        key = (
+            str(material.source or "").strip(),
+            str(material.sku or "").strip(),
+            str(material.product_url or material.name or "").strip(),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(material)
+    return out
+
+
+def _abs_local_paths(paths: list[Any], base_dir: Path) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for value in paths:
+        text = _norm(value)
+        if not text:
+            continue
+        p = Path(text).expanduser()
+        candidates = [p] if p.is_absolute() else [base_dir / p, Path.cwd() / p]
+        resolved = None
+        for candidate in candidates:
+            try:
+                candidate = candidate.resolve()
+            except Exception:
+                pass
+            if candidate.is_file():
+                resolved = candidate
+                break
+        if resolved is None:
+            resolved = candidates[0].resolve()
+        resolved_text = str(resolved)
+        if resolved_text not in seen:
+            seen.add(resolved_text)
+            out.append(resolved_text)
+    return out
+
+
+def _wall_material_from_catalog_item(item: dict[str, Any], base_dir: Path) -> WallMaterial | None:
+    if not isinstance(item, dict):
+        return None
+    version = str(item.get("version") or "")
+    if version.startswith("wall_material"):
+        material = WallMaterial.from_dict(item)
+        material.local_image_paths = _abs_local_paths(material.local_image_paths, base_dir)
+        return material
+    if not version.startswith("surface_material"):
+        return None
+
+    normalized = item.get("normalized") if isinstance(item.get("normalized"), dict) else {}
+    if normalized.get("is_selectable_wall") is not True:
+        return None
+    image = item.get("material_image") if isinstance(item.get("material_image"), dict) else {}
+    image_urls = [str(image.get("image_url") or "").strip()] if image.get("image_url") else []
+    local_candidates = [image.get("source_path"), image.get("path")]
+    raw_props = item.get("raw_properties") if isinstance(item.get("raw_properties"), dict) else {}
+    text_facts = item.get("text_facts") if isinstance(item.get("text_facts"), dict) else {}
+    desc = str(item.get("text_description_ru") or "")
+    material_type = str(normalized.get("material_type") or "unknown_wall_material")
+    style_tags = [str(x) for x in (normalized.get("style_tags") or []) if str(x).strip()]
+    rooms = [str(x) for x in (normalized.get("rooms") or []) if str(x).strip()]
+    color = str(normalized.get("base_color") or "") or None
+    pattern = str(normalized.get("visual_pattern") or "") or None
+    search_text = _lower(" ".join([
+        str(item.get("name") or ""),
+        str(item.get("brand") or ""),
+        desc,
+        material_type,
+        color or "",
+        str(normalized.get("precise_color_ru") or ""),
+        str(normalized.get("tone") or ""),
+        pattern or "",
+        " ".join(f"{k} {v}" for k, v in raw_props.items()),
+        " ".join(f"{k} {v}" for k, v in text_facts.items()),
+    ]))
+    return WallMaterial(
+        version="wall_material.v1",
+        source=str(item.get("source") or ""),
+        sku=str(item.get("sku") or ""),
+        name=str(item.get("name") or ""),
+        brand=str(item.get("brand") or ""),
+        product_url=str(item.get("url") or ""),
+        price=item.get("price"),
+        price_currency=str(item.get("price_currency") or "RUB"),
+        availability=normalize_availability(str(item.get("availability") or "")),
+        material_type=material_type,
+        color=color,
+        tone=str(normalized.get("tone") or "") or None,
+        pattern=pattern,
+        finish=str(normalized.get("surface_finish") or "") or None,
+        base_material=str(text_facts.get("base_material") or raw_props.get("Материал основы") or "") or None,
+        width_cm=_parse_float(normalized.get("width_cm")),
+        length_m=_parse_float(normalized.get("length_m")),
+        country=str(raw_props.get("Страна") or text_facts.get("country") or "") or None,
+        description=desc,
+        raw_properties=raw_props,
+        image_urls=[x for x in image_urls if x],
+        local_image_paths=_abs_local_paths(local_candidates, base_dir),
+        style_tags=sorted(set(style_tags + [material_type])),
+        room_suitability=rooms,
+        search_text=search_text,
+        parse_status="ok",
+    )

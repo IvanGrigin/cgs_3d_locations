@@ -704,6 +704,8 @@ def _collect_db_candidates(root: Path) -> tuple[list[dict[str, Any]], list[dict[
             }
 
     for db_path in sorted(root.rglob("*.db")):
+        if db_path.name.lower() == "thumbs.db":
+            continue
         with sqlite3.connect(db_path) as con:
             table_names = sorted(
                 row[0] for row in con.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")

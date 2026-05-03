@@ -1389,6 +1389,10 @@ def _item_semantic_group(item: Dict) -> str:
         ("floorlampfactory", "lamp_floor"),
         ("ceilinglightfactory", "lamp_ceiling"),
         ("simpledeskfactory", "desk"),
+        ("deskfactory", "desk"),
+        ("diningtablefactory", "dining_table"),
+        ("coffeetablefactory", "coffee_table"),
+        ("sidetablefactory", "side_table"),
         ("singleshelfactory", "shelf"),
         ("simplebookcasefactory", "shelf"),
         ("cellshelffactory", "shelf"),
@@ -1397,6 +1401,12 @@ def _item_semantic_group(item: Dict) -> str:
         ("dresser", "dresser"),
         ("nightstand", "nightstand"),
         ("bedfactory", "bed"),
+        ("sofafactory", "sofa"),
+        ("tvstandfactory", "tv_stand"),
+        ("monitorfactory", "computer"),
+        ("wallmountedtvfactory", "tv_projector_screen"),
+        ("armchairfactory", "armchair"),
+        ("chairfactory", "chair"),
     )
     for token, group_name in mapping:
         if token in text:
@@ -1408,6 +1418,14 @@ def _item_semantic_group(item: Dict) -> str:
         return "lamp_floor"
     if "люстр" in text or "pendant" in text or "chandelier" in text:
         return "lamp_ceiling"
+    if "tv stand" in text or "tv_stand" in text or ("тумб" in text and ("tv" in text or "тв" in text or "телевиз" in text)):
+        return "tv_stand"
+    if "tv" in text or "television" in text or "телевиз" in text:
+        return "tv_projector_screen"
+    if "monitor" in text or "computer" in text or "laptop" in text or "macbook" in text or "imac" in text:
+        return "computer"
+    if "sofa" in text or "couch" in text or "диван" in text:
+        return "sofa"
     return ""
 
 
@@ -1427,6 +1445,7 @@ def _item_mount_mode(item: Dict) -> str:
         "lamp_floor",
         "bed",
         "desk",
+        "dining_table",
         "dresser",
         "nightstand",
         "side_table",
@@ -1446,10 +1465,18 @@ def _item_mount_mode(item: Dict) -> str:
     return "support"
 
 
+def _is_supplier_light_replacement_item(item: Dict) -> bool:
+    meta = item.get("meta") or {}
+    if not bool(meta.get("supplier_binding_applied")):
+        return False
+    return _item_semantic_group(item) in {"lamp_ceiling", "lamp_table", "lamp_floor", "lamp_wall"}
+
+
 def _rotation_candidates_for_semantic_group(base_deg: float, semantic_group: str) -> List[float]:
     orientable_groups = {
         "bed",
         "desk",
+        "dining_table",
         "dresser",
         "nightstand",
         "side_table",
@@ -1457,6 +1484,10 @@ def _rotation_candidates_for_semantic_group(base_deg: float, semantic_group: str
         "shelf",
         "wardrobe",
         "tv_stand",
+        "chair",
+        "armchair",
+        "sofa",
+        "computer",
     }
     base = float(base_deg or 0.0) % 360.0
     if semantic_group not in orientable_groups:
@@ -3533,6 +3564,75 @@ def _make_renderable_bbox_box(
     return obj
 
 
+def _make_generated_chair_placeholder(
+    aabb: Dict[str, float],
+    name: str,
+    collection: bpy.types.Collection,
+    yaw_deg: float = 0.0,
+) -> bpy.types.Object:
+    (cx, cy, _cz), (sx, sy, sz) = _aabb_to_center_size(aabb)
+    z_min = float(aabb["z_min"])
+    seat_h = max(0.08, min(0.14, sz * 0.16))
+    leg_h = max(0.28, min(0.46, sz * 0.48))
+    back_h = max(0.32, sz - leg_h - seat_h * 0.4)
+    leg_w = max(0.035, min(sx, sy) * 0.09)
+    seat_center_z = z_min + leg_h + 0.5 * seat_h
+    back_thick = max(0.06, sy * 0.12)
+
+    yaw = math.radians(float(yaw_deg or 0.0))
+    cos_y = math.cos(yaw)
+    sin_y = math.sin(yaw)
+
+    def world_xy(local_x: float, local_y: float) -> tuple[float, float]:
+        return (
+            cx + local_x * cos_y - local_y * sin_y,
+            cy + local_x * sin_y + local_y * cos_y,
+        )
+
+    def oriented_box(label: str, local_center: tuple[float, float, float], size: tuple[float, float, float]) -> bpy.types.Object:
+        lx, ly, lz = local_center
+        bx, by, bz = size
+        verts = []
+        for dx, dy, dz in (
+            (-0.5, -0.5, -0.5),
+            (0.5, -0.5, -0.5),
+            (0.5, 0.5, -0.5),
+            (-0.5, 0.5, -0.5),
+            (-0.5, -0.5, 0.5),
+            (0.5, -0.5, 0.5),
+            (0.5, 0.5, 0.5),
+            (-0.5, 0.5, 0.5),
+        ):
+            wx, wy = world_xy(lx + dx * bx, ly + dy * by)
+            verts.append((wx, wy, lz + dz * bz))
+        faces = [(0, 1, 2, 3), (4, 5, 6, 7), (0, 1, 5, 4), (1, 2, 6, 5), (2, 3, 7, 6), (3, 0, 4, 7)]
+        return _make_mesh_object(f"{name}_{label}", verts, faces, collection)
+
+    root = bpy.data.objects.new(f"{name}_GeneratedChairRoot", None)
+    bpy.context.scene.collection.objects.link(root)
+    _unlink_from_all_collections(root)
+    collection.objects.link(root)
+    root.location = (0.0, 0.0, 0.0)
+
+    parts = [
+        oriented_box("seat", (0.0, 0.0, seat_center_z), (sx, sy, seat_h)),
+        oriented_box("back", (0.0, 0.5 * sy - 0.5 * back_thick, z_min + leg_h + 0.5 * back_h), (sx, back_thick, back_h)),
+    ]
+    for lx in (-0.5 * sx + 0.5 * leg_w, 0.5 * sx - 0.5 * leg_w):
+        for ly in (-0.5 * sy + 0.5 * leg_w, 0.5 * sy - 0.5 * leg_w):
+            parts.append(oriented_box("leg", (lx, ly, z_min + 0.5 * leg_h), (leg_w, leg_w, leg_h)))
+
+    mat = _make_bbox_wire_material("MAT_GENERATED_CHAIR", (0.16, 0.13, 0.10, 1.0))
+    for obj in parts:
+        obj.parent = root
+        _assign_material_to_object(obj, mat)
+        try:
+            obj.show_in_front = False
+        except Exception:
+            pass
+    return root
+
+
 def _make_glass_material(name: str, image_path: Optional[str]) -> bpy.types.Material:
     mat = bpy.data.materials.new(name)
     mat.use_nodes = True
@@ -4476,7 +4576,7 @@ def place_in_aabb(
             return False, f"center_offset:{center_ratio:.3f}", float("inf")
 
         wall_penalty = 0.0
-        if semantic_group in {"bed", "desk", "dresser", "nightstand", "side_table", "coffee_table", "shelf", "wardrobe", "tv_stand"}:
+        if semantic_group in {"bed", "sofa", "desk", "dresser", "nightstand", "side_table", "coffee_table", "shelf", "wardrobe", "tv_stand"}:
             wall_ctx = _nearest_room_wall_context(aabb)
             if wall_ctx is not None:
                 wall_dir, room_dir, wall_dist = wall_ctx
@@ -4896,7 +4996,9 @@ def build_scene(
                             for shared_it in shared_items
                         )
                         if can_hide_source:
-                            kept_light_count = _duplicate_light_objects_from_family(source_scene_obj)
+                            kept_light_count = 0
+                            if not _is_supplier_light_replacement_item(it):
+                                kept_light_count = _duplicate_light_objects_from_family(source_scene_obj)
                             if kept_light_count:
                                 print(f"[DBG] kept {kept_light_count} source lights for {name}: {source_blend_name}")
                             _hide_object_family(source_scene_obj)
@@ -4972,7 +5074,11 @@ def build_scene(
             if force_bbox:
                 _add_aabb_label(aabb_eng, name, coll_items)
 
-    if use_reference_scene and reference_light_fixture_roots:
+    has_supplier_ceiling_light_replacements = any(
+        isinstance(item, dict) and _is_supplier_light_replacement_item(item)
+        for item in items
+    )
+    if use_reference_scene and reference_light_fixture_roots and not has_supplier_ceiling_light_replacements:
         restored_light_count = _restore_hidden_reference_light_fixtures(reference_light_fixture_roots)
         if restored_light_count:
             print(f"[DBG] restored {restored_light_count} hidden reference light fixture object(s)")

@@ -20,6 +20,7 @@ import re
 import shutil
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Any
@@ -184,6 +185,30 @@ def safe_fs_name(value: str, max_len: int = 90) -> str:
     return text[:max_len]
 
 
+TRACKING_IMAGE_HOSTS = {
+    "mc.yandex.ru",
+    "top-fwz1.mail.ru",
+    "counter.yadro.ru",
+    "www.google-analytics.com",
+    "google-analytics.com",
+}
+
+TRACKING_IMAGE_PATH_RE = re.compile(r"/(?:watch|counter)(?:[/?#]|$)", re.I)
+
+
+def is_probable_product_image_url(url: str) -> bool:
+    try:
+        parsed = urllib.parse.urlsplit(url)
+    except Exception:
+        return False
+    host = (parsed.hostname or "").lower()
+    if host in TRACKING_IMAGE_HOSTS:
+        return False
+    if TRACKING_IMAGE_PATH_RE.search(parsed.path):
+        return False
+    return True
+
+
 def image_urls(item: dict[str, Any], max_images: int) -> list[str]:
     raw = safe_json_loads(item.get("images_json"), [])
     if not isinstance(raw, list):
@@ -199,11 +224,21 @@ def image_urls(item: dict[str, Any], max_images: int) -> list[str]:
             continue
         if not url.startswith(("http://", "https://")):
             continue
+        if not is_probable_product_image_url(url):
+            continue
         seen.add(url)
         out.append(url)
         if len(out) >= max_images:
             break
     return out
+
+
+def quote_url_for_request(url: str) -> str:
+    parsed = urllib.parse.urlsplit(url)
+    path = urllib.parse.quote(parsed.path, safe="/%:@")
+    query = urllib.parse.quote(parsed.query, safe="=&?/:+,%@")
+    fragment = urllib.parse.quote(parsed.fragment, safe="=&?/:+,%@")
+    return urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, path, query, fragment))
 
 
 def infer_extension(url: str, content_type: str | None) -> str:
@@ -221,7 +256,7 @@ def download_url(url: str, out_prefix: Path, timeout_sec: int, retries: int) -> 
     for attempt in range(1, retries + 1):
         try:
             req = urllib.request.Request(
-                url,
+                quote_url_for_request(url),
                 headers={
                     "User-Agent": "Mozilla/5.0 (compatible; cgs-vlm-style-enricher/1.0)",
                     "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
@@ -939,6 +974,11 @@ def maybe_write_enriched_catalog(
         result = by_id.get(iid)
         if not result:
             continue
+        desc = result.get("vlm_description") or {}
+        if desc:
+            item["vlm_description_summary"] = desc.get("object_summary")
+            item["vlm_description_text"] = desc.get("detailed_description")
+            item["vlm_description_json"] = json.dumps(desc, ensure_ascii=False)
         vlm = result.get("vlm_style") or {}
         item["object_category_vlm"] = vlm.get("object_category")
         item["room_type_vlm_json"] = json.dumps(vlm.get("room_type") or [], ensure_ascii=False)

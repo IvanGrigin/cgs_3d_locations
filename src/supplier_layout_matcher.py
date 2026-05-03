@@ -135,11 +135,16 @@ STYLE_ALIASES = {
     "minimal": "minimalism",
     "minimalism": "minimalism",
     "modern": "modern",
+    "современный": "modern",
+    "sovremennyi": "modern",
+    "sovremenny": "modern",
     "contemporary": "contemporary",
     "scandinavian": "scandinavian",
     "nordic": "scandinavian",
     "japandi": "japandi",
     "wabi_sabi": "eco_organic",
+    "классический": "classic",
+    "classic": "classic",
 }
 
 
@@ -154,6 +159,7 @@ STYLE_COMPATIBILITY = {
     "high_tech": {"modern", "loft_industrial"},
     "eco_organic": {"scandinavian", "japandi", "soft_minimalism"},
     "mid_century_modern": {"modern", "contemporary"},
+    "classic": {"contemporary"},
 }
 
 
@@ -305,7 +311,7 @@ def _row_is_rich(row: dict[str, Any]) -> bool:
             _has_text(row.get("title")),
             row.get("price_value") is not None,
             _has_full_dimensions(row),
-            _has_text(row.get("description")),
+            _has_text(row.get("description")) or _has_text(row.get("vlm_description_text")),
             _has_category(row),
             _has_text(row.get("brand")),
         )
@@ -660,6 +666,11 @@ def _row_query_tokens(row: dict[str, Any]) -> set[str]:
         row.get("color"),
         row.get("materials"),
         row.get("description"),
+        row.get("vlm_description_text"),
+        row.get("vlm_description_summary"),
+        row.get("vlm_color"),
+        row.get("vlm_materials"),
+        row.get("vlm_style"),
         row.get("room"),
     ]
     tokens: set[str] = set()
@@ -692,6 +703,11 @@ def _row_design_tokens(row: dict[str, Any]) -> set[str]:
         row.get("color"),
         row.get("materials"),
         row.get("description"),
+        row.get("vlm_description_text"),
+        row.get("vlm_description_summary"),
+        row.get("vlm_color"),
+        row.get("vlm_materials"),
+        row.get("vlm_style"),
         row.get("room"),
     ]
     tokens: set[str] = set()
@@ -703,6 +719,8 @@ def _row_design_tokens(row: dict[str, Any]) -> set[str]:
 def _row_color_tokens(row: dict[str, Any]) -> set[str]:
     tokens: set[str] = set()
     tokens |= _extract_color_tokens(row.get("color"))
+    tokens |= _extract_color_tokens(row.get("vlm_color"))
+    tokens |= _extract_color_tokens(row.get("vlm_description_text"))
     tokens |= _extract_color_tokens(row.get("materials"))
     tokens |= _extract_color_tokens(row.get("title"))
     return tokens
@@ -717,6 +735,7 @@ def _same_family(group_a: str, group_b: str) -> bool:
         {"chair", "armchair"},
         {"dresser", "nightstand"},
         {"shelf", "tv_stand"},
+        {"computer", "computer_monitor", "laptop_computer_keyboard_mouse"},
     ]
     return any(group_a in fam and group_b in fam for fam in families)
 
@@ -1085,6 +1104,9 @@ def _infer_row_group(row: dict[str, Any]) -> str:
             "sideboard": "dresser",
             "desk": "desk",
             "tv_stand": "tv_stand",
+            "computer": "computer",
+            "computer_monitor": "computer",
+            "laptop_computer_keyboard_mouse": "computer",
             "armchair": "armchair",
             "chair": "chair",
             "sofa": "sofa",
@@ -1211,6 +1233,10 @@ def _design_match_info(target: dict[str, Any], row: dict[str, Any]) -> tuple[flo
 
 def _row_style_llm_info(row: dict[str, Any]) -> dict[str, Any]:
     style = _normalize_style_label(row.get("style_llm"))
+    style_source = "style_llm"
+    if style is None:
+        style = _normalize_style_label(row.get("style"))
+        style_source = "style"
     secondary_raw = row.get("style_llm_secondary") or []
     if isinstance(secondary_raw, str):
         secondary_raw = _json_loads_or(secondary_raw, [])
@@ -1223,6 +1249,9 @@ def _row_style_llm_info(row: dict[str, Any]) -> dict[str, Any]:
     ]
     confidence = _safe_float(row.get("style_llm_confidence"))
     quality = _safe_float(row.get("style_llm_quality_score"))
+    if style_source == "style" and style is not None:
+        confidence = 0.72 if confidence is None else confidence
+        quality = 7.0 if quality is None else quality
     usable = (
         style is not None
         and confidence is not None
@@ -1237,6 +1266,7 @@ def _row_style_llm_info(row: dict[str, Any]) -> dict[str, Any]:
         "quality": quality,
         "usable": usable,
         "flags": row.get("style_llm_quality_flags") or [],
+        "source": style_source,
     }
 
 
@@ -1540,6 +1570,16 @@ def _llm_candidate_payload(candidate: dict[str, Any]) -> dict[str, Any]:
             "height": candidate.get("height_cm"),
         },
         "description": str(candidate.get("description") or "")[:500],
+        "vlm_description": str(
+            candidate.get("vlm_description_text")
+            or candidate.get("vlm_description_summary")
+            or ""
+        )[:800],
+        "vlm_visual": {
+            "color": candidate.get("vlm_color"),
+            "materials": candidate.get("vlm_materials"),
+            "style": candidate.get("vlm_style"),
+        },
         "heuristic": {
             "semantic_group": candidate.get("semantic_group"),
             "rich_card": candidate.get("rich_card"),
@@ -1628,6 +1668,8 @@ def _llm_rerank_candidates(
         "Choose only from the provided candidates. "
         "The candidates were already filtered and ordered by a deterministic heuristic using category, size, "
         "bbox fit, asset availability, price, prompt context, and style_llm. "
+        "When a candidate contains vlm_description/vlm_visual, treat it as the most direct evidence of the item's "
+        "visible shape, color, material, and style from product photos. "
         "Pick the best final candidate from this shortlist only. "
         "The chosen_unique_key must be copied exactly from one candidate.unique_key; do not invent ids, titles, "
         "or placeholder strings. "
@@ -1835,7 +1877,20 @@ def _rank_candidate(target: dict[str, Any], row: dict[str, Any], context: dict[s
             -round(style_score, 6),
         ) + dimension_key + similarity_suffix_no_price
     else:
-        rank_key = structural_prefix + dimension_key + similarity_suffix_with_budget
+        rank_key = structural_prefix + (
+            style_rank,
+            -round(style_score, 6),
+            -round(preference_score, 6),
+            -round(prompt_score, 6),
+            -round(query_score, 6),
+        ) + dimension_key + (
+            -round(design_score, 6),
+            round(price_distance_ratio if price_distance_ratio is not None else 999999.0, 6),
+            0 if rich_card else 1,
+            0 if has_model_link else 1,
+            -text_overlap,
+            str(row.get("unique_key") or ""),
+        )
 
     reasons: dict[str, Any] = {
         **category_breakdown,
@@ -1876,14 +1931,14 @@ def _rank_candidate(target: dict[str, Any], row: dict[str, Any], context: dict[s
             "category",
             "bbox_fit",
             "asset_ready",
+            "style_llm",
+            "user_preferences",
+            "prompt_color",
+            "query_match",
             "width",
             "height",
             "depth",
             "strategy_price_style",
-            "query_match",
-            "user_preferences",
-            "prompt_color",
-            "style_llm",
             "design",
         ],
         "rank_key": [x for x in rank_key[:-1]],
@@ -2204,6 +2259,12 @@ def load_supplier_catalog_json(
                 "style_llm_rationale": item.get("style_llm_rationale"),
                 "color": item.get("color"),
                 "description": item.get("description"),
+                "vlm_description_text": item.get("vlm_description_text"),
+                "vlm_description_summary": item.get("vlm_description_summary"),
+                "vlm_color": item.get("vlm_color"),
+                "vlm_materials": item.get("vlm_materials"),
+                "vlm_style": item.get("vlm_style"),
+                "vlm_visual_features": item.get("vlm_visual_features"),
                 "width_cm": item.get("width_cm", dims.get("width")),
                 "depth_cm": item.get("depth_cm", dims.get("depth")),
                 "height_cm": item.get("height_cm", dims.get("height")),
@@ -2260,7 +2321,7 @@ def _load_matcher_context(
 ) -> dict[str, Any]:
     run_dir = targets_json_path.parent
     prompt_text = None
-    for name in ("prompt.txt", "chooser_prompt.txt"):
+    for name in ("chooser_prompt.txt", "prompt.styled.txt", "prompt.txt"):
         p = run_dir / name
         if p.is_file():
             text = p.read_text(encoding="utf-8").strip()
@@ -2334,6 +2395,7 @@ def _target_is_large_furniture_candidate(target: dict[str, Any]) -> bool:
         "coffee_table",
         "side_table",
         "tv_stand",
+        "computer",
         "lamp_table",
         "lamp_floor",
         "lamp_ceiling",

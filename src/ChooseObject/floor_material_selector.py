@@ -285,7 +285,7 @@ def _json_loads_or(text: str, default: Any) -> Any:
 class FloorMaterialSelector:
     def __init__(self, materials_path: Path, style_rules_path: Path):
         self.materials_path = Path(materials_path)
-        self.materials_base_dir = self.materials_path.parent
+        self.materials_base_dir = self.materials_path if self.materials_path.is_dir() else self.materials_path.parent
         self.materials = load_normalized_materials(materials_path)
         self.style_rules = json.loads(Path(style_rules_path).read_text(encoding="utf-8"))
         self.analyzer = FloorPromptAnalyzer()
@@ -896,6 +896,27 @@ class FloorMaterialSelector:
             max_x=max_x,
             max_y=max_y,
         )
+        luminance_range = float(color_variation.get("luminance_range_p05_p95") or 0.0)
+        luminance_std = float(color_variation.get("luminance_std") or 0.0)
+        # Product photos with angled boards often include side faces and shadows.
+        # Prefer large, dense rectangular swatches with reasonably even color,
+        # while still allowing natural wood grain.
+        uniformity_score = _clamp(1.0 - (0.65 * min(luminance_range / 120.0, 1.0) + 0.35 * min(luminance_std / 55.0, 1.0)))
+        rectangularity_score = _clamp(
+            0.42 * fill_ratio
+            + 0.24 * edge_density_min
+            + 0.24 * corner_density_min
+            + 0.10 * (1.0 if has_texture_aspect else 0.0)
+        )
+        size_score = _clamp(bbox_area_ratio / 0.72)
+        crop_margin_score = 1.0 if has_crop_margin else 0.65
+        texture_selection_score = _clamp(
+            0.46 * rectangularity_score
+            + 0.28 * size_score
+            + 0.16 * uniformity_score
+            + 0.06 * crop_margin_score
+            + 0.04 * (1.0 if usable else 0.0)
+        )
 
         return {
             "path": str(image_path),
@@ -921,6 +942,9 @@ class FloorMaterialSelector:
             "corner_densities": [round(x, 4) for x in corner_densities],
             "crop_bbox": [min_x, min_y, max_x + 1, max_y + 1],
             "color_variation": color_variation,
+            "uniformity_score": round(uniformity_score, 4),
+            "rectangularity_score": round(rectangularity_score, 4),
+            "texture_selection_score": round(texture_selection_score, 4),
             "score": round(score, 4),
         }
 
@@ -1016,10 +1040,9 @@ class FloorMaterialSelector:
             chosen = max(
                 usable,
                 key=lambda a: (
-                    1 if a.get("has_crop_margin") else 0,
+                    float(a.get("texture_selection_score") or 0.0),
+                    float(a.get("rectangularity_score") or 0.0),
                     float(a.get("bbox_area_ratio") or 0.0),
-                    float(a.get("fill_ratio") or 0.0),
-                    float(a.get("score") or 0.0),
                 ),
             ) if usable else analyses[0]
             for analysis in analyses:
