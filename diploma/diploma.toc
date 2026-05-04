@@ -1,0 +1,21 @@
+\xpg@aux {}{russian}
+\contentsline {section}{Введение}{2}{Doc-Start}%
+\contentsline {section}{\numberline {1}Аналитический обзор и выбор базового подхода}{3}{section.1}%
+\contentsline {subsection}{\numberline {1.1}Автоматизация подготовки интерьерных решений}{3}{subsection.1.1}%
+\contentsline {subsection}{\numberline {1.2}Сравнение существующих методов генерации планировок}{4}{subsection.1.2}%
+\contentsline {subsection}{\numberline {1.3}Обоснование выбора Infinigen}{4}{subsection.1.3}%
+\contentsline {subsection}{\numberline {1.4}Постановка задачи}{5}{subsection.1.4}%
+\contentsline {section}{\numberline {2}Разработка пайплайна расстановки объектов}{5}{section.2}%
+\contentsline {subsection}{\numberline {2.1}Общая архитектура решения}{5}{subsection.2.1}%
+\contentsline {subsection}{\numberline {2.2}Улучшение результата расстановки Infinigen}{6}{subsection.2.2}%
+\contentsline {subsection}{\numberline {2.3}Получение описаний объектов и материалов}{7}{subsection.2.3}%
+\contentsline {subsection}{\numberline {2.4}Замена синтетических объектов на магазинные аналоги}{7}{subsection.2.4}%
+\contentsline {subsection}{\numberline {2.5}Формирование отчета и выгрузка результата}{7}{subsection.2.5}%
+\contentsline {section}{\numberline {3}Каталог материалов, замены и экспериментальная оценка}{8}{section.3}%
+\contentsline {subsection}{\numberline {3.1}Сбор каталога предметов и материалов}{8}{subsection.3.1}%
+\contentsline {subsection}{\numberline {3.2}Описание предметов и отделочных материалов}{8}{subsection.3.2}%
+\contentsline {subsection}{\numberline {3.3}Эксперименты и оценка качества}{8}{subsection.3.3}%
+\contentsline {subsection}{\numberline {3.4}Расчет стоимости и варианты замен}{9}{subsection.3.4}%
+\contentsline {subsection}{\numberline {3.5}Выводы по экспериментам}{10}{subsection.3.5}%
+\contentsline {section}{Заключение}{10}{subsection.3.5}%
+\contentsline {section}{Список использованных источников}{11}{subsection.3.5}%

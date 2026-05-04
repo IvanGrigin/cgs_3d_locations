@@ -2,6 +2,10 @@ archive
 .env
 # venv
 .venv/
+.venv-vlm/
+
+.lsp/
+.clj-kondo/
 
 # кэш matplotlib
 .mpl-cache/
@@ -15,3 +19,7 @@ runs/
 __pycache__/
 *.pyc
 .DS_Store
+reports/
+tmp/
+tests/
+remote_artifacts/
