@@ -133,6 +133,189 @@ def _apply_rectangular_cutout(
     return True
 
 
+def _apply_mesh_objects_cutout(
+    target_obj,
+    name: str,
+    source_objects: list[Any],
+    collection=None,
+) -> bool:
+    bpy = _require_bpy()
+    mesh_sources = [obj for obj in source_objects if getattr(obj, "type", None) == "MESH" and getattr(obj, "data", None) is not None]
+    if not mesh_sources:
+        return False
+
+    ok = False
+    cutters: list[Any] = []
+    for idx, source in enumerate(mesh_sources, start=1):
+        cutter = source.copy()
+        cutter.data = source.data.copy()
+        cutter.name = f"{name}_mesh_boolean_cutter_{idx:02d}"
+        if collection is not None:
+            collection.objects.link(cutter)
+        else:
+            bpy.context.scene.collection.objects.link(cutter)
+        cutter.hide_viewport = True
+        cutter.hide_render = True
+        cutters.append(cutter)
+
+        try:
+            bpy.context.view_layer.objects.active = target_obj
+            target_obj.select_set(True)
+            modifier = target_obj.modifiers.new(f"{name}_mesh_cutout_{idx:02d}", "BOOLEAN")
+            modifier.operation = "DIFFERENCE"
+            modifier.object = cutter
+            if hasattr(modifier, "solver"):
+                modifier.solver = "EXACT"
+            bpy.ops.object.modifier_apply(modifier=modifier.name)
+            ok = True
+        except Exception as exc:
+            print(f"[kitchen] failed to apply mesh cutout {name}: {exc}")
+            try:
+                target_obj.modifiers.remove(modifier)
+            except Exception:
+                pass
+
+    for cutter in cutters:
+        try:
+            bpy.data.objects.remove(cutter, do_unlink=True)
+        except Exception:
+            pass
+    return ok
+
+
+def _convex_hull_xy(points: list[tuple[float, float]]) -> list[tuple[float, float]]:
+    unique = sorted(set((round(x, 5), round(y, 5)) for x, y in points))
+    if len(unique) <= 2:
+        return unique
+
+    def cross(origin: tuple[float, float], a: tuple[float, float], b: tuple[float, float]) -> float:
+        return (a[0] - origin[0]) * (b[1] - origin[1]) - (a[1] - origin[1]) * (b[0] - origin[0])
+
+    lower: list[tuple[float, float]] = []
+    for point in unique:
+        while len(lower) >= 2 and cross(lower[-2], lower[-1], point) <= 0:
+            lower.pop()
+        lower.append(point)
+
+    upper: list[tuple[float, float]] = []
+    for point in reversed(unique):
+        while len(upper) >= 2 and cross(upper[-2], upper[-1], point) <= 0:
+            upper.pop()
+        upper.append(point)
+
+    return lower[:-1] + upper[:-1]
+
+
+def _apply_mesh_footprint_cutout(
+    target_obj,
+    name: str,
+    source_objects: list[Any],
+    *,
+    sample_z_min: float,
+    sample_z_max: float,
+    cutter_z_min: float,
+    cutter_z_max: float,
+    inset_m: float = 0.014,
+    collection=None,
+) -> bool:
+    bpy = _require_bpy()
+    mesh_sources = [obj for obj in source_objects if getattr(obj, "type", None) == "MESH" and getattr(obj, "data", None) is not None]
+    if not mesh_sources:
+        return False
+
+    points: list[tuple[float, float]] = []
+    for obj in mesh_sources:
+        for vertex in obj.data.vertices:
+            world = obj.matrix_world @ vertex.co
+            z = float(world.z)
+            if sample_z_min <= z <= sample_z_max:
+                points.append((float(world.x), float(world.y)))
+
+    if len(points) < 4:
+        bbox = _bbox_world(mesh_sources)
+        if bbox is None:
+            return False
+        mins, maxs = bbox
+        points = [
+            (mins[0], mins[1]),
+            (maxs[0], mins[1]),
+            (maxs[0], maxs[1]),
+            (mins[0], maxs[1]),
+        ]
+
+    hull = _convex_hull_xy(points)
+    if len(hull) < 3:
+        return False
+
+    cx = sum(point[0] for point in hull) / len(hull)
+    cy = sum(point[1] for point in hull) / len(hull)
+    shrunken: list[tuple[float, float]] = []
+    for x, y in hull:
+        dx = x - cx
+        dy = y - cy
+        scale_x = max(0.0, (abs(dx) - inset_m) / max(abs(dx), 1e-6))
+        scale_y = max(0.0, (abs(dy) - inset_m) / max(abs(dy), 1e-6))
+        shrunken.append((cx + dx * scale_x, cy + dy * scale_y))
+
+    vertices = [(x, y, cutter_z_min) for x, y in shrunken] + [(x, y, cutter_z_max) for x, y in shrunken]
+    count = len(shrunken)
+    faces: list[tuple[int, ...]] = [tuple(reversed(range(count))), tuple(range(count, count * 2))]
+    for idx in range(count):
+        nxt = (idx + 1) % count
+        faces.append((idx, nxt, nxt + count, idx + count))
+
+    mesh = bpy.data.meshes.new(f"{name}_footprint_cutout_mesh")
+    mesh.from_pydata(vertices, [], faces)
+    mesh.update()
+    cutter = bpy.data.objects.new(f"{name}_footprint_boolean_cutter", mesh)
+    if collection is not None:
+        collection.objects.link(cutter)
+    else:
+        bpy.context.scene.collection.objects.link(cutter)
+    cutter.hide_viewport = True
+    cutter.hide_render = True
+
+    try:
+        bpy.context.view_layer.objects.active = target_obj
+        target_obj.select_set(True)
+        modifier = target_obj.modifiers.new(f"{name}_footprint_cutout", "BOOLEAN")
+        modifier.operation = "DIFFERENCE"
+        modifier.object = cutter
+        if hasattr(modifier, "solver"):
+            modifier.solver = "EXACT"
+        bpy.ops.object.modifier_apply(modifier=modifier.name)
+    except Exception as exc:
+        print(f"[kitchen] failed to apply footprint cutout {name}: {exc}")
+        try:
+            target_obj.modifiers.remove(modifier)
+        except Exception:
+            pass
+        bpy.data.objects.remove(cutter, do_unlink=True)
+        return False
+
+    bpy.data.objects.remove(cutter, do_unlink=True)
+    return True
+
+
+def _real_bbox_opening_from_objects(
+    objects: list[Any],
+    *,
+    inset_x: float = 0.0,
+    inset_y: float = 0.0,
+    min_size: float = 0.18,
+) -> tuple[tuple[float, float], tuple[float, float]] | None:
+    bbox = _bbox_world([obj for obj in objects if getattr(obj, "type", None) == "MESH"])
+    if bbox is None:
+        return None
+    mins, maxs = bbox
+    center = ((mins[0] + maxs[0]) / 2.0, (mins[1] + maxs[1]) / 2.0)
+    size = (
+        max(min_size, (maxs[0] - mins[0]) - inset_x * 2.0),
+        max(min_size, (maxs[1] - mins[1]) - inset_y * 2.0),
+    )
+    return center, size
+
+
 def _create_oriented_box(
     name: str,
     origin_x: float,
@@ -189,6 +372,33 @@ def _create_cylinder(
 ):
     bpy = _require_bpy()
     bpy.ops.mesh.primitive_cylinder_add(vertices=vertices, radius=radius, depth=depth, location=center)
+    obj = bpy.context.object
+    obj.name = name
+    if material is not None:
+        obj.data.materials.append(material)
+    if collection is not None:
+        for col in obj.users_collection:
+            col.objects.unlink(obj)
+        collection.objects.link(obj)
+    return obj
+
+
+def _create_torus(
+    name: str,
+    center: tuple[float, float, float],
+    major_radius: float,
+    minor_radius: float,
+    material=None,
+    collection=None,
+):
+    bpy = _require_bpy()
+    bpy.ops.mesh.primitive_torus_add(
+        major_radius=major_radius,
+        minor_radius=minor_radius,
+        major_segments=72,
+        minor_segments=8,
+        location=center,
+    )
     obj = bpy.context.object
     obj.name = name
     if material is not None:
@@ -291,6 +501,40 @@ def _filter_imported_appliance_objects(
             keep_set = set(candidates)
             _delete_objects([obj for obj in objects if obj not in keep_set])
             return candidates
+    if role == "faucet":
+        mesh_objects = [obj for obj in objects if getattr(obj, "type", None) == "MESH"]
+        candidates = [
+            obj
+            for obj in mesh_objects
+            if "cube" not in obj.name.lower()
+            and max(float(v) for v in obj.dimensions) < 4.0
+            and min(float(v) for v in obj.dimensions) >= 0.0
+        ]
+        if candidates:
+            preferred_parts = []
+            for obj in candidates:
+                try:
+                    part_index = int(obj.name.rsplit("_", 1)[-1])
+                except Exception:
+                    part_index = -1
+                if 13 <= part_index <= 15 or 18 <= part_index <= 23:
+                    preferred_parts.append(obj)
+            if preferred_parts:
+                candidates = preferred_parts
+        if candidates:
+            centered_candidates = []
+            vector_cls = __import__("mathutils").Vector
+            for obj in candidates:
+                corners = [obj.matrix_world @ vector_cls(corner) for corner in obj.bound_box]
+                center_z = sum(float(corner.z) for corner in corners) / max(1, len(corners))
+                if center_z > 8.0:
+                    centered_candidates.append(obj)
+            if centered_candidates:
+                candidates = centered_candidates
+        if candidates:
+            keep_set = set(candidates)
+            _delete_objects([obj for obj in objects if obj not in keep_set])
+            return candidates
     return objects
 
 
@@ -307,6 +551,98 @@ def _bbox_world(objects: list[Any]) -> tuple[tuple[float, float, float], tuple[f
     mins = tuple(min(c[i] for c in corners) for i in range(3))
     maxs = tuple(max(c[i] for c in corners) for i in range(3))
     return mins, maxs
+
+
+def _mesh_xy_bbox_below_z(
+    objects: list[Any],
+    z_limit: float,
+) -> tuple[tuple[float, float], tuple[float, float]] | None:
+    vector_cls = __import__("mathutils").Vector
+    points: list[tuple[float, float]] = []
+    for obj in objects:
+        if getattr(obj, "type", None) != "MESH" or getattr(obj, "data", None) is None:
+            continue
+        for vertex in obj.data.vertices:
+            world = obj.matrix_world @ vertex.co
+            if float(world.z) <= z_limit:
+                points.append((float(world.x), float(world.y)))
+        if points:
+            continue
+        for corner in obj.bound_box:
+            world = obj.matrix_world @ vector_cls(corner)
+            if float(world.z) <= z_limit:
+                points.append((float(world.x), float(world.y)))
+    if not points:
+        return None
+    mins = (min(point[0] for point in points), min(point[1] for point in points))
+    maxs = (max(point[0] for point in points), max(point[1] for point in points))
+    return mins, maxs
+
+
+def _mesh_xy_bbox_between_z(
+    objects: list[Any],
+    z_min: float,
+    z_max: float,
+) -> tuple[tuple[float, float], tuple[float, float]] | None:
+    vector_cls = __import__("mathutils").Vector
+    points: list[tuple[float, float]] = []
+    for obj in objects:
+        if getattr(obj, "type", None) != "MESH" or getattr(obj, "data", None) is None:
+            continue
+        for vertex in obj.data.vertices:
+            world = obj.matrix_world @ vertex.co
+            z = float(world.z)
+            if z_min <= z <= z_max:
+                points.append((float(world.x), float(world.y)))
+        if points:
+            continue
+        for corner in obj.bound_box:
+            world = obj.matrix_world @ vector_cls(corner)
+            z = float(world.z)
+            if z_min <= z <= z_max:
+                points.append((float(world.x), float(world.y)))
+    if not points:
+        return None
+    mins = (min(point[0] for point in points), min(point[1] for point in points))
+    maxs = (max(point[0] for point in points), max(point[1] for point in points))
+    return mins, maxs
+
+
+def _mesh_xy_inner_bbox_between_z(
+    objects: list[Any],
+    z_min: float,
+    z_max: float,
+) -> tuple[tuple[float, float], tuple[float, float]] | None:
+    vector_cls = __import__("mathutils").Vector
+    points: list[tuple[float, float]] = []
+    for obj in objects:
+        if getattr(obj, "type", None) != "MESH" or getattr(obj, "data", None) is None:
+            continue
+        for vertex in obj.data.vertices:
+            world = obj.matrix_world @ vertex.co
+            z = float(world.z)
+            if z_min <= z <= z_max:
+                points.append((float(world.x), float(world.y)))
+        if points:
+            continue
+        for corner in obj.bound_box:
+            world = obj.matrix_world @ vector_cls(corner)
+            z = float(world.z)
+            if z_min <= z <= z_max:
+                points.append((float(world.x), float(world.y)))
+    if len(points) < 8:
+        return _mesh_xy_bbox_between_z(objects, z_min, z_max)
+
+    xs = sorted(point[0] for point in points)
+    ys = sorted(point[1] for point in points)
+
+    def quantile(values: list[float], q: float) -> float:
+        return values[int((len(values) - 1) * q)]
+
+    return (
+        (quantile(xs, 0.20), quantile(ys, 0.20)),
+        (quantile(xs, 0.80), quantile(ys, 0.80)),
+    )
 
 
 def _fit_objects_to_box(
@@ -354,6 +690,83 @@ def _fit_objects_to_box(
     wrapper.location += vector_cls((center[0] - scaled_center[0], center[1] - scaled_center[1], center[2] - scaled_center[2]))
     wrapper.name = "kitchen_appliance_asset_root"
 
+    return True
+
+
+def _fit_mesh_objects_to_box_baked(
+    objects: list[Any],
+    center: tuple[float, float, float],
+    size: tuple[float, float, float],
+    margin: float = 0.92,
+    compact_disconnected: bool = False,
+) -> bool:
+    bpy = _require_bpy()
+    vector_cls = __import__("mathutils").Vector
+    matrix_cls = __import__("mathutils").Matrix
+    mesh_objects = [obj for obj in objects if getattr(obj, "type", None) == "MESH" and getattr(obj, "data", None)]
+    if not mesh_objects:
+        return False
+
+    for obj in mesh_objects:
+        world = obj.matrix_world.copy()
+        obj.data = obj.data.copy()
+        obj.parent = None
+        obj.matrix_parent_inverse = matrix_cls.Identity(4)
+        obj.matrix_world = matrix_cls.Identity(4)
+        obj.location = (0.0, 0.0, 0.0)
+        obj.rotation_euler = (0.0, 0.0, 0.0)
+        obj.scale = (1.0, 1.0, 1.0)
+        obj.data.transform(world)
+
+    bpy.context.view_layer.update()
+    bbox = _bbox_world(mesh_objects)
+    if bbox is None:
+        return False
+
+    mins, maxs = bbox
+    current_size = tuple(max(1e-6, maxs[i] - mins[i]) for i in range(3))
+    scale = min((size[i] * margin) / current_size[i] for i in range(3))
+    current_center = tuple((mins[i] + maxs[i]) / 2.0 for i in range(3))
+    transform = (
+        matrix_cls.Translation(vector_cls(center))
+        @ matrix_cls.Diagonal((scale, scale, scale, 1.0))
+        @ matrix_cls.Translation(-vector_cls(current_center))
+    )
+
+    for obj in mesh_objects:
+        obj.data.transform(transform)
+        obj.location = (0.0, 0.0, 0.0)
+        obj.rotation_euler = (0.0, 0.0, 0.0)
+        obj.scale = (1.0, 1.0, 1.0)
+
+    bpy.context.view_layer.update()
+    if compact_disconnected:
+        bbox = _bbox_world(mesh_objects)
+        if bbox is not None:
+            mins, maxs = bbox
+            if (maxs[0] - mins[0]) > size[0] * 2.5 or (maxs[1] - mins[1]) > size[1] * 2.5:
+                centers: dict[Any, tuple[float, float, float]] = {}
+                for obj in mesh_objects:
+                    corners = [obj.matrix_world @ vector_cls(corner) for corner in obj.bound_box]
+                    centers[obj] = tuple(sum(float(corner[i]) for corner in corners) / max(1, len(corners)) for i in range(3))
+                split_x = (mins[0] + maxs[0]) / 2.0
+                left = [obj for obj, obj_center in centers.items() if obj_center[0] < split_x]
+                right = [obj for obj, obj_center in centers.items() if obj_center[0] >= split_x]
+                if left and right:
+                    main = left if len(left) >= len(right) else right
+                    loose = right if main is left else left
+                    main_center = tuple(sum(centers[obj][i] for obj in main) / len(main) for i in range(3))
+                    loose_center = tuple(sum(centers[obj][i] for obj in loose) / len(loose) for i in range(3))
+                    delta = vector_cls(
+                        (
+                            main_center[0] - loose_center[0],
+                            main_center[1] - loose_center[1],
+                            0.0,
+                        )
+                    )
+                    for obj in loose:
+                        obj.data.transform(matrix_cls.Translation(delta))
+                    bpy.context.view_layer.update()
     return True
 
 
@@ -488,6 +901,162 @@ def _apply_asset_import_orientation(asset: dict[str, Any], objects: list[Any], o
     _rotate_imported_roots_z(objects, math.radians(float(angle)))
 
 
+def _asset_rotation_z_deg(asset: dict[str, Any], orientation: str) -> float:
+    blender_import = asset.get("blender_import") if isinstance(asset.get("blender_import"), dict) else {}
+    rotations = blender_import.get("rotation_z_deg_by_layout") if isinstance(blender_import.get("rotation_z_deg_by_layout"), dict) else {}
+    angle = rotations.get(orientation)
+    return float(angle) if isinstance(angle, (int, float)) else 0.0
+
+
+def _rotate_baked_mesh_objects_around_point_z(
+    objects: list[Any],
+    pivot_xy: tuple[float, float],
+    angle_deg: float,
+) -> None:
+    if not angle_deg:
+        return
+
+    import math
+
+    bpy = _require_bpy()
+    matrix_cls = __import__("mathutils").Matrix
+    vector_cls = __import__("mathutils").Vector
+    pivot = vector_cls((pivot_xy[0], pivot_xy[1], 0.0))
+    transform = (
+        matrix_cls.Translation(pivot)
+        @ matrix_cls.Rotation(math.radians(float(angle_deg)), 4, "Z")
+        @ matrix_cls.Translation(-pivot)
+    )
+
+    for obj in objects:
+        if getattr(obj, "type", None) == "MESH" and getattr(obj, "data", None) is not None:
+            obj.data.transform(transform)
+    bpy.context.view_layer.update()
+
+
+def _translate_baked_mesh_objects_xy(objects: list[Any], dx: float, dy: float) -> None:
+    if abs(dx) < 1e-6 and abs(dy) < 1e-6:
+        return
+
+    bpy = _require_bpy()
+    matrix_cls = __import__("mathutils").Matrix
+    transform = matrix_cls.Translation((dx, dy, 0.0))
+    for obj in objects:
+        if getattr(obj, "type", None) == "MESH" and getattr(obj, "data", None) is not None:
+            obj.data.transform(transform)
+    bpy.context.view_layer.update()
+
+
+def _faucet_base_anchor_xy(
+    objects: list[Any],
+    target_xy: tuple[float, float],
+) -> tuple[float, float] | None:
+    vector_cls = __import__("mathutils").Vector
+    mesh_objects = [obj for obj in objects if getattr(obj, "type", None) == "MESH" and getattr(obj, "data", None)]
+    if not mesh_objects:
+        return None
+
+    object_boxes: list[tuple[Any, list[Any], tuple[float, float, float], tuple[float, float, float]]] = []
+    global_min_z: float | None = None
+    global_max_z: float | None = None
+    for obj in mesh_objects:
+        corners = [obj.matrix_world @ vector_cls(corner) for corner in obj.bound_box]
+        if not corners:
+            continue
+        mins = tuple(min(float(corner[i]) for corner in corners) for i in range(3))
+        maxs = tuple(max(float(corner[i]) for corner in corners) for i in range(3))
+        object_boxes.append((obj, corners, mins, maxs))
+        global_min_z = mins[2] if global_min_z is None else min(global_min_z, mins[2])
+        global_max_z = maxs[2] if global_max_z is None else max(global_max_z, maxs[2])
+
+    if global_min_z is None or global_max_z is None:
+        return None
+
+    height = max(1e-6, global_max_z - global_min_z)
+    base_z_limit = global_min_z + min(0.055, height * 0.18)
+    base_candidates: list[tuple[float, float, float]] = []
+
+    for _obj, corners, mins, maxs in object_boxes:
+        if mins[2] > base_z_limit:
+            continue
+        width_x = maxs[0] - mins[0]
+        width_y = maxs[1] - mins[1]
+        # Prefer compact low parts: those are usually circular mounting feet.
+        compact_penalty = max(0.0, width_x - 0.22) + max(0.0, width_y - 0.22)
+        center_x = sum(float(corner.x) for corner in corners) / len(corners)
+        center_y = sum(float(corner.y) for corner in corners) / len(corners)
+        dist = ((center_x - target_xy[0]) ** 2 + (center_y - target_xy[1]) ** 2) ** 0.5
+        base_candidates.append((dist + compact_penalty * 2.0, center_x, center_y))
+
+    if base_candidates:
+        _score, anchor_x, anchor_y = min(base_candidates, key=lambda item: item[0])
+        return anchor_x, anchor_y
+
+    bottom_points: list[tuple[float, float, float]] = []
+    for obj in mesh_objects:
+        for vertex in obj.data.vertices:
+            point = obj.matrix_world @ vertex.co
+            if float(point.z) <= base_z_limit:
+                dist = ((float(point.x) - target_xy[0]) ** 2 + (float(point.y) - target_xy[1]) ** 2) ** 0.5
+                bottom_points.append((dist, float(point.x), float(point.y)))
+
+    if not bottom_points:
+        return None
+
+    bottom_points.sort(key=lambda item: item[0])
+    closest = bottom_points[: max(1, min(24, len(bottom_points) // 4))]
+    return (
+        sum(point[1] for point in closest) / len(closest),
+        sum(point[2] for point in closest) / len(closest),
+    )
+
+
+def _sanitize_imported_appliance_materials(role: str, objects: list[Any]) -> None:
+    if role == "sink":
+        sink_mat = _get_or_create_material("kitchen_sink_asset_dark_pvd", (0.025, 0.026, 0.026, 1.0))
+        for obj in objects:
+            if getattr(obj, "type", None) != "MESH" or getattr(obj, "data", None) is None:
+                continue
+            obj.data.materials.clear()
+            obj.data.materials.append(sink_mat)
+        return
+
+    if role == "cooktop":
+        glass_mat = _get_or_create_material("kitchen_cooktop_asset_black_glass", (0.005, 0.006, 0.007, 1.0))
+        trim_mat = _get_or_create_material("kitchen_cooktop_asset_dark_trim", (0.025, 0.026, 0.028, 1.0))
+        for obj in objects:
+            if getattr(obj, "type", None) != "MESH" or getattr(obj, "data", None) is None:
+                continue
+            name = obj.name.lower()
+            mat = trim_mat if "box" in name else glass_mat
+            obj.data.materials.clear()
+            obj.data.materials.append(mat)
+        return
+
+    if role == "fridge":
+        body_mat = _get_or_create_material("kitchen_fridge_asset_satin_white", (0.86, 0.85, 0.82, 1.0))
+        trim_mat = _get_or_create_material("kitchen_fridge_asset_warm_gray_trim", (0.58, 0.57, 0.54, 1.0))
+        dark_mat = _get_or_create_material("kitchen_fridge_asset_dark_display", (0.08, 0.08, 0.075, 1.0))
+
+        for obj in objects:
+            if getattr(obj, "type", None) != "MESH" or getattr(obj, "data", None) is None:
+                continue
+
+            name = obj.name.lower()
+            if "shape" in name or "display" in name:
+                mat = dark_mat
+            elif "cylinder" in name or "handle" in name:
+                mat = trim_mat
+            else:
+                mat = body_mat
+
+            # Several supplier FBX files import with missing texture links, which
+            # Blender renders as magenta. Keep the geometry, but force usable
+            # refrigerator colors instead of broken materials.
+            obj.data.materials.clear()
+            obj.data.materials.append(mat)
+
+
 def _create_or_import_appliance(
     assembly: dict[str, Any],
     role: str,
@@ -502,6 +1071,7 @@ def _create_or_import_appliance(
     if asset:
         objects = _import_asset_objects(asset["asset_local_path"], collection)
         objects = _filter_imported_appliance_objects(role, objects, asset)
+        orientation_applied = False
         if role == "sink" and objects and _fit_objects_to_footprint_top(
             objects,
             (center[0], center[1]),
@@ -509,18 +1079,54 @@ def _create_or_import_appliance(
             center[2] + size[2] / 2.0,
         ):
             fit_ok = True
+        elif role == "cooktop" and objects and _fit_objects_to_footprint_top(
+            objects,
+            (center[0], center[1]),
+            (size[0], size[1]),
+            center[2] + size[2] / 2.0,
+            margin=0.98,
+        ):
+            fit_ok = True
+        elif role == "faucet" and objects and _fit_mesh_objects_to_box_baked(
+            objects,
+            center,
+            size,
+            margin=0.88,
+            compact_disconnected=True,
+        ):
+            anchor_xy = _faucet_base_anchor_xy(objects, (center[0], center[1]))
+            if anchor_xy is not None:
+                _translate_baked_mesh_objects_xy(
+                    objects,
+                    center[0] - anchor_xy[0],
+                    center[1] - anchor_xy[1],
+                )
+            _rotate_baked_mesh_objects_around_point_z(
+                objects,
+                (center[0], center[1]),
+                _asset_rotation_z_deg(asset, layout_orientation),
+            )
+            orientation_applied = True
+            fit_ok = True
+        elif role == "microwave" and objects and _fit_objects_to_footprint(
+            objects,
+            (center[0], center[1]),
+            (size[0], size[1]),
+            center[2] - size[2] / 2.0,
+            margin=0.94,
+        ):
+            fit_ok = True
         else:
             fit_ok = bool(objects and _fit_objects_to_box(objects, center, size))
         if objects and fit_ok:
-            _apply_asset_import_orientation(asset, objects, layout_orientation)
+            if not orientation_applied:
+                _apply_asset_import_orientation(asset, objects, layout_orientation)
+            _sanitize_imported_appliance_materials(role, objects)
             for obj in objects:
                 obj.name = f"{name}_{obj.name}"
                 obj["kitchen_appliance_role"] = role
                 obj["supplier_unique_key"] = asset.get("unique_key")
                 obj["supplier_title"] = asset.get("title")
-                if role in {"sink", "fridge"} and getattr(obj, "type", None) == "MESH" and fallback_mat is not None:
-                    obj.data.materials.clear()
-                    obj.data.materials.append(fallback_mat)
             return objects
     return [_create_box(name, center, size, fallback_mat, collection)]
 
@@ -610,6 +1216,32 @@ def _create_sink_placeholder(
         _create_box(f"{name}_bowl_right", (x + w * 0.34, y, z - rim_height - bowl_height / 2), (0.008, d * 0.62, bowl_height), basin_mat, collection),
         _create_cylinder(f"{name}_drain", (x, y, z - rim_height - bowl_height + 0.004), min(w, d) * 0.055, 0.004, basin_mat, collection),
     ]
+    return objects
+
+
+def _create_sink_backing_basin(
+    name: str,
+    center_xy: tuple[float, float],
+    opening_size: tuple[float, float],
+    countertop_top_z: float,
+    material,
+    collection,
+) -> list[Any]:
+    x, y = center_xy
+    w, d = opening_size
+    wall = 0.014
+    depth = 0.145
+    top_z = countertop_top_z - 0.006
+    bottom_z = top_z - depth
+    objects = [
+        _create_box(f"{name}_bottom", (x, y, bottom_z + wall / 2.0), (max(0.02, w), max(0.02, d), wall), material, collection),
+        _create_box(f"{name}_left_wall", (x - w / 2.0 + wall / 2.0, y, bottom_z + depth / 2.0), (wall, max(0.02, d), depth), material, collection),
+        _create_box(f"{name}_right_wall", (x + w / 2.0 - wall / 2.0, y, bottom_z + depth / 2.0), (wall, max(0.02, d), depth), material, collection),
+        _create_box(f"{name}_back_wall", (x, y - d / 2.0 + wall / 2.0, bottom_z + depth / 2.0), (max(0.02, w), wall, depth), material, collection),
+        _create_box(f"{name}_front_wall", (x, y + d / 2.0 - wall / 2.0, bottom_z + depth / 2.0), (max(0.02, w), wall, depth), material, collection),
+    ]
+    for obj in objects:
+        obj["kitchen_appliance_role"] = "sink"
     return objects
 
 
@@ -878,7 +1510,6 @@ def build_kitchen_assembly_in_blender(
                         layout_orientation=orientation,
                     )
                 )
-                created.extend(_create_fridge_placeholder(f"{module.get('id')}_fridge_details", (cx, cy, pz + z + h / 2), fridge_size, orientation, fridge_mat, appliance_mat, collection)[1:])
             else:
                 created.extend(_create_fridge_placeholder(module.get("id", "fridge"), (cx, cy, pz + z + h / 2), fridge_size, orientation, fridge_mat, appliance_mat, collection))
             continue
@@ -983,28 +1614,13 @@ def build_kitchen_assembly_in_blender(
             cutout_size = (cd, cw, 0.004) if orientation == "y" else (cw, cd, 0.004)
             if cutout.get("type") == "sink":
                 sink_height = 0.16
-                sink_size = (cd, cw, sink_height) if orientation == "y" else (cw, cd, sink_height)
-                sink_hole_size = (cutout_size[0] * 0.78, cutout_size[1] * 0.72, h * 3.0)
-                _apply_rectangular_cutout(
-                    countertop_obj,
-                    f"{segment.get('id')}_{cutout.get('type')}",
-                    (sx, sy, pz + z + h / 2.0),
-                    sink_hole_size,
-                    collection,
-                )
-                base_entry = base_carcasses.get(str(cutout.get("module_id") or ""))
-                if base_entry:
-                    base_obj, base_module = base_entry
-                    base_z = float(base_module.get("z_m", 0.1))
-                    base_h = float(base_module.get("height_m", 0.72))
-                    _apply_rectangular_cutout(
-                        base_obj,
-                        f"{base_module.get('id')}_{cutout.get('type')}_cabinet",
-                        (sx, sy, pz + base_z + base_h / 2.0),
-                        (sink_hole_size[0], sink_hole_size[1], base_h * 1.15),
-                        collection,
-                    )
+                sink_size = (cutout_size[0] * 0.92, cutout_size[1] * 0.92, sink_height)
+                sink_hole_size = (sink_size[0] * 0.86, sink_size[1] * 0.84, h * 3.0)
                 sink_asset = _appliance_asset(assembly, "sink")
+                sink_imported = False
+                sink_hole_center = (sx, sy)
+                countertop_cut_ok = False
+                imported_sink_objects: list[Any] = []
                 if sink_asset:
                     sink_asset_title = _asset_title(sink_asset)
                     sink_asset_mat = (
@@ -1012,18 +1628,53 @@ def build_kitchen_assembly_in_blender(
                         if any(term in sink_asset_title for term in ("черн", "black", "pvd"))
                         else sink_rim_mat
                     )
-                    created.extend(
-                        _create_or_import_appliance(
-                            assembly,
-                            "sink",
-                            f"{segment.get('id')}_sink_asset",
-                            (sx, sy, pz + z + h + 0.004 - sink_height / 2),
-                            sink_size,
-                            sink_asset_mat,
-                            collection,
-                            layout_orientation=orientation,
-                        )
+                    imported_sink_objects = _create_or_import_appliance(
+                        assembly,
+                        "sink",
+                        f"{segment.get('id')}_sink_asset",
+                        (sx, sy, pz + z + h + 0.004 - sink_height / 2),
+                        sink_size,
+                        sink_asset_mat,
+                        collection,
+                        layout_orientation=orientation,
                     )
+                    created.extend(imported_sink_objects)
+                    sink_imported = any(obj.get("kitchen_appliance_role") == "sink" for obj in imported_sink_objects)
+                    if sink_imported:
+                        countertop_top = pz + z + h
+                        countertop_cut_ok = _apply_mesh_footprint_cutout(
+                            countertop_obj,
+                            f"{segment.get('id')}_{cutout.get('type')}",
+                            imported_sink_objects,
+                            sample_z_min=countertop_top - 0.035,
+                            sample_z_max=countertop_top + 0.050,
+                            cutter_z_min=pz + z - h * 0.70,
+                            cutter_z_max=countertop_top + h * 0.45,
+                            inset_m=0.014,
+                            collection=collection,
+                        )
+                        real_opening = _real_bbox_opening_from_objects(imported_sink_objects)
+                        if real_opening is not None:
+                            sink_hole_center, sink_hole_xy = real_opening
+                            rectangular_real_cut_ok = _apply_rectangular_cutout(
+                                countertop_obj,
+                                f"{segment.get('id')}_{cutout.get('type')}_real_bbox",
+                                (sink_hole_center[0], sink_hole_center[1], pz + z + h / 2.0),
+                                (sink_hole_xy[0], sink_hole_xy[1], h * 3.0),
+                                collection,
+                            )
+                            countertop_cut_ok = countertop_cut_ok or rectangular_real_cut_ok
+                            sink_hole_size = (sink_hole_xy[0], sink_hole_xy[1], h * 3.0)
+                            created.extend(
+                                _create_sink_backing_basin(
+                                    f"{segment.get('id')}_sink_fbx_backing_basin",
+                                    sink_hole_center,
+                                    sink_hole_xy,
+                                    countertop_top,
+                                    cutout_mat,
+                                    collection,
+                                )
+                            )
                 else:
                     created.append(
                         _create_box(
@@ -1044,32 +1695,64 @@ def build_kitchen_assembly_in_blender(
                             collection,
                         )
                     )
-                created.extend(
-                    _create_sink_placeholder(
-                        f"{segment.get('id')}_sink_visible_insert",
-                        (sx, sy, pz + z + h + 0.026),
-                        sink_size,
-                        cutout_mat,
-                        sink_bowl_mat,
+                if not countertop_cut_ok:
+                    _apply_rectangular_cutout(
+                        countertop_obj,
+                        f"{segment.get('id')}_{cutout.get('type')}",
+                        (sink_hole_center[0], sink_hole_center[1], pz + z + h / 2.0),
+                        sink_hole_size,
                         collection,
                     )
-                )
+                base_entry = base_carcasses.get(str(cutout.get("module_id") or ""))
+                if base_entry:
+                    base_obj, base_module = base_entry
+                    base_z = float(base_module.get("z_m", 0.1))
+                    base_h = float(base_module.get("height_m", 0.72))
+                    _apply_rectangular_cutout(
+                        base_obj,
+                        f"{base_module.get('id')}_{cutout.get('type')}_cabinet",
+                        (sink_hole_center[0], sink_hole_center[1], pz + base_z + base_h / 2.0),
+                        (sink_hole_size[0], sink_hole_size[1], base_h * 1.15),
+                        collection,
+                    )
+                if not sink_imported:
+                    created.extend(
+                        _create_sink_placeholder(
+                            f"{segment.get('id')}_sink_visible_insert",
+                            (sx, sy, pz + z + h + 0.026),
+                            sink_size,
+                            cutout_mat,
+                            sink_bowl_mat,
+                            collection,
+                        )
+                    )
                 faucet_x, faucet_y = _surface_point_local(
                     px,
                     py,
                     x,
                     y,
                     cx + cw / 2,
-                    min(cy + cd - 0.08, max(0.08, cy + 0.08)),
+                    max(0.08, cy + 0.015),
                     orientation,
                 )
                 if sink_asset and _sink_asset_includes_faucet(sink_asset):
                     pass
                 elif _appliance_asset(assembly, "faucet"):
-                    # The current faucet FBX in the supplier catalog has unstable
-                    # nested transforms after import, so keep a procedural mixer
-                    # instead of silently rendering no faucet.
-                    created.extend(_create_faucet_placeholder(f"{segment.get('id')}_sink_faucet", (faucet_x, faucet_y, pz + z + h + 0.005), orientation, faucet_mat, collection))
+                    faucet_size = (0.24, 0.40, 0.36) if orientation == "x" else (0.40, 0.24, 0.36)
+                    imported_faucet = _create_or_import_appliance(
+                        assembly,
+                        "faucet",
+                        f"{segment.get('id')}_sink_faucet_asset",
+                        (faucet_x, faucet_y, pz + z + h + faucet_size[2] / 2.0),
+                        faucet_size,
+                        faucet_mat,
+                        collection,
+                        layout_orientation=orientation,
+                    )
+                    if any(obj.get("kitchen_appliance_role") == "faucet" for obj in imported_faucet):
+                        created.extend(imported_faucet)
+                    else:
+                        created.extend(_create_faucet_placeholder(f"{segment.get('id')}_sink_faucet", (faucet_x, faucet_y, pz + z + h + 0.005), orientation, faucet_mat, collection))
                 else:
                     created.extend(_create_faucet_placeholder(f"{segment.get('id')}_sink_faucet", (faucet_x, faucet_y, pz + z + h + 0.005), orientation, faucet_mat, collection))
             elif cutout.get("type") == "entry_handwash":
@@ -1097,29 +1780,51 @@ def build_kitchen_assembly_in_blender(
                 )
                 cooktop_asset = _appliance_asset(assembly, "cooktop")
                 cooktop_size = (cd, cw, 0.012) if orientation == "y" else (cw, cd, 0.012)
+                cooktop_imported = False
                 if cooktop_asset:
+                    imported_cooktop_objects = _create_or_import_appliance(
+                        assembly,
+                        "cooktop",
+                        f"{segment.get('id')}_cooktop_asset",
+                        (sx, sy, pz + z + h - 0.002),
+                        cooktop_size,
+                        appliance_mat,
+                        collection,
+                        layout_orientation=orientation,
+                    )
+                    created.extend(imported_cooktop_objects)
+                    cooktop_imported = any(obj.get("kitchen_appliance_role") == "cooktop" for obj in imported_cooktop_objects)
+                    if cooktop_imported:
+                        # Some supplier induction panels import as a very flat glass
+                        # slab with weak ring contrast. Keep the FBX body, but add
+                        # thin visible burner rings so the cooktop reads correctly.
+                        _, _, cooktop_h = cooktop_size
+                        burner_radius = min(cooktop_size[0], cooktop_size[1]) * 0.13
+                        for idx, (dx, dy, radius_scale) in enumerate(
+                            [(-0.22, -0.22, 0.92), (0.22, -0.20, 0.72), (-0.22, 0.22, 0.72), (0.22, 0.22, 0.92)],
+                            start=1,
+                        ):
+                            ring = _create_torus(
+                                f"{segment.get('id')}_cooktop_asset_visible_ring_{idx}",
+                                (sx + dx * cooktop_size[0], sy + dy * cooktop_size[1], pz + z + h + cooktop_h / 2 + 0.005),
+                                burner_radius * radius_scale,
+                                0.004,
+                                burner_mat,
+                                collection,
+                            )
+                            ring["kitchen_appliance_role"] = "cooktop"
+                            created.append(ring)
+                if not cooktop_imported:
                     created.extend(
-                        _create_or_import_appliance(
-                            assembly,
-                            "cooktop",
-                            f"{segment.get('id')}_cooktop_asset",
-                            (sx, sy, pz + z + h - 0.002),
+                        _create_cooktop_placeholder(
+                            f"{segment.get('id')}_cooktop_visible_flush",
+                            (sx, sy, pz + z + h + 0.003),
                             cooktop_size,
-                            appliance_mat,
+                            cooktop_mat,
+                            burner_mat,
                             collection,
-                            layout_orientation=orientation,
                         )
                     )
-                created.extend(
-                    _create_cooktop_placeholder(
-                        f"{segment.get('id')}_cooktop_visible_flush",
-                        (sx, sy, pz + z + h + 0.003),
-                        cooktop_size,
-                        cooktop_mat,
-                        burner_mat,
-                        collection,
-                    )
-                )
 
     for panel in assembly.get("backsplash_segments") or []:
         x = float(panel.get("x_m", 0.0))

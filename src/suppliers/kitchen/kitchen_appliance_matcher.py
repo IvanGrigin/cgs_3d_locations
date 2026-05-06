@@ -85,17 +85,18 @@ APPLIANCE_TARGETS: dict[str, dict[str, Any]] = {
 ASSET_IMPORT_OVERRIDES: dict[str, dict[str, Any]] = {
     "3ddd::url::https://3ddd.ru/3dmodels/show/kholodil_nik_aeg_s98392cmx2": {
         "rotation_z_deg_by_layout": {"x": 0.0, "y": -90.0},
-        "preferred_for_role": "fridge",
-        "note": "Tall textured stainless/gray refrigerator; better visual source than flat ATLANT import.",
+        "avoid_for_role": "fridge",
+        "note": "Imports reliably, but has only Base/Door meshes and reads too much like a procedural block.",
     },
     "3ddd::url::https://3ddd.ru/3dmodels/show/kholodilnik_hofmann_rf564cdbs_hf": {
         "rotation_z_deg_by_layout": {"x": 0.0, "y": -90.0},
         "preferred_for_role": "fridge",
+        "note": "Detailed FBX refrigerator with many mesh parts and better visible door detail.",
     },
     "3ddd::url::https://3ddd.ru/3dmodels/show/kholodilnik_s_displeem_atlant_khm_4424_nd": {
         "rotation_z_deg_by_layout": {"x": 0.0, "y": -90.0},
-        "avoid_for_role": "fridge",
-        "note": "Valid geometry, but weak material/texturing in current FBX import.",
+        "preferred_for_role": "fridge",
+        "note": "Detailed 60 cm wide FBX refrigerator; keeps realistic tall proportions in a standard kitchen slot.",
     },
     "zeelproject::id::2538": {
         "rotation_z_deg_by_layout": {"x": 0.0, "y": -90.0},
@@ -103,7 +104,7 @@ ASSET_IMPORT_OVERRIDES: dict[str, dict[str, Any]] = {
         "note": "Valid asset, but the imported local axes make it easy to face sideways in wall scenes.",
     },
     "3ddd::url::https://3ddd.ru/3dmodels/show/miele_rangehood": {
-        "rotation_z_deg_by_layout": {"x": 0.0, "y": -90.0},
+        "rotation_z_deg_by_layout": {"x": 180.0, "y": 90.0},
         "preferred_for_role": "hood",
     },
     "3ddd::url::https://3ddd.ru/3dmodels/show/mikrovolnovaia_pech_hofmann_mw720dhss_hf_1": {
@@ -235,12 +236,14 @@ def _prompt_preference_score(item: dict[str, Any], role: str, user_prompt: str |
         wants_light = any(term in prompt for term in ("светл", "white", "бел", "сканди", "warm white"))
         unique_key = str(item.get("unique_key") or "")
         title = normalize_text(item.get("title"))
-        if "aeg_s98392cmx2" in unique_key or "aeg s98392cmx2" in title:
+        if "hofmann_rf564cdbs" in unique_key or "hofmann rf564cdbs" in title:
+            return 0.9
+        if "atlant_khm_4424" in unique_key or "atlant" in title:
             return 1.0
+        if "aeg_s98392cmx2" in unique_key or "aeg s98392cmx2" in title:
+            return 0.42
         if any(term in title for term in ("hofmann", "gaggenau")):
             return 0.88
-        if "atlant" in title:
-            return 0.18
         if wants_light:
             title_and_color = normalize_text(f"{item.get('title') or ''} {item.get('color') or ''}")
             if any(term in title_and_color for term in ("бел", "white")):

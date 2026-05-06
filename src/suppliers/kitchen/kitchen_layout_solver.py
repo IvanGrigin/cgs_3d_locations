@@ -502,17 +502,36 @@ def _build_upper_modules(base_modules: list[dict[str, Any]], required: dict[str,
             }
         )
     else:
-        segment_base = next((base for base in base_modules if base.get("has_countertop", True)), None)
+        segment_base = next(
+            (
+                base
+                for base in base_modules
+                if base.get("has_countertop", True)
+                and not base.get("cutouts")
+                and base.get("type") not in {"sink_cabinet", "oven_cabinet"}
+            ),
+            None,
+        )
+        if segment_base is None:
+            segment_base = next(
+                (
+                    base
+                    for base in base_modules
+                    if base.get("has_countertop", True) and not base.get("cutouts")
+                ),
+                None,
+            )
         if segment_base:
             decor.append(
                 {
                     "id": "decor_microwave_001",
                     "type": "microwave",
                     "placement": "countertop",
-                    "x_mm": int(segment_base["x_mm"]) + min(max(260, int(segment_base["width_mm"]) // 2), 420),
+                    "x_mm": int(segment_base["x_mm"]) + int(segment_base["width_mm"]) // 2,
                     "y_mm": 390,
-                    "z_mm": _dim("plinth_height", 100) + _dim("base_body_height", 720) + _dim("countertop_thickness", 38) + 12,
+                    "z_mm": _dim("plinth_height", 100) + _dim("base_body_height", 720) + _dim("countertop_thickness", 38) + 2,
                     "orientation": "x",
+                    "support_module_id": segment_base.get("id"),
                 }
             )
             warnings.append("microwave_placement:countertop")
