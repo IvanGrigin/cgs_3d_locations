@@ -23,6 +23,7 @@ _SEMANTIC_ALIASES: dict[str, tuple[str, ...]] = {
     "computer": ("computer", "monitor", "laptop", "keyboard", "macbook", "imac"),
     "armchair": ("armchair", "easy chair"),
     "chair": ("chair", "dining chair", "office chair", "lounge chair"),
+    "dining_table": ("dining table", "dining_table", "обеденный стол"),
     "sofa": ("sofa", "loveseat", "chaise longue sofa"),
     "coffee_table": ("coffee table",),
     "side_table": ("side table", "corner table", "end table"),
@@ -33,8 +34,14 @@ _SEMANTIC_ALIASES: dict[str, tuple[str, ...]] = {
     "wall_art": ("wall art", "picture"),
     "rug": ("rug",),
     "shelf": ("shelf", "bookcase", "bookshelf"),
-    "plant": ("plant",),
     "mirror": ("mirror",),
+    "bathroom_sink": ("standing sink", "sink", "washbasin", "basin", "раковина", "умывальник"),
+    "kitchenware": ("kitchenware", "cooking set", "kitchen decor", "набор для готовки", "мелочь для кухни", "посуда"),
+    "kitchen_faucet": ("kitchen faucet", "kitchen_faucet", "смеситель для кухни"),
+    "food_drink": ("food drink", "food_drink", "fruit plate", "еда и напитки", "фрукт"),
+    "decorative_set": ("decorative set", "decorative_set", "olive and oil", "oil decorative", "декоративный набор"),
+    "plant_planter_vase": ("plant planter vase", "plant_planter_vase", "flower vase", "flower bouquet", "букет", "ваза"),
+    "plant": ("plant",),
 }
 
 _SUPPLIER_REPLACE_GROUPS = {
@@ -47,6 +54,7 @@ _SUPPLIER_REPLACE_GROUPS = {
     "computer",
     "armchair",
     "chair",
+    "dining_table",
     "sofa",
     "coffee_table",
     "side_table",
@@ -55,6 +63,12 @@ _SUPPLIER_REPLACE_GROUPS = {
     "lamp_floor",
     "shelf",
     "mirror",
+    "bathroom_sink",
+    "kitchenware",
+    "kitchen_faucet",
+    "food_drink",
+    "decorative_set",
+    "plant_planter_vase",
 }
 
 _KEEP_GENERATED_GROUPS = {

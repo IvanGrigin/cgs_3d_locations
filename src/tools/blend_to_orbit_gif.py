@@ -163,6 +163,8 @@ def render_orbit():
     margin = float(args["margin"])
     yaw_step = float(args["yaw_step"])
     elevations_deg = [float(x) for x in args["elevations_deg"]]
+    frame_indices = args.get("frame_indices")
+    frame_indices = set(int(x) for x in frame_indices) if frame_indices is not None else None
 
     os.makedirs(frames_dir, exist_ok=True)
 
@@ -180,22 +182,26 @@ def render_orbit():
     setup_render(scene, width, height, samples)
 
     frame_idx = 0
+    rendered_count = 0
     for pitch_deg in elevations_deg:
         distance = compute_camera_distance(cam_obj, bounds, pitch_deg, margin)
         yaw = 0.0
         while yaw < 360.0 - 1e-9:
-            place_camera(cam_obj, target_center, distance, yaw, pitch_deg)
-            scene.camera = cam_obj
-            out_path = os.path.join(frames_dir, f"frame_{frame_idx:03d}.png")
-            scene.render.filepath = out_path
-            bpy.ops.render.render(write_still=True)
-            print(f"[orbit_gif] rendered {out_path}")
+            if frame_indices is None or frame_idx in frame_indices:
+                place_camera(cam_obj, target_center, distance, yaw, pitch_deg)
+                scene.camera = cam_obj
+                out_path = os.path.join(frames_dir, f"frame_{frame_idx:03d}.png")
+                scene.render.filepath = out_path
+                bpy.ops.render.render(write_still=True)
+                print(f"[orbit_gif] rendered {out_path}")
+                rendered_count += 1
             frame_idx += 1
             yaw += yaw_step
 
     print(json.dumps({
         "frames_dir": frames_dir,
         "frame_count": frame_idx,
+        "rendered_count": rendered_count,
     }, ensure_ascii=False))
     return frame_idx
 
@@ -224,6 +230,13 @@ def build_cli() -> argparse.ArgumentParser:
     )
     p.add_argument("--duration-ms", type=int, default=500, help="Длительность одного кадра в GIF")
     p.add_argument("--margin", type=float, default=1.35, help="Запас дистанции камеры")
+    p.add_argument("--gif", default=None, help="Путь итогового GIF. По умолчанию рядом с .blend")
+    p.add_argument("--frames-dir", default=None, help="Каталог PNG-кадров. По умолчанию рядом с .blend")
+    p.add_argument(
+        "--isolated-frames",
+        action="store_true",
+        help="Рендерить каждый кадр отдельным Blender-процессом, чтобы освобождать память между кадрами.",
+    )
     p.add_argument(
         "--keep-frames",
         action="store_true",
@@ -256,8 +269,8 @@ def parse_elevations(raw: str) -> list[float]:
         if not s:
             continue
         vals.append(float(s))
-    if len(vals) != 3:
-        raise RuntimeError("Нужно передать ровно 3 угла возвышения, например --elevations 0,35,72")
+    if not vals:
+        raise RuntimeError("Нужно передать хотя бы один угол возвышения, например --elevations 30")
     return vals
 
 
@@ -271,6 +284,7 @@ def run_blender_render(
     yaw_step: float,
     elevations_deg: list[float],
     margin: float,
+    frame_indices: list[int] | None = None,
 ) -> None:
     with tempfile.TemporaryDirectory(prefix="blend_orbit_") as tmpdir:
         tmpdir_path = Path(tmpdir)
@@ -288,6 +302,7 @@ def run_blender_render(
                     "yaw_step": yaw_step,
                     "elevations_deg": elevations_deg,
                     "margin": margin,
+                    "frame_indices": frame_indices,
                 },
                 ensure_ascii=False,
                 indent=2,
@@ -322,31 +337,92 @@ exec(Path(r"{helper_script}").read_text(encoding="utf-8"), {{}})
         subprocess.run(cmd, check=True)
 
 
-def build_gif_from_frames(frames_dir: Path, gif_path: Path, duration_ms: int) -> None:
-    try:
-        from PIL import Image
-    except ImportError as e:
-        raise RuntimeError("Для сборки GIF нужен Pillow: pip install pillow") from e
+def render_frames_isolated(
+    blender_bin: str,
+    blend_path: Path,
+    frames_dir: Path,
+    width: int,
+    height: int,
+    samples: int,
+    yaw_step: float,
+    elevations_deg: list[float],
+    margin: float,
+    frame_count: int,
+) -> None:
+    for frame_idx in range(frame_count):
+        run_blender_render(
+            blender_bin=blender_bin,
+            blend_path=blend_path,
+            frames_dir=frames_dir,
+            width=width,
+            height=height,
+            samples=samples,
+            yaw_step=yaw_step,
+            elevations_deg=elevations_deg,
+            margin=margin,
+            frame_indices=[frame_idx],
+        )
 
+
+def build_gif_from_frames(frames_dir: Path, gif_path: Path, duration_ms: int) -> None:
     frames = sorted(frames_dir.glob("frame_*.png"))
     if not frames:
         raise RuntimeError(f"Не найдено кадров в {frames_dir}")
 
-    images = [Image.open(p).convert("RGBA") for p in frames]
-    first, rest = images[0], images[1:]
-
     gif_path.parent.mkdir(parents=True, exist_ok=True)
-    first.save(
-        gif_path,
-        save_all=True,
-        append_images=rest,
-        duration=duration_ms,
-        loop=0,
-        disposal=2,
-    )
+    ffmpeg = shutil.which("ffmpeg")
+    if ffmpeg:
+        fps = max(1.0, 1000.0 / max(float(duration_ms), 1.0))
+        palette = frames_dir / "palette.png"
+        pattern = str((frames_dir / "frame_%03d.png").resolve())
+        subprocess.run(
+            [
+                ffmpeg,
+                "-y",
+                "-framerate",
+                f"{fps:.6f}",
+                "-i",
+                pattern,
+                "-vf",
+                "palettegen=stats_mode=diff",
+                str(palette.resolve()),
+            ],
+            check=True,
+        )
+        subprocess.run(
+            [
+                ffmpeg,
+                "-y",
+                "-framerate",
+                f"{fps:.6f}",
+                "-i",
+                pattern,
+                "-i",
+                str(palette.resolve()),
+                "-lavfi",
+                "paletteuse=dither=bayer:bayer_scale=3",
+                str(gif_path.resolve()),
+            ],
+            check=True,
+        )
+        return
 
-    for img in images:
-        img.close()
+    try:
+        from PIL import Image
+    except ImportError as e:
+        raise RuntimeError("Для сборки GIF нужен ffmpeg или Pillow: pip install pillow") from e
+
+    first = Image.open(frames[0]).convert("RGBA")
+    rest = []
+    try:
+        for path in frames[1:]:
+            with Image.open(path) as img:
+                rest.append(img.convert("RGBA"))
+        first.save(gif_path, save_all=True, append_images=rest, duration=duration_ms, loop=0, disposal=2)
+    finally:
+        first.close()
+        for img in rest:
+            img.close()
 
 
 def main() -> None:
@@ -360,6 +436,8 @@ def main() -> None:
     elevations_deg = parse_elevations(args.elevations)
 
     frames_expected = int(round(360.0 / float(args.yaw_step))) * len(elevations_deg)
+    if frames_expected <= 0:
+        raise RuntimeError("Некорректное число GIF-кадров")
     if frames_expected != 36:
         print(
             f"⚠️ Предупреждение: при yaw_step={args.yaw_step} и elevations={elevations_deg} "
@@ -368,24 +446,38 @@ def main() -> None:
 
     base_dir = blend_path.parent
     stem = blend_path.stem
-    frames_dir = base_dir / f"{stem}_gif_frames"
-    gif_path = base_dir / f"{stem}.gif"
+    frames_dir = Path(args.frames_dir).expanduser().resolve() if args.frames_dir else base_dir / f"{stem}_gif_frames"
+    gif_path = Path(args.gif).expanduser().resolve() if args.gif else base_dir / f"{stem}.gif"
 
     if frames_dir.exists():
         shutil.rmtree(frames_dir)
     frames_dir.mkdir(parents=True, exist_ok=True)
 
-    run_blender_render(
-        blender_bin=blender_bin,
-        blend_path=blend_path,
-        frames_dir=frames_dir,
-        width=int(args.width),
-        height=int(args.height),
-        samples=int(args.samples),
-        yaw_step=float(args.yaw_step),
-        elevations_deg=elevations_deg,
-        margin=float(args.margin),
-    )
+    if args.isolated_frames:
+        render_frames_isolated(
+            blender_bin=blender_bin,
+            blend_path=blend_path,
+            frames_dir=frames_dir,
+            width=int(args.width),
+            height=int(args.height),
+            samples=int(args.samples),
+            yaw_step=float(args.yaw_step),
+            elevations_deg=elevations_deg,
+            margin=float(args.margin),
+            frame_count=frames_expected,
+        )
+    else:
+        run_blender_render(
+            blender_bin=blender_bin,
+            blend_path=blend_path,
+            frames_dir=frames_dir,
+            width=int(args.width),
+            height=int(args.height),
+            samples=int(args.samples),
+            yaw_step=float(args.yaw_step),
+            elevations_deg=elevations_deg,
+            margin=float(args.margin),
+        )
 
     build_gif_from_frames(
         frames_dir=frames_dir,

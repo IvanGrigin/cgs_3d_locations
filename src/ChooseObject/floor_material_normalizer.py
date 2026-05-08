@@ -144,6 +144,8 @@ def _sample_image_pixels(image_path: Path, max_pixels: int = 5000) -> list[tuple
         if r <= 6 and g <= 6 and b <= 6:
             continue
         usable.append((r, g, b))
+    if not usable:
+        usable = pixels
     if len(usable) <= max_pixels:
         return usable
     step = max(1, len(usable) // max_pixels)
@@ -182,12 +184,23 @@ def analyze_floor_material_colors(base_dir: Path, local_image_paths: list[str], 
     for raw in local_image_paths[:3]:
         path = Path(raw).expanduser()
         if not path.is_absolute():
-            path = Path(base_dir) / path
-        if path.exists():
-            pixels.extend(_sample_image_pixels(path))
+            candidates = [Path(base_dir) / path, Path.cwd() / path]
+        else:
+            candidates = [path]
+        for candidate in candidates:
+            if candidate.exists():
+                pixels.extend(_sample_image_pixels(candidate))
+                break
     if not pixels:
         return {"average_rgb": None, "average_hex": None, "dominant_colors_rgb": [], "dominant_colors_hex": []}
     avg = [int(round(sum(p[i] for p in pixels) / len(pixels))) for i in range(3)]
+    if k <= 0:
+        return {
+            "average_rgb": avg,
+            "average_hex": _rgb_to_hex(avg),
+            "dominant_colors_rgb": [],
+            "dominant_colors_hex": [],
+        }
     palette = _kmeans_rgb(pixels, k=k)
     return {
         "average_rgb": avg,

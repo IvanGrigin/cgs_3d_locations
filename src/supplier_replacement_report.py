@@ -10,7 +10,12 @@ from pathlib import Path
 from typing import Any
 
 
-SELECTED_BINDING_STATUSES = {"heuristic_top1_selected", "llm_reranked_top1_selected"}
+SELECTED_BINDING_STATUSES = {
+    "heuristic_top1_selected",
+    "heuristic_first_acceptable_selected",
+    "llm_reranked_top1_selected",
+    "llm_reranked_first_acceptable_selected",
+}
 
 
 def _read_json(path: str | Path) -> Any:
@@ -75,6 +80,136 @@ def _format_number(value: Any, digits: int = 3) -> str:
     return f"{number:.{digits}f}".rstrip("0").rstrip(".")
 
 
+def _float_or_none(value: Any) -> float | None:
+    if value is None or value == "":
+        return None
+    try:
+        number = float(value)
+    except Exception:
+        return None
+    if number != number or number in {float("inf"), float("-inf")}:
+        return None
+    return number
+
+
+def _fmt_score(value: Any) -> str:
+    number = _float_or_none(value)
+    if number is None:
+        return "n/a"
+    return f"{number:.3f}".rstrip("0").rstrip(".")
+
+
+def _json_safe(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {str(k): _json_safe(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_json_safe(v) for v in value]
+    if isinstance(value, tuple):
+        return [_json_safe(v) for v in value]
+    if isinstance(value, float):
+        return value if _float_or_none(value) is not None else None
+    return value
+
+
+def _candidate_id(candidate: dict[str, Any] | None) -> str:
+    if not isinstance(candidate, dict):
+        return ""
+    for key in ("unique_key", "supplier_id", "sku", "external_id", "id"):
+        value = str(candidate.get(key) or "").strip()
+        if value:
+            return value
+    return str(candidate.get("title") or candidate.get("name") or "").strip()
+
+
+def _candidate_title(candidate: dict[str, Any] | None) -> str:
+    if not isinstance(candidate, dict):
+        return ""
+    return str(candidate.get("title") or candidate.get("name") or "Без названия").strip()
+
+
+def _candidate_category(candidate: dict[str, Any] | None) -> str:
+    if not isinstance(candidate, dict):
+        return ""
+    for key in ("category_norm", "category_raw", "semantic_group", "category"):
+        value = str(candidate.get(key) or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def _score_breakdown(candidate: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(candidate, dict):
+        return {}
+    value = candidate.get("score_breakdown")
+    return value if isinstance(value, dict) else {}
+
+
+def _candidate_final_score(candidate: dict[str, Any] | None) -> float | None:
+    if not isinstance(candidate, dict):
+        return None
+    return _float_or_none(candidate.get("final_score") or _score_breakdown(candidate).get("final_score") or candidate.get("score"))
+
+
+def _candidate_has_local_asset(candidate: dict[str, Any] | None) -> bool:
+    if not isinstance(candidate, dict):
+        return False
+    return bool(str(candidate.get("asset_local_path") or "").strip())
+
+
+def _candidate_has_downloadable_asset(candidate: dict[str, Any] | None) -> bool:
+    if not isinstance(candidate, dict):
+        return False
+    if str(candidate.get("model_download_url") or "").strip():
+        return True
+    if str(candidate.get("model_download_landing_url") or "").strip():
+        return True
+    breakdown = _score_breakdown(candidate)
+    return bool(breakdown.get("has_downloadable_asset") or breakdown.get("has_model_url"))
+
+
+def _candidate_model_url(candidate: dict[str, Any] | None) -> str:
+    if not isinstance(candidate, dict):
+        return ""
+    for key in ("model_download_url", "download_url", "model_download_landing_url", "model_page_url", "model_vendor_url"):
+        value = str(candidate.get(key) or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def _selection_mode_for_row(binding: dict[str, Any], candidate: dict[str, Any] | None, bindings_meta: dict[str, Any]) -> str:
+    for value in (
+        binding.get("supplier_selection_mode"),
+        binding.get("selection_mode"),
+        candidate.get("selection_mode") if isinstance(candidate, dict) else None,
+        _score_breakdown(candidate).get("selection_mode"),
+        bindings_meta.get("supplier_selection_mode"),
+        bindings_meta.get("selection_mode"),
+    ):
+        text = str(value or "").strip()
+        if text:
+            return text
+    return ""
+
+
+def _status_badge_class(status: Any) -> str:
+    text = str(status or "").lower()
+    if text in SELECTED_BINDING_STATUSES or "selected" in text:
+        return "ok"
+    if "no_real_asset" in text or "failed" in text or "error" in text:
+        return "bad"
+    if "no_candidates" in text or "no_acceptable" in text:
+        return "warn"
+    if "kept" in text or "generated" in text:
+        return "muted"
+    return "neutral"
+
+
+def _status_badge(status: Any) -> str:
+    text = str(status or "unknown").strip() or "unknown"
+    return f'<span class="badge {_status_badge_class(text)}">{_h(text)}</span>'
+
+
 def _price_value_sum(rows: list[dict[str, Any]], key: str) -> float | None:
     total = 0.0
     found = False
@@ -135,34 +270,122 @@ def _applied_scene_items(scene_json_path: str | Path | None) -> dict[str, dict[s
     return out
 
 
+def _scene_supplier_summary(scene_json_path: str | Path | None) -> dict[str, Any]:
+    if not scene_json_path:
+        return {}
+    path = Path(scene_json_path).expanduser().resolve()
+    if not path.is_file():
+        return {}
+    try:
+        data = _read_json(path)
+    except Exception:
+        return {}
+    meta = data.get("meta") or {}
+    if not isinstance(meta, dict):
+        return {}
+    summary = meta.get("supplier_binding_summary") or {}
+    return summary if isinstance(summary, dict) else {}
+
+
+def _build_issues_by_target(blender_build_report_path: str | Path | None) -> dict[str, list[str]]:
+    if not blender_build_report_path:
+        return {}
+    path = Path(blender_build_report_path).expanduser().resolve()
+    if not path.is_file():
+        return {}
+    try:
+        data = _read_json(path)
+    except Exception:
+        return {}
+    raw = data.get("item_issues") if isinstance(data, dict) else {}
+    if not isinstance(raw, dict):
+        return {}
+    out: dict[str, list[str]] = {}
+    for target_id, issues in raw.items():
+        if isinstance(issues, list):
+            out[str(target_id)] = [str(x) for x in issues if str(x).strip()]
+    return out
+
+
+def _binding_consistency_info(binding: dict[str, Any], bindings_meta: dict[str, Any]) -> dict[str, Any]:
+    notes = [str(x) for x in (binding.get("selection_notes") or [])]
+    shared_candidate = ""
+    for note in notes:
+        if note.startswith("scene_consistency_shared_candidate:"):
+            shared_candidate = note.split(":", 1)[1].strip()
+            break
+    group_id = str(binding.get("consistency_group_id") or "").strip()
+    applied = bool(shared_candidate or binding.get("consistency_applied"))
+    scene_consistency = bindings_meta.get("scene_consistency")
+    if not group_id and isinstance(scene_consistency, dict):
+        for group in scene_consistency.get("applied_groups") or []:
+            if not isinstance(group, dict):
+                continue
+            target_ids = {str(x) for x in group.get("target_ids") or []}
+            if str(binding.get("target_id") or "") in target_ids:
+                group_id = str(group.get("group_id") or group.get("semantic_group") or "").strip()
+                applied = True
+                if not shared_candidate:
+                    shared_candidate = str(group.get("chosen_candidate_id") or group.get("shared_candidate") or "").strip()
+                break
+    return {
+        "consistency_group_id": group_id or None,
+        "consistency_applied": applied,
+        "shared_candidate": shared_candidate or None,
+    }
+
+
+def _apply_status_for_row(binding: dict[str, Any], applied_item: dict[str, Any] | None) -> str:
+    if applied_item is not None:
+        return "applied"
+    if str(binding.get("selection_status") or "") in SELECTED_BINDING_STATUSES:
+        return "not_applied"
+    return "not_selected"
+
+
 def _replacement_rows(
     *,
     bindings_json_path: str | Path,
     supplier_scene_json_path: str | Path | None,
+    blender_build_report_path: str | Path | None = None,
 ) -> list[dict[str, Any]]:
     bindings_data = _read_json(bindings_json_path)
+    bindings_meta = bindings_data.get("meta") or {}
+    if not isinstance(bindings_meta, dict):
+        bindings_meta = {}
     bindings = bindings_data.get("bindings") or []
     if not isinstance(bindings, list):
         raise RuntimeError(f"Некорректный supplier bindings JSON: {bindings_json_path}")
 
     applied_items = _applied_scene_items(supplier_scene_json_path)
+    build_issues = _build_issues_by_target(blender_build_report_path)
     rows: list[dict[str, Any]] = []
     for binding in bindings:
         if not isinstance(binding, dict):
             continue
         candidate = _selected_candidate(binding)
-        if candidate is None:
-            continue
+        raw_chosen = binding.get("chosen_candidate")
+        if candidate is None and isinstance(raw_chosen, dict):
+            candidate = raw_chosen
 
         target_id = str(binding.get("target_id") or "").strip()
         applied_item = applied_items.get(target_id)
-        if applied_items and applied_item is None:
-            continue
 
-        images = _parse_images(candidate.get("images_json") or candidate.get("images"))
+        images = _parse_images(candidate.get("images_json") or candidate.get("images")) if isinstance(candidate, dict) else []
         original = {}
         if isinstance(applied_item, dict):
             original = deepcopy(((applied_item.get("meta") or {}).get("original_generated_item") or {}))
+        consistency = _binding_consistency_info(binding, bindings_meta)
+        score_breakdown = _score_breakdown(candidate)
+        top_candidates = [deepcopy(x) for x in (binding.get("top_candidates") or []) if isinstance(x, dict)]
+        notes = deepcopy(binding.get("selection_notes") or [])
+        target_build_issues = build_issues.get(target_id) or []
+        used_alternative = any("asset_acquisition_selected_real_candidate_rank" in str(x) and not str(x).endswith(":1") for x in notes)
+        used_alternative = used_alternative or any(str(x).startswith("used_alternative_candidate:") for x in target_build_issues)
+        status = str(binding.get("selection_status") or "").strip()
+        rejection_reason = ""
+        if status in {"no_candidates_found", "no_acceptable_candidates_found", "no_real_asset_after_acquisition"}:
+            rejection_reason = ", ".join(str(x) for x in notes) or status
 
         rows.append(
             {
@@ -170,32 +393,53 @@ def _replacement_rows(
                 "old_name": original.get("name") or binding.get("category") or "",
                 "old_category": original.get("category") or binding.get("category") or "",
                 "semantic_group": binding.get("semantic_group"),
-                "new_title": candidate.get("title") or "Без названия",
-                "brand": candidate.get("brand"),
-                "collection": candidate.get("collection"),
-                "source_site": candidate.get("source_site"),
-                "product_url": _product_link(candidate),
-                "model_url": candidate.get("model_download_url") or candidate.get("model_page_url"),
-                "price": _format_price(candidate.get("price_value"), candidate.get("price_currency")),
-                "price_value": candidate.get("price_value"),
-                "price_currency": candidate.get("price_currency") or "RUB",
+                "target_category": binding.get("category"),
+                "replacement_policy": binding.get("replacement_policy"),
+                "new_title": _candidate_title(candidate) if candidate else "n/a",
+                "candidate_id": _candidate_id(candidate),
+                "candidate_category": _candidate_category(candidate),
+                "brand": candidate.get("brand") if candidate else None,
+                "collection": candidate.get("collection") if candidate else None,
+                "source_site": candidate.get("source_site") if candidate else None,
+                "product_url": _product_link(candidate) if candidate else "",
+                "model_url": _candidate_model_url(candidate),
+                "price": _format_price(candidate.get("price_value"), candidate.get("price_currency")) if candidate else "n/a",
+                "price_value": candidate.get("price_value") if candidate else None,
+                "price_currency": (candidate.get("price_currency") if candidate else None) or "RUB",
                 "image_url": images[0] if images else "",
                 "images": images,
-                "asset_status": candidate.get("asset_status"),
-                "asset_format": candidate.get("asset_format"),
-                "asset_local_path": candidate.get("asset_local_path"),
-                "style": candidate.get("style"),
-                "color": candidate.get("color"),
-                "materials": candidate.get("materials"),
-                "description": candidate.get("description"),
+                "asset_status": candidate.get("asset_status") if candidate else None,
+                "asset_format": candidate.get("asset_format") if candidate else None,
+                "asset_local_path": candidate.get("asset_local_path") if candidate else None,
+                "has_local_asset": _candidate_has_local_asset(candidate),
+                "has_downloadable_asset": _candidate_has_downloadable_asset(candidate),
+                "style": candidate.get("style") if candidate else None,
+                "color": candidate.get("color") if candidate else None,
+                "materials": candidate.get("materials") if candidate else None,
+                "description": candidate.get("description") if candidate else None,
                 "dimensions_cm": [
-                    candidate.get("width_cm"),
-                    candidate.get("depth_cm"),
-                    candidate.get("height_cm"),
+                    candidate.get("width_cm") if candidate else None,
+                    candidate.get("depth_cm") if candidate else None,
+                    candidate.get("height_cm") if candidate else None,
                 ],
-                "selection_status": binding.get("selection_status"),
+                "status": status,
+                "selection_status": status,
+                "selection_mode": _selection_mode_for_row(binding, candidate, bindings_meta),
                 "replacement_reason": binding.get("replacement_reason"),
-                "selection_notes": deepcopy(binding.get("selection_notes") or []),
+                "selection_notes": notes,
+                "selection_reason": binding.get("selection_reason") or (candidate.get("selection_reason") if candidate else None),
+                "rejection_reason": binding.get("rejection_reason") or rejection_reason,
+                "acquisition_status": candidate.get("asset_status") if candidate else status,
+                "apply_status": _apply_status_for_row(binding, applied_item),
+                "used_alternative_candidate": used_alternative,
+                "build_issues": target_build_issues,
+                "final_score": _candidate_final_score(candidate),
+                "score_breakdown": score_breakdown,
+                "top_candidates": top_candidates,
+                "chosen_candidate": deepcopy(candidate) if candidate else None,
+                "candidate_count": binding.get("candidate_count"),
+                "is_selected": status in SELECTED_BINDING_STATUSES and candidate is not None,
+                **consistency,
             }
         )
     return rows
@@ -399,6 +643,101 @@ def _image_links_html(row: dict[str, Any]) -> str:
     return "<br>".join(links) if links else "нет фото"
 
 
+DESIGN_SCORE_KEYS = [
+    "identity_gate_checked",
+    "identity_gate_passed",
+    "identity_target_group",
+    "identity_required_hits",
+    "identity_forbidden_hits",
+    "identity_reject_reason",
+    "category_score",
+    "size_score",
+    "asset_availability_score",
+    "color_score",
+    "material_score",
+    "style_score",
+    "epoch_score",
+    "description_score",
+    "price_score",
+    "design_similarity_score",
+    "negative_penalty",
+]
+
+
+def _score_table_html(score_breakdown: dict[str, Any]) -> str:
+    if not isinstance(score_breakdown, dict) or not score_breakdown:
+        return '<div class="na">n/a</div>'
+    cells = []
+    for key in DESIGN_SCORE_KEYS:
+        value = score_breakdown.get(key)
+        if isinstance(value, (list, dict)):
+            text = json.dumps(value, ensure_ascii=False)
+        elif isinstance(value, (int, float)) and not isinstance(value, bool):
+            text = _fmt_score(value)
+        elif value is None:
+            text = "n/a"
+        else:
+            text = str(value)
+        cells.append(f"<tr><th>{_h(key)}</th><td>{_h(text)}</td></tr>")
+    return f'<table class="score-table"><tbody>{"".join(cells)}</tbody></table>'
+
+
+def _candidate_bool(value: bool) -> str:
+    return "yes" if value else "no"
+
+
+def _top_candidates_html(candidates: list[dict[str, Any]]) -> str:
+    if not candidates:
+        return '<div class="na">n/a</div>'
+    rows = []
+    for idx, candidate in enumerate(candidates, start=1):
+        breakdown = _score_breakdown(candidate)
+        rows.append(
+            "<tr>"
+            f"<td>{idx}</td>"
+            f"<td><code>{_h(_candidate_id(candidate))}</code></td>"
+            f"<td>{_h(_candidate_title(candidate))}</td>"
+            f"<td>{_h(_candidate_category(candidate))}</td>"
+            f"<td>{_h(_format_price(candidate.get('price_value'), candidate.get('price_currency')))}</td>"
+            f"<td>{_h(_fmt_score(_candidate_final_score(candidate)))}</td>"
+            f"<td>{_h(_fmt_score(breakdown.get('category_score')))}</td>"
+            f"<td>{_h(_fmt_score(breakdown.get('size_score')))}</td>"
+            f"<td>{_h(_fmt_score(breakdown.get('style_score')))}</td>"
+            f"<td>{_h(_fmt_score(breakdown.get('color_score')))}</td>"
+            f"<td>{_h(_fmt_score(breakdown.get('material_score')))}</td>"
+            f"<td>{_h(_fmt_score(breakdown.get('price_score')))}</td>"
+            f"<td>{_h(_fmt_score(breakdown.get('asset_availability_score')))}</td>"
+            f"<td>{_h(_candidate_bool(_candidate_has_local_asset(candidate)))}</td>"
+            f"<td>{_h(_candidate_bool(_candidate_has_downloadable_asset(candidate)))}</td>"
+            "</tr>"
+        )
+    return (
+        '<div class="table-scroll"><table class="compact">'
+        "<thead><tr><th>#</th><th>candidate_id</th><th>title</th><th>category</th><th>price</th>"
+        "<th>final</th><th>cat</th><th>size</th><th>style</th><th>color</th><th>mat</th><th>price</th>"
+        "<th>asset</th><th>local</th><th>dl</th></tr></thead>"
+        f"<tbody>{''.join(rows)}</tbody></table></div>"
+    )
+
+
+def _diagnostics_html(row: dict[str, Any]) -> str:
+    items = [
+        ("selection_reason", row.get("selection_reason")),
+        ("rejection_reason", row.get("rejection_reason")),
+        ("acquisition_status", row.get("acquisition_status")),
+        ("apply_status", row.get("apply_status")),
+        ("used_alternative_candidate", "yes" if row.get("used_alternative_candidate") else None),
+        ("build_issues", ", ".join(str(x) for x in (row.get("build_issues") or [])) or None),
+        ("selection_notes", ", ".join(str(x) for x in (row.get("selection_notes") or [])) or None),
+    ]
+    lines = [
+        f"<dt>{_h(label)}</dt><dd>{_h(value)}</dd>"
+        for label, value in items
+        if value is not None and str(value).strip()
+    ]
+    return f"<dl>{''.join(lines)}</dl>" if lines else '<div class="na">n/a</div>'
+
+
 def _load_surface_pricing_items(run_dir_path: Path) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for path in sorted(run_dir_path.glob("surface_materials.pricing*.json")):
@@ -564,6 +903,8 @@ def _replacement_report_html(
     scene_json_path: str | Path | None,
     surface_rows: list[dict[str, Any]] | None = None,
 ) -> str:
+    selected_rows = [row for row in rows if row.get("is_selected")]
+    applied_rows = [row for row in rows if row.get("apply_status") == "applied"]
     cards = []
     for idx, row in enumerate(rows, start=1):
         product_url = str(row.get("product_url") or "").strip()
@@ -581,30 +922,54 @@ def _replacement_report_html(
             else _h(row.get("new_title"))
         )
         model_link = (
-            f'<a href="{_h(model_url)}" target="_blank" rel="noopener">модель</a>'
+            f'<a href="{_h(model_url)}" target="_blank" rel="noopener">{_h(model_url)}</a>'
             if model_url
             else "нет ссылки"
         )
         width, depth, height = row.get("dimensions_cm") or [None, None, None]
+        score_table = _score_table_html(row.get("score_breakdown") or {})
+        top_candidates_table = _top_candidates_html(row.get("top_candidates") or [])
+        diagnostics = _diagnostics_html(row)
         cards.append(
             f"""
             <article class="card">
               <div class="thumb">{image_html}</div>
               <div class="body">
-                <h2>{idx}. {product_link}</h2>
+                <h2>{idx}. {product_link} {_status_badge(row.get('status'))}</h2>
                 <dl>
                   <dt>Target</dt><dd><code>{_h(row.get('target_id'))}</code></dd>
-                  <dt>Заменяет</dt><dd>{_h(row.get('old_category') or row.get('semantic_group'))}</dd>
+                  <dt>Target category</dt><dd>{_h(row.get('target_category') or row.get('old_category') or 'n/a')}</dd>
+                  <dt>Semantic group</dt><dd>{_h(row.get('semantic_group') or 'n/a')}</dd>
+                  <dt>Policy</dt><dd>{_h(row.get('replacement_policy') or 'n/a')}</dd>
+                  <dt>Mode</dt><dd>{_h(row.get('selection_mode') or 'n/a')}</dd>
+                  <dt>Consistency</dt><dd>{_h(row.get('consistency_group_id') or 'n/a')} / applied={_h(row.get('consistency_applied'))} / shared={_h(row.get('shared_candidate') or 'n/a')}</dd>
+                  <dt>Candidate ID</dt><dd><code>{_h(row.get('candidate_id') or 'n/a')}</code></dd>
+                  <dt>Candidate category</dt><dd>{_h(row.get('candidate_category') or 'n/a')}</dd>
                   <dt>Источник</dt><dd>{_h(row.get('source_site') or 'unknown')}</dd>
                   <dt>Бренд</dt><dd>{_h(row.get('brand') or 'не указан')}</dd>
                   <dt>Цена</dt><dd>{_h(row.get('price'))}</dd>
+                  <dt>Final score</dt><dd>{_h(_fmt_score(row.get('final_score')))}</dd>
                   <dt>Размеры, см</dt><dd>{_h(width or '?')} x {_h(depth or '?')} x {_h(height or '?')}</dd>
                   <dt>Материалы</dt><dd>{_h(row.get('materials') or 'не указаны')}</dd>
                   <dt>Товар</dt><dd>{f'<a href="{_h(product_url)}" target="_blank" rel="noopener">{_h(product_url)}</a>' if product_url else 'нет ссылки'}</dd>
                   <dt>3D-модель</dt><dd>{model_link}</dd>
                   <dt>Фото</dt><dd>{_image_links_html(row)}</dd>
+                  <dt>Local asset?</dt><dd>{_h(_candidate_bool(bool(row.get('has_local_asset'))))}</dd>
+                  <dt>Downloadable?</dt><dd>{_h(_candidate_bool(bool(row.get('has_downloadable_asset'))))}</dd>
                   <dt>Локальный ассет</dt><dd><code>{_h(row.get('asset_local_path') or 'нет')}</code></dd>
                 </dl>
+                <details>
+                  <summary>Score breakdown</summary>
+                  {score_table}
+                </details>
+                <details>
+                  <summary>Top candidates ({_h(len(row.get('top_candidates') or []))})</summary>
+                  {top_candidates_table}
+                </details>
+                <details>
+                  <summary>Reasons / diagnostics</summary>
+                  {diagnostics}
+                </details>
               </div>
             </article>
             """
@@ -632,6 +997,21 @@ def _replacement_report_html(
     dd {{ margin: 0; overflow-wrap: anywhere; }}
     a {{ color: #075985; }}
     code {{ font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; }}
+    details {{ margin-top: 14px; border-top: 1px solid #e5e7eb; padding-top: 10px; }}
+    summary {{ cursor: pointer; color: #334155; font-weight: 600; }}
+    table {{ border-collapse: collapse; width: 100%; margin-top: 10px; }}
+    th, td {{ border: 1px solid #e2e8f0; padding: 6px 8px; text-align: left; vertical-align: top; }}
+    th {{ background: #f8fafc; color: #475569; font-weight: 600; }}
+    .compact {{ font-size: 12px; min-width: 1080px; }}
+    .score-table {{ max-width: 520px; }}
+    .table-scroll {{ overflow-x: auto; }}
+    .badge {{ display: inline-block; margin-left: 8px; padding: 2px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; vertical-align: middle; }}
+    .badge.ok {{ background: #dcfce7; color: #166534; }}
+    .badge.warn {{ background: #fef3c7; color: #92400e; }}
+    .badge.bad {{ background: #fee2e2; color: #991b1b; }}
+    .badge.muted {{ background: #e5e7eb; color: #4b5563; }}
+    .badge.neutral {{ background: #dbeafe; color: #1e40af; }}
+    .na {{ color: #64748b; margin-top: 8px; }}
     @media (max-width: 760px) {{ main {{ padding: 16px; }} .card {{ grid-template-columns: 1fr; }} .thumb img, .no-image {{ width: 100%; }} dl {{ grid-template-columns: 1fr; }} }}
   </style>
 </head>
@@ -639,10 +1019,12 @@ def _replacement_report_html(
   <main>
     <h1>Отчет по заменам supplier</h1>
     <p class="summary">
-      Заменено товаров: <strong>{len(rows)}</strong><br>
-      Мебель, сумма по известным ценам: <strong>{_h(_total_price(rows))}</strong><br>
+      Targets в bindings: <strong>{len(rows)}</strong><br>
+      Selected candidates: <strong>{len(selected_rows)}</strong><br>
+      Applied replacements: <strong>{len(applied_rows)}</strong><br>
+      Мебель, сумма по известным ценам: <strong>{_h(_total_price(selected_rows))}</strong><br>
       Материалы поверхностей, расчетная сумма: <strong>{_h(_surface_total_price(surface_rows or []))}</strong><br>
-      Итого по известным позициям: <strong>{_h(_estimate_total_price(rows, surface_rows or []))}</strong><br>
+      Итого по известным позициям: <strong>{_h(_estimate_total_price(selected_rows, surface_rows or []))}</strong><br>
       Supplier bindings: <code>{_h(Path(bindings_json_path).expanduser().resolve())}</code><br>
       Supplier scene: <code>{_h(Path(scene_json_path).expanduser().resolve()) if scene_json_path else 'нет'}</code>
     </p>
@@ -655,29 +1037,122 @@ def _replacement_report_html(
 """
 
 
+def _average_scores(rows: list[dict[str, Any]]) -> dict[str, float]:
+    keys = [
+        "final_score",
+        "category_score",
+        "size_score",
+        "style_score",
+        "color_score",
+        "material_score",
+        "price_score",
+        "asset_availability_score",
+    ]
+    out: dict[str, float] = {}
+    for key in keys:
+        values: list[float] = []
+        for row in rows:
+            value = row.get("final_score") if key == "final_score" else (row.get("score_breakdown") or {}).get(key)
+            number = _float_or_none(value)
+            if number is not None:
+                values.append(number)
+        out[key] = round(sum(values) / len(values), 6) if values else 0.0
+    return out
+
+
+def _summary_targets(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    targets = []
+    for row in rows:
+        targets.append(
+            {
+                "target_id": row.get("target_id"),
+                "category": row.get("target_category") or row.get("old_category"),
+                "status": row.get("status"),
+                "chosen_candidate_id": row.get("candidate_id") or None,
+                "chosen_candidate_title": row.get("new_title") if row.get("chosen_candidate") else None,
+                "price": _float_or_none(row.get("price_value")),
+                "final_score": _float_or_none(row.get("final_score")),
+                "score_breakdown": _json_safe(row.get("score_breakdown")) if isinstance(row.get("score_breakdown"), dict) else {},
+                "asset_local_path": row.get("asset_local_path") or None,
+                "acquisition_status": row.get("acquisition_status") or None,
+                "build_issues": row.get("build_issues") or [],
+                "consistency": {
+                    "consistency_group_id": row.get("consistency_group_id"),
+                    "consistency_applied": bool(row.get("consistency_applied")),
+                    "shared_candidate": row.get("shared_candidate"),
+                },
+            }
+        )
+    return targets
+
+
+def _replacement_summary_json(
+    rows: list[dict[str, Any]],
+    *,
+    bindings_json_path: str | Path,
+    scene_json_path: str | Path | None,
+    mode: str | None,
+    blender_build_report_path: str | Path | None = None,
+) -> dict[str, Any]:
+    selected_rows = [row for row in rows if row.get("is_selected")]
+    scene_summary = _scene_supplier_summary(scene_json_path)
+    warnings: list[str] = []
+    if any(row.get("selection_mode") and row.get("is_selected") and not row.get("score_breakdown") for row in rows):
+        warnings.append("Some selected design-aware rows do not contain score_breakdown.")
+    if any(row.get("status") in SELECTED_BINDING_STATUSES and not row.get("candidate_id") for row in rows):
+        warnings.append("Some selected rows do not contain chosen_candidate_id.")
+    if scene_json_path and not scene_summary:
+        warnings.append("Scene supplier_binding_summary was not found or empty.")
+
+    return {
+        "mode": mode or "",
+        "bindings_path": str(Path(bindings_json_path).expanduser().resolve()),
+        "scene_path": str(Path(scene_json_path).expanduser().resolve()) if scene_json_path else None,
+        "blender_build_report_path": str(Path(blender_build_report_path).expanduser().resolve()) if blender_build_report_path else None,
+        "counts": {
+            "total_targets": len(rows),
+            "replace_with_supplier_targets": sum(1 for row in rows if row.get("replacement_policy") == "replace_with_supplier"),
+            "selected_count": len(selected_rows),
+            "no_candidates_count": sum(1 for row in rows if row.get("status") in {"no_candidates_found", "no_acceptable_candidates_found"}),
+            "no_real_asset_after_acquisition_count": sum(1 for row in rows if row.get("status") == "no_real_asset_after_acquisition"),
+            "applied_replacement_count": int(scene_summary.get("replaced_count", 0) or sum(1 for row in rows if row.get("apply_status") == "applied")),
+            "local_asset_replaced_count": int(scene_summary.get("local_asset_replaced_count", 0) or sum(1 for row in rows if row.get("apply_status") == "applied" and row.get("has_local_asset"))),
+            "used_alternative_candidate_count": sum(1 for row in rows if row.get("used_alternative_candidate")),
+        },
+        "score_averages": _average_scores(selected_rows),
+        "targets": _summary_targets(rows),
+        "warnings": warnings,
+    }
+
+
 def write_supplier_replacement_reports(
     *,
     bindings_json_path: str | Path,
     run_dir: str | Path,
     supplier_scene_json_path: str | Path | None = None,
+    blender_build_report_path: str | Path | None = None,
     short_filename: str = "supplier_replacements.short.md",
     extended_filename: str = "supplier_replacements.full.md",
     html_filename: str = "supplier_replacements.html",
+    summary_filename: str | None = None,
+    mode: str | None = None,
 ) -> dict[str, Any]:
     run_dir_path = Path(run_dir).expanduser().resolve()
     surface_rows = _surface_material_rows(run_dir_path)
     rows = _replacement_rows(
         bindings_json_path=bindings_json_path,
         supplier_scene_json_path=supplier_scene_json_path,
+        blender_build_report_path=blender_build_report_path,
     )
+    selected_rows = [row for row in rows if row.get("is_selected")]
     short_path = run_dir_path / short_filename
     extended_path = run_dir_path / extended_filename
     html_path = run_dir_path / html_filename
-    _write_text(short_path, _short_report_markdown(rows, surface_rows))
+    _write_text(short_path, _short_report_markdown(selected_rows, surface_rows))
     _write_text(
         extended_path,
         _extended_report_markdown(
-            rows,
+            selected_rows,
             bindings_json_path=bindings_json_path,
             scene_json_path=supplier_scene_json_path,
             surface_rows=surface_rows,
@@ -692,13 +1167,31 @@ def write_supplier_replacement_reports(
             surface_rows=surface_rows,
         ),
     )
-    return {
+    summary_path: Path | None = None
+    summary: dict[str, Any] | None = None
+    if summary_filename:
+        summary_path = run_dir_path / summary_filename
+        summary = _replacement_summary_json(
+            rows,
+            bindings_json_path=bindings_json_path,
+            scene_json_path=supplier_scene_json_path,
+            blender_build_report_path=blender_build_report_path,
+            mode=mode,
+        )
+        summary_path.parent.mkdir(parents=True, exist_ok=True)
+        summary_path.write_text(json.dumps(_json_safe(summary), ensure_ascii=False, indent=2, allow_nan=False), encoding="utf-8")
+    result = {
         "short_md": str(short_path),
         "extended_md": str(extended_path),
         "html": str(html_path),
-        "replacement_count": len(rows),
+        "summary_json": str(summary_path) if summary_path else None,
+        "replacement_count": len(selected_rows),
         "surface_material_count": len(surface_rows),
-        "known_price_total": _total_price(rows),
+        "known_price_total": _total_price(selected_rows),
         "surface_material_total": _surface_total_price(surface_rows),
-        "estimate_total": _estimate_total_price(rows, surface_rows),
+        "estimate_total": _estimate_total_price(selected_rows, surface_rows),
     }
+    if summary is not None:
+        result["counts"] = summary.get("counts")
+        result["score_averages"] = summary.get("score_averages")
+    return result

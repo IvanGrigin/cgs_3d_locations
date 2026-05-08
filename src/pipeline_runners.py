@@ -488,7 +488,7 @@ def run_choose_stage(
         "--seed",
         str(int(seed)),
         "--llm-provider",
-        "ollama",
+        str(getattr(args, "chooser_llm_provider", "ollama") or "ollama"),
         "--ollama-url",
         args.ollama_url,
         "--ollama-model",
@@ -504,6 +504,9 @@ def run_choose_stage(
         "--llm-debug-dir",
         str(chooser_llm_debug_dir.resolve()),
     ]
+
+    if str(getattr(args, "chooser_llm_provider", "ollama") or "ollama").strip().lower() == "none":
+        cmd.append("--disable-llm")
 
     if getattr(args, "ollama_models", None):
         cmd.append("--ollama-models")
@@ -838,9 +841,36 @@ def run_infinigen_clean(
         cmd += ["--remote-conda-env", str(args.remote_conda_env)]
     if getattr(args, "remote_infinigen_src", None):
         cmd += ["--remote-infinigen-src", str(args.remote_infinigen_src)]
+    if getattr(args, "infinigen_task", None):
+        cmd += ["--infinigen-task", str(args.infinigen_task)]
+    if getattr(args, "infinigen_configs", None):
+        cmd.append("--infinigen-configs")
+        cmd.extend(str(x) for x in args.infinigen_configs)
     print("▶ Запуск Infinigen clean:\n ", " ".join(cmd))
     subprocess.run(cmd, check=True)
-    rebind_generated_layout_to_selected_objects(out_path, objects_path, placer_name="infinigen_clean")
+    _validate_infinigen_clean_artifacts(out_path=out_path, run_dir=run_dir)
+    if bool(getattr(args, "infinigen_rebind_selected_objects", False)):
+        rebind_generated_layout_to_selected_objects(out_path, objects_path, placer_name="infinigen_clean")
+
+
+def _validate_infinigen_clean_artifacts(*, out_path: Path, run_dir: Path) -> None:
+    blend_path = run_dir / "infinigen_clean_scene.blend"
+    if not blend_path.is_file() or blend_path.stat().st_size <= 0:
+        raise RuntimeError(f"infinigen_clean: full scene blend was not downloaded: {blend_path}")
+
+    placement = read_json(out_path)
+    placements = placement.get("placements") if isinstance(placement, dict) else None
+    if not isinstance(placements, list) or not placements:
+        raise RuntimeError(f"infinigen_clean: extracted placement is empty: {out_path}")
+
+    summary_path = run_dir / "inventory_summary.json"
+    if summary_path.is_file():
+        summary = read_json(summary_path)
+        raw_count = int((summary.get("raw_real_object_count") or 0) if isinstance(summary, dict) else 0)
+        core_count = int((summary.get("real_object_count") or 0) if isinstance(summary, dict) else 0)
+        if raw_count <= 0:
+            raise RuntimeError(f"infinigen_clean: inventory is empty: {summary_path}")
+        print(f"✅ Infinigen clean inventory: raw_real_object_count={raw_count}, core_furniture_count={core_count}")
 
 
 def infer_lego_room_type(room_path: str) -> str:

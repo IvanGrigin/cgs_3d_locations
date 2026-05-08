@@ -80,6 +80,30 @@ APPLIANCE_TARGETS: dict[str, dict[str, Any]] = {
         "target_dims_cm": (24.0, 24.0, 28.0),
         "colors": ("white", "gray", "black", "белый", "серый", "черный", "чёрный"),
     },
+    "flowers_vase": {
+        "module_types": set(),
+        "category_terms": ("plant_planter_vase", "plant", "vase", "decorative_set", "sculpture_decor_set"),
+        "title_terms": ("flower vase", "flower bouquet", "bouquet", "vase", "plant", "букет", "цвет", "ваза", "растение", "ландыши", "розы"),
+        "target_dims_cm": (28.0, 28.0, 48.0),
+        "colors": ("white", "green", "pink", "gray", "белый", "зелен", "роз", "серый"),
+        "prefer_fbx": True,
+    },
+    "oil_bottles_decor": {
+        "module_types": set(),
+        "category_terms": ("decorative_set", "food_drink", "kitchenware"),
+        "title_terms": ("olive and oil", "oil decorative", "decanters and bottles", "bottle", "decanter", "jar", "бутыл", "масл", "графин", "банка"),
+        "target_dims_cm": (24.0, 18.0, 34.0),
+        "colors": ("green", "brown", "clear", "glass", "black", "зелен", "корич", "стекл", "черн"),
+        "prefer_fbx": True,
+    },
+    "decorative_kitchen_set": {
+        "module_types": set(),
+        "category_terms": ("kitchenware", "food_drink", "decorative_set", "small_kitchen_appliance"),
+        "title_terms": ("kitchen accessories", "kitchen decor", "tableware", "fruit", "bread", "посуда", "тарел", "чаш", "миска", "фрукт", "хлеб"),
+        "target_dims_cm": (32.0, 22.0, 18.0),
+        "colors": ("white", "gray", "wood", "green", "белый", "серый", "дерево", "зелен"),
+        "prefer_fbx": True,
+    },
 }
 
 ASSET_IMPORT_OVERRIDES: dict[str, dict[str, Any]] = {
@@ -113,8 +137,8 @@ ASSET_IMPORT_OVERRIDES: dict[str, dict[str, Any]] = {
     },
     "3ddd::url::https://3ddd.ru/3dmodels/show/moika_florentina_lipsi_460_chernyi_i_smesitel_florentina_vita_av": {
         "rotation_z_deg_by_layout": {"x": 180.0, "y": 90.0},
-        "avoid_for_role": "sink",
-        "note": "OBJ import is less reliable for procedural sink insertion; prefer FBX sink plus separate FBX faucet.",
+        "avoid_for_roles": ("sink", "faucet"),
+        "note": "Combined OBJ sink+faucet set imports as fragmented helper geometry in the current kitchen inset pipeline.",
     },
     "3ddd::url::https://3ddd.ru/3dmodels/show/om-moika-emar-emq-emb-560-top-pvd-1": {
         "rotation_z_deg_by_layout": {"x": 0.0, "y": -90.0},
@@ -124,6 +148,14 @@ ASSET_IMPORT_OVERRIDES: dict[str, dict[str, Any]] = {
         "rotation_z_deg_by_layout": {"x": 0.0, "y": -90.0},
         "avoid_for_role": "sink",
         "note": "FBX contains several sink variants in one file, which is less stable for automatic inset fitting.",
+    },
+    "3ddd::url::https://3ddd.ru/3dmodels/show/om-tumba-c-rakovinoi-napolnaia-lago-80-2d": {
+        "avoid_for_role": "sink",
+        "note": "Bathroom vanity cabinet with basin, not a standalone kitchen sink for countertop insertion.",
+    },
+    "3ddd::url::https://3ddd.ru/3dmodels/show/om-tumba-c-rakovinoi-podvesnaia-lago-80-2y": {
+        "avoid_for_role": "sink",
+        "note": "Bathroom vanity cabinet with basin, not a standalone kitchen sink for countertop insertion.",
     },
     "3ddd::url::https://3ddd.ru/3dmodels/show/kitchen_faucet_8": {
         "rotation_z_deg_by_layout": {"x": 180.0, "y": 90.0},
@@ -336,6 +368,7 @@ def _passes_min_dimensions(item: dict[str, Any], target: dict[str, Any]) -> bool
 def _candidate_record(item: dict[str, Any], role: str, score: float, breakdown: dict[str, float]) -> dict[str, Any]:
     unique_key = item.get("unique_key")
     import_override = ASSET_IMPORT_OVERRIDES.get(str(unique_key or ""), {})
+    price = item.get("price") if item.get("price") is not None else item.get("price_value")
     return {
         "role": role,
         "unique_key": unique_key,
@@ -343,6 +376,8 @@ def _candidate_record(item: dict[str, Any], role: str, score: float, breakdown: 
         "source_site": item.get("source_site"),
         "category_norm": item.get("category_norm"),
         "color": item.get("color"),
+        "price": price,
+        "price_currency": item.get("price_currency") or "RUB",
         "dimensions_cm": {
             "width": _dims_cm(item)[0],
             "depth": _dims_cm(item)[1],
@@ -356,6 +391,21 @@ def _candidate_record(item: dict[str, Any], role: str, score: float, breakdown: 
         "score": round(score, 6),
         "score_breakdown": {k: round(v, 4) for k, v in breakdown.items()},
     }
+
+
+def _is_forbidden_for_role(item: dict[str, Any], role: str) -> bool:
+    title = normalize_text(item.get("title"))
+    category = normalize_text(item.get("category_norm"))
+    unique_key = str(item.get("unique_key") or "")
+    override = ASSET_IMPORT_OVERRIDES.get(unique_key, {})
+    forbidden_roles = set(override.get("avoid_for_roles") or ())
+    if override.get("avoid_for_role"):
+        forbidden_roles.add(str(override["avoid_for_role"]))
+    if role in forbidden_roles:
+        return True
+    if role == "faucet" and "мойк" in title and "смесител" in title and "faucet" not in category:
+        return True
+    return False
 
 
 def select_kitchen_appliance_assets(
@@ -385,6 +435,10 @@ def select_kitchen_appliance_assets(
     if required_appliances.get("microwave"):
         present_roles.add("microwave")
     present_roles.add("small_kitchen_appliance")
+    for item in layout_plan.get("decor_items") or []:
+        item_type = str(item.get("type") or "")
+        if item_type in APPLIANCE_TARGETS:
+            present_roles.add(item_type)
 
     result: dict[str, Any] = {"appliances": {}, "warnings": [], "unavailable_assets": {}}
 
@@ -395,12 +449,16 @@ def select_kitchen_appliance_assets(
         scored: list[dict[str, Any]] = []
         unavailable_scored: list[dict[str, Any]] = []
         for item in items:
+            if _is_forbidden_for_role(item, role):
+                continue
             category = _category_score(item, target)
             if category <= 0:
                 continue
             if not _passes_min_dimensions(item, target):
                 continue
             asset = _asset_path(item)
+            if target.get("prefer_fbx") and asset and not str(asset).lower().endswith(".fbx"):
+                continue
             color = _color_score(item, target["colors"])
             dims = _dimension_score(item, target["target_dims_cm"])
             prompt = _prompt_preference_score(item, role, user_prompt)

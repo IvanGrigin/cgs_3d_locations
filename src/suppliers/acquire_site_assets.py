@@ -87,6 +87,11 @@ def _candidate_name_tokens(record) -> list[str]:
 def ensure_direct_model_url(record) -> tuple[str | None, list[str]]:
     notes: list[str] = []
     if record.model_download_url:
+        if record.source_site == "sancos":
+            marker = "https://sancos.su/upload/3D/"
+            if record.model_download_url.count(marker) > 1:
+                record.model_download_url = marker + record.model_download_url.rsplit(marker, 1)[-1]
+                notes.append("normalized_duplicate_sancos_3d_url")
         return record.model_download_url, notes
 
     if record.source_site == "loftdesigne" and record.model_download_landing_url:

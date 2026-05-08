@@ -79,11 +79,14 @@ def main():
     ap.add_argument("--no-bbox-fallback", action="store_true", help="Отключить bbox fallback по умолчанию для объектов без mesh")
     ap.add_argument("--save-blend", default=None, help="Сохранить .blend в указанный путь")
     ap.add_argument("--render", default=None, help="Сохранить рендер в PNG (путь к файлу)")
+    ap.add_argument("--build-report", default=None, help="Сохранить JSON-диагностику сборки Blender")
     ap.add_argument("--highlight-item-ids", default=None, help="Список id через запятую: для них рисуется черный bbox")
     ap.add_argument("--hide-room-shell", action="store_true", help="Скрыть walls / ceiling / exterior перед рендером")
+    ap.add_argument("--render-layer", default="all", choices=["all", "kitchen", "room_shell", "surfaces", "windows", "curtains", "tables_chairs", "non_kitchen"], help="Фильтр видимости для раздельных рендеров/GIF")
     ap.add_argument("--force-tint", action="store_true", help="Принудительно заменить материалы импортированных мешей на tint-материал")
     ap.add_argument("--turntable-render-dir", default=None, help="Каталог для PNG кадров turntable")
     ap.add_argument("--turntable-frames", type=int, default=24, help="Количество кадров turntable")
+    ap.add_argument("--turntable-frame-index", type=int, default=None, help="Рендерить только один кадр turntable с указанным индексом")
     ap.add_argument("--turntable-elevation-deg", type=float, default=30.0, help="Угол возвышения камеры для orbit")
     ap.add_argument("--no-pack-assets", action="store_true", help="Не паковать ассеты в .blend")
     ap.add_argument("--verbose", action="store_true", help="Печатать подробную диагностику сборки Blender-сцены")
@@ -114,15 +117,21 @@ def main():
         cmd += ["--highlight-item-ids", str(args.highlight_item_ids)]
     if args.hide_room_shell:
         cmd += ["--hide-room-shell"]
+    if args.render_layer and args.render_layer != "all":
+        cmd += ["--render-layer", str(args.render_layer)]
     if args.force_tint:
         cmd += ["--force-tint"]
     if args.save_blend:
         cmd += ["--save-blend", os.path.abspath(args.save_blend)]
+    if args.build_report:
+        cmd += ["--build-report", os.path.abspath(args.build_report)]
     if args.render:
         cmd += ["--render", os.path.abspath(args.render)]
     if args.turntable_render_dir:
         cmd += ["--turntable-render-dir", os.path.abspath(args.turntable_render_dir)]
         cmd += ["--turntable-frames", str(int(args.turntable_frames or 24))]
+        if args.turntable_frame_index is not None:
+            cmd += ["--turntable-frame-index", str(int(args.turntable_frame_index))]
         cmd += ["--turntable-elevation-deg", str(float(args.turntable_elevation_deg or 0.0))]
     if args.no_pack_assets:
         cmd += ["--no-pack-assets"]

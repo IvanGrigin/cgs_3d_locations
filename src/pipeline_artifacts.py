@@ -82,6 +82,106 @@ def blender_outputs_for_mode(
     return blend, render
 
 
+def _bool_arg(args: argparse.Namespace, name: str, default: bool = False) -> bool:
+    return bool(getattr(args, name, default))
+
+
+def _blender_output_mode(args: argparse.Namespace) -> str:
+    mode = str(getattr(args, "blender_output", "render") or "render").strip().lower()
+    return mode if mode in {"render", "gif", "both"} else "render"
+
+
+def _should_keep_blend(args: argparse.Namespace) -> bool:
+    return bool(getattr(args, "save_blend", None) or _bool_arg(args, "keep_blend", False))
+
+
+def _render_gif_from_frames(frame_dir: Path, out_gif: Path, fps: int) -> None:
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        raise FileNotFoundError("ffmpeg не найден в PATH")
+    out_gif.parent.mkdir(parents=True, exist_ok=True)
+    palette = frame_dir / "palette.png"
+    frame_pattern = str((frame_dir / "frame_%03d.png").resolve())
+    subprocess.run(
+        [
+            ffmpeg,
+            "-y",
+            "-framerate",
+            str(int(fps)),
+            "-i",
+            frame_pattern,
+            "-vf",
+            "palettegen=stats_mode=diff",
+            str(palette.resolve()),
+        ],
+        check=True,
+    )
+    subprocess.run(
+        [
+            ffmpeg,
+            "-y",
+            "-framerate",
+            str(int(fps)),
+            "-i",
+            frame_pattern,
+            "-i",
+            str(palette.resolve()),
+            "-lavfi",
+            "paletteuse=dither=bayer:bayer_scale=3",
+            str(out_gif.resolve()),
+        ],
+        check=True,
+    )
+
+
+def _render_gif_from_blend_isolated(
+    *,
+    cfg_runtime: dict[str, Any],
+    args: argparse.Namespace,
+    blend_path: Path,
+    frame_dir: Path,
+    gif_path: Path,
+    frame_count: int,
+    elevation_deg: float,
+    fps: int,
+) -> None:
+    script = Path(__file__).resolve().parent / "tools" / "blend_to_orbit_gif.py"
+    if not script.is_file():
+        script = Path("src/tools/blend_to_orbit_gif.py").resolve()
+    yaw_step = 360.0 / max(int(frame_count), 1)
+    duration_ms = max(1, int(round(1000.0 / max(int(fps), 1))))
+    cmd = [
+        sys.executable,
+        str(script.resolve()),
+        "--blend",
+        str(blend_path.resolve()),
+        "--frames-dir",
+        str(frame_dir.resolve()),
+        "--gif",
+        str(gif_path.resolve()),
+        "--width",
+        str(int(getattr(args, "blender_gif_width", 768) or 768)),
+        "--height",
+        str(int(getattr(args, "blender_gif_height", 768) or 768)),
+        "--samples",
+        str(int(getattr(args, "blender_gif_samples", 16) or 16)),
+        "--yaw-step",
+        f"{yaw_step:.8f}",
+        "--elevations",
+        str(float(elevation_deg)),
+        "--duration-ms",
+        str(duration_ms),
+        "--isolated-frames",
+    ]
+    if getattr(args, "blender", None):
+        cmd += ["--blender", str(args.blender)]
+    if _bool_arg(args, "keep_blender_gif_frames", False):
+        cmd.append("--keep-frames")
+
+    print("▶ Изолированный GIF из сохранённого .blend:\n ", " ".join(cmd))
+    subprocess.run(cmd, check=True)
+
+
 def copy_tree_contents(src: Path, dst: Path) -> None:
     if not src.is_dir():
         return
@@ -193,11 +293,24 @@ def run_blender_for_mode(
     layout_mode: str,
     scene_json_path: Path,
     variant_suffix: str = "",
-) -> None:
+) -> dict[str, Any]:
     if not scene_json_path.is_file():
         raise RuntimeError(f"Scene JSON not found for Blender: {scene_json_path}")
 
     blend_out, render_out = blender_outputs_for_mode(args, run_dir, layout_mode, variant_suffix=variant_suffix)
+    output_mode = _blender_output_mode(args)
+    want_render = output_mode in {"render", "both"}
+    want_gif = output_mode in {"gif", "both"}
+    keep_blend = _should_keep_blend(args)
+    build_report = str(Path(blend_out).with_suffix(".build_report.json").resolve()) if blend_out else None
+    gif_path = None
+    frame_dir = None
+    if want_gif:
+        gif_suffix = f"_{variant_suffix}" if variant_suffix else ""
+        gif_path = str((run_dir / f"render_{layout_mode}{gif_suffix}.gif").resolve())
+        frame_dir = run_dir / f"_frames_render_{layout_mode}{gif_suffix}"
+        if frame_dir.exists():
+            shutil.rmtree(frame_dir, ignore_errors=True)
     cmd = [
         sys.executable,
         cfg_runtime["BLENDER_VIS_SCRIPT"],
@@ -213,8 +326,44 @@ def run_blender_for_mode(
         cmd.append("--no-bbox-fallback")
     if blend_out:
         cmd += ["--save-blend", str(Path(blend_out).resolve())]
-    if render_out:
+    if build_report:
+        cmd += ["--build-report", build_report]
+    if want_render and render_out:
         cmd += ["--render", str(Path(render_out).resolve())]
+    # GIF frames are rendered after this process exits, from the saved .blend.
+    # Rendering them here keeps the heavy imported scene alive for the whole
+    # orbit and can push Blender over system memory limits on large rooms.
+    if not keep_blend:
+        cmd.append("--no-pack-assets")
 
     print("▶ Запуск Blender-визуализатора:\n ", " ".join(cmd))
-    subprocess.run(cmd, check=True)
+    try:
+        subprocess.run(cmd, check=True)
+        if want_gif and frame_dir and gif_path:
+            blend_path = Path(blend_out).resolve() if blend_out else None
+            if not blend_path or not blend_path.is_file():
+                raise RuntimeError("GIF requested, but saved .blend was not produced")
+            _render_gif_from_blend_isolated(
+                cfg_runtime=cfg_runtime,
+                args=args,
+                blend_path=blend_path,
+                frame_dir=frame_dir,
+                gif_path=Path(gif_path),
+                frame_count=int(getattr(args, "blender_gif_frames", 36) or 36),
+                elevation_deg=float(getattr(args, "blender_gif_elevation", 30.0) or 0.0),
+                fps=int(getattr(args, "blender_gif_fps", 8) or 8),
+            )
+    finally:
+        if blend_out and not keep_blend:
+            try:
+                Path(blend_out).unlink(missing_ok=True)
+            except Exception:
+                pass
+    return {
+        "blend_path": str(Path(blend_out).resolve()) if blend_out and Path(blend_out).is_file() else None,
+        "render_path": str(Path(render_out).resolve()) if want_render and render_out else None,
+        "gif_path": gif_path if want_gif else None,
+        "build_report": build_report,
+        "blender_output": output_mode,
+        "keep_blend": keep_blend,
+    }

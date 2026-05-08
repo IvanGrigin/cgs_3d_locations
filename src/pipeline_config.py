@@ -155,7 +155,7 @@ PLACER_SPECS = {
     "infinigen_clean": {
         "runner": "infinigen_clean",
         "requires_ml_model": False,
-        "requires_object_selection": True,
+        "requires_object_selection": False,
         "supports_layout_mode": False,
         "mode_semantics": None,
     },

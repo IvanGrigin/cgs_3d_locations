@@ -21,8 +21,14 @@ from typing import Any, Optional
 
 try:
     from .layout_targets import _semantic_group
+    from .suppliers.supplier_identity_gates import candidate_identity_gate
+    from .suppliers.supplier_scoring import build_price_stats, rank_candidate_for_mode
+    from .suppliers.supplier_selection_modes import normalize_selection_mode
 except ImportError:
     from layout_targets import _semantic_group
+    from suppliers.supplier_identity_gates import candidate_identity_gate
+    from suppliers.supplier_scoring import build_price_stats, rank_candidate_for_mode
+    from suppliers.supplier_selection_modes import normalize_selection_mode
 
 
 def read_json(path: str | Path) -> Any:
@@ -390,6 +396,22 @@ _ACCEPTANCE_DEFAULTS = {
     },
 }
 _ACCEPTANCE_BY_GROUP: dict[str, dict[str, dict[str, float]]] = {
+    "kitchenware": {
+        "known": {"max_primary_axis_distance": 2.0, "max_secondary_axis_distance": 2.0, "min_query_score": 8.0},
+        "missing": {"min_query_score": 10.0, "min_query_overlap_count": 0},
+    },
+    "food_drink": {
+        "known": {"max_primary_axis_distance": 3.0, "max_secondary_axis_distance": 3.0, "min_query_score": 8.0},
+        "missing": {"min_query_score": 10.0, "min_query_overlap_count": 0},
+    },
+    "decorative_set": {
+        "known": {"max_primary_axis_distance": 3.0, "max_secondary_axis_distance": 3.0, "min_query_score": 8.0},
+        "missing": {"min_query_score": 10.0, "min_query_overlap_count": 0},
+    },
+    "plant_planter_vase": {
+        "known": {"max_primary_axis_distance": 3.0, "max_secondary_axis_distance": 3.0, "min_query_score": 8.0},
+        "missing": {"min_query_score": 10.0, "min_query_overlap_count": 0},
+    },
     "bed": {
         "known": {
             "max_primary_axis_distance": 0.55,
@@ -445,6 +467,17 @@ _ACCEPTANCE_BY_GROUP: dict[str, dict[str, dict[str, float]]] = {
             "min_query_overlap_count": 1,
         },
     },
+    "bathroom_sink": {
+        "known": {
+            "max_primary_axis_distance": 1.25,
+            "max_secondary_axis_distance": 2.25,
+            "min_query_score": 18.0,
+        },
+        "missing": {
+            "min_query_score": 20.0,
+            "min_query_overlap_count": 1,
+        },
+    },
     "lamp_floor": {
         "known": {
             "max_primary_axis_distance": 0.95,
@@ -484,12 +517,19 @@ def _candidate_has_ready_real_asset(row: dict[str, Any]) -> bool:
 def _candidate_has_downloadable_asset(row: dict[str, Any]) -> bool:
     if _candidate_has_ready_real_asset(row):
         return True
-    model_url = str(row.get("model_download_url") or row.get("mesh_source_url") or "").strip()
+    model_url = str(row.get("model_download_url") or row.get("model_download_landing_url") or row.get("mesh_source_url") or "").strip()
+    filename = str(row.get("model_download_filename") or "").strip().lower()
     model_format = str(row.get("model_format") or "").strip().lower().lstrip(".")
+    url_lower = model_url.lower()
     if model_url and model_format in {"rar", "zip", "7z", "max", "fbx", "obj", "glb", "gltf"}:
         return True
-    model_link_type = str(row.get("model_link_type") or "").strip().lower()
-    return bool(model_url or model_link_type in {"direct_file", "landing_page", "product_page"})
+    if any(host in url_lower for host in ("disk.yandex.", "yadi.sk")):
+        return True
+    if re.search(r"\.(rar|zip|7z|fbx|obj|glb|gltf)(?:[?#].*)?$", url_lower):
+        return True
+    if "drive.google." in url_lower and not re.search(r"\.(rar|zip|7z|fbx|obj|glb|gltf)$", filename):
+        return False
+    return False
 
 
 def _normalize_text_tokens(value: Any) -> set[str]:
@@ -768,9 +808,109 @@ def _target_requires_exact_group(target_group: str) -> bool:
         "desk",
         "shelf",
         "wardrobe",
+        "bathroom_sink",
         "lamp_table",
         "lamp_floor",
         "lamp_ceiling",
+    }
+
+
+def _normalized_phrase_text(value: Any) -> str:
+    text = str(value or "").replace("ё", "е").replace("Ё", "Е").lower()
+    text = _CAMEL_RE_2.sub(r"\1 \2", text)
+    text = _CAMEL_RE_1.sub(r"\1 \2", text)
+    text = text.replace("_", " ").replace("-", " ").replace("/", " ")
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _bathroom_sink_quality_info(row: dict[str, Any]) -> dict[str, Any]:
+    title_desc_text = _normalized_phrase_text(
+        " ".join(
+            str(row.get(key) or "")
+            for key in (
+                "title",
+                "category_raw",
+                "description",
+                "vlm_description_summary",
+                "vlm_description_text",
+            )
+        )
+    )
+    full_text = _normalized_phrase_text(
+        " ".join(
+            str(row.get(key) or "")
+            for key in (
+                "title",
+                "category_raw",
+                "category_norm",
+                "description",
+                "vlm_description_summary",
+                "vlm_description_text",
+                "product_url",
+                "unique_key",
+            )
+        )
+    )
+    explicit_sink_terms = (
+        "sink",
+        "basin",
+        "washbasin",
+        "раковин",
+        "умывальник",
+    )
+    preferred_install_terms = (
+        "наклад",
+        "навес",
+        "подвес",
+        "настенн",
+        "столешниц",
+        "на мебель",
+        "counter top",
+        "countertop",
+        "wall mounted",
+        "wall hung",
+    )
+    false_visual_terms = (
+        "living room",
+        "sofa",
+        "coffee table",
+        "bookcase",
+        "bookshelf",
+        "vase",
+        "plant",
+        "planter",
+        "decorative",
+        "гостиная",
+        "диван",
+        "журнальный стол",
+        "стеллаж",
+        "ваза",
+        "кашпо",
+        "растение",
+        "декоратив",
+    )
+    sink_term_hits = [term for term in explicit_sink_terms if term in title_desc_text]
+    preferred_install_hits = [term for term in preferred_install_terms if term in full_text]
+    false_visual_hits = [term for term in false_visual_terms if term in title_desc_text]
+
+    candidate_size_m = _product_size_m(row)
+    height_m = float(candidate_size_m[2]) if candidate_size_m else None
+    standalone_tall = bool(height_m is not None and height_m > 0.45 and not preferred_install_hits)
+
+    reject_reason = None
+    if false_visual_hits and not sink_term_hits:
+        reject_reason = "bathroom_sink_false_visual_context"
+    elif not sink_term_hits:
+        reject_reason = "bathroom_sink_missing_explicit_sink_terms"
+    elif standalone_tall:
+        reject_reason = "bathroom_sink_standalone_tall_not_wall_or_countertop"
+
+    return {
+        "bathroom_sink_sink_term_hits": sink_term_hits[:10],
+        "bathroom_sink_preferred_install_hits": preferred_install_hits[:10],
+        "bathroom_sink_false_visual_hits": false_visual_hits[:10],
+        "bathroom_sink_height_m": round(height_m, 4) if height_m is not None else None,
+        "bathroom_sink_quality_reject_reason": reject_reason,
     }
 
 
@@ -1115,6 +1255,9 @@ def _infer_row_group(row: dict[str, Any]) -> str:
     category_norm = str(row.get("category_norm") or "").strip().lower()
     title = row.get("title")
     category_raw = row.get("category_raw")
+    row_text = " ".join(str(value or "").lower() for value in (title, category_raw, category_norm))
+    if category_norm == "tv_projector_screen" and any(token in row_text for token in ("monitor", "монитор", "gaming", "игров")):
+        return "computer"
 
     if category_norm:
         direct_map = {
@@ -1131,9 +1274,21 @@ def _infer_row_group(row: dict[str, Any]) -> str:
             "laptop_computer_keyboard_mouse": "computer",
             "armchair": "armchair",
             "chair": "chair",
+            "dining_chair": "chair",
             "sofa": "sofa",
+            "dining_table": "dining_table",
             "coffee_table": "coffee_table",
             "side_table": "side_table",
+            "kitchenware": "kitchenware",
+            "kitchen_faucet": "kitchen_faucet",
+            "bathroom_sink": "bathroom_sink",
+            "bath_sink": "bathroom_sink",
+            "washbasin": "bathroom_sink",
+            "sink": "bathroom_sink",
+            "food_drink": "food_drink",
+            "decorative_set": "decorative_set",
+            "plant_planter_vase": "plant_planter_vase",
+            "small_kitchen_appliance": "kitchenware",
             "shelf": "shelf",
             "bookcase": "shelf",
             "plant": "plant",
@@ -1153,7 +1308,7 @@ def _infer_row_group(row: dict[str, Any]) -> str:
 
 def _category_match_info(target: dict[str, Any], row: dict[str, Any]) -> tuple[int, dict[str, Any]]:
     target_group = str(target.get("semantic_group") or "")
-    candidate_group = str(row.get("semantic_group") or "")
+    candidate_group = str(row.get("semantic_group") or _infer_row_group(row) or "")
     target_tokens = _target_category_tokens(target)
     row_tokens = _row_category_tokens(row)
     overlap = target_tokens & row_tokens
@@ -1368,6 +1523,10 @@ def _selection_strategy(context: dict[str, Any] | None) -> str:
     if strategy not in SUPPLIER_SELECTION_STRATEGIES:
         return "balanced"
     return strategy
+
+
+def _selection_mode(context: dict[str, Any] | None) -> str:
+    return normalize_selection_mode((context or {}).get("supplier_selection_mode"))
 
 
 def _prompt_match_info(target: dict[str, Any], row: dict[str, Any], context: dict[str, Any] | None) -> tuple[float, dict[str, Any]]:
@@ -1618,6 +1777,14 @@ def _llm_candidate_payload(candidate: dict[str, Any]) -> dict[str, Any]:
             "style_selection_rank": score_breakdown.get("style_selection_rank"),
             "style_selection_score": score_breakdown.get("style_selection_score"),
             "style_selection_target_styles": score_breakdown.get("style_selection_target_styles"),
+            "selection_mode": score_breakdown.get("selection_mode"),
+            "final_score": score_breakdown.get("final_score"),
+            "category_score": score_breakdown.get("category_score"),
+            "size_score": score_breakdown.get("size_score"),
+            "color_score": score_breakdown.get("color_score"),
+            "material_score": score_breakdown.get("material_score"),
+            "description_score": score_breakdown.get("description_score"),
+            "asset_availability_score": score_breakdown.get("asset_availability_score"),
             "price_known_rank": score_breakdown.get("price_known_rank"),
             "price_sort_value": score_breakdown.get("price_sort_value"),
         },
@@ -1702,11 +1869,20 @@ def _llm_rerank_candidates(
         "Prefer realistic assets over placeholders when all else is close. "
         "Return strict JSON only."
     )
+    selection_mode = _selection_mode(context)
+    mode_guidance = {
+        "cheapest": "Choose the cheapest acceptable candidate. Do not choose an item that contradicts required category, dimensions, basic style or color palette.",
+        "optimal": "Choose the best balanced candidate considering price, style, color palette, material, dimensions and visual description.",
+        "best_match": "Choose the candidate that best matches the room design description, object-specific style, color, material and atmosphere. Ignore price unless candidates are nearly equal.",
+    }.get(selection_mode, "")
     prompt_payload = {
         "room_prompt": (context or {}).get("prompt_text"),
         "room_style_hint": (context or {}).get("room_style_hint"),
         "style_label": (context or {}).get("style_label"),
         "selection_strategy": _selection_strategy(context),
+        "selection_mode": selection_mode,
+        "selection_mode_guidance": mode_guidance,
+        "room_design_spec": (context or {}).get("room_design_spec"),
         "target": {
             "target_id": target.get("target_id"),
             "name": target.get("name"),
@@ -1792,26 +1968,34 @@ def _rank_candidate(target: dict[str, Any], row: dict[str, Any], context: dict[s
     if not source_policy_ok:
         return None
 
+    identity_ok, identity_breakdown = candidate_identity_gate(target, row)
+    if not identity_ok:
+        return None
+
     category_rank, category_breakdown = _category_match_info(target, row)
     if category_rank >= 3:
         return None
 
+    target_group = str(target.get("semantic_group") or "").strip()
+    accessory_group_relaxed_size = target_group in {"kitchenware", "food_drink", "decorative_set", "plant_planter_vase"}
     size_rank, size_distance, size_breakdown = _size_match_info(target, row)
     has_real_asset = _candidate_has_ready_real_asset(row)
     has_downloadable_asset = _candidate_has_downloadable_asset(row)
+    has_viable_asset_hint = _candidate_has_viable_asset_hint(row)[0]
     relaxed_missing_size = bool(
         size_breakdown.get("candidate_size_m") is None
         and category_rank == 0
         and has_downloadable_asset
     )
-    if size_rank != 0 and not relaxed_missing_size:
+    relaxed_accessory_size = bool(accessory_group_relaxed_size and category_rank == 0 and (has_real_asset or has_downloadable_asset or has_viable_asset_hint))
+    if size_rank != 0 and not (relaxed_missing_size or relaxed_accessory_size):
         return None
     fill_breakdown = _bbox_fill_info(target, row)
     if not fill_breakdown.get("passes_min_fill", False):
-        if not relaxed_missing_size:
+        if not (relaxed_missing_size or relaxed_accessory_size):
             return None
         fill_breakdown = {
-            "fill_policy_applied": False,
+            "fill_policy_applied": "relaxed_accessory" if relaxed_accessory_size else False,
             "passes_min_fill": True,
             "fill_orientation": None,
             "width_fill_ratio": None,
@@ -1824,6 +2008,9 @@ def _rank_candidate(target: dict[str, Any], row: dict[str, Any], context: dict[s
     design_score, design_breakdown = _design_match_info(target, row)
     query_score, query_breakdown = _query_match_info(target, row)
     prompt_score, prompt_breakdown = _prompt_match_info(target, row, context)
+    bathroom_sink_quality = _bathroom_sink_quality_info(row) if target_group == "bathroom_sink" else {}
+    if bathroom_sink_quality.get("bathroom_sink_quality_reject_reason"):
+        return None
     style_rank, style_score, style_breakdown = _style_match_info(target, row, context)
     price_breakdown = _price_rank_info(row)
     preferences_ok, preference_score, preference_breakdown = _user_preference_match_info(target, row, context)
@@ -1936,8 +2123,10 @@ def _rank_candidate(target: dict[str, Any], row: dict[str, Any], context: dict[s
         **style_breakdown,
         **price_breakdown,
         **source_policy_breakdown,
+        **identity_breakdown,
         **preference_breakdown,
         **prompt_breakdown,
+        **bathroom_sink_quality,
         "category_rank": category_rank,
         "bbox_fit_rank": effective_size_rank,
         "size_missing": bool(size_breakdown.get("candidate_size_m") is None),
@@ -2014,7 +2203,13 @@ def _candidate_acceptability(
 
     accept = True
     reject_reason = None
-    if not size_missing:
+    if breakdown.get("identity_gate_checked") and breakdown.get("identity_gate_passed") is False:
+        accept = False
+        reject_reason = "identity_gate_failed"
+    elif target_group == "bathroom_sink" and not asset_ok:
+        accept = False
+        reject_reason = f"bathroom_sink_requires_viable_asset:{asset_reason}"
+    elif not size_missing:
         if not breakdown.get("passes_min_fill", False):
             accept = False
             reject_reason = "fails_min_fill"
@@ -2377,6 +2572,8 @@ def _load_matcher_context(
     data: dict[str, Any],
     user_preferences: dict[str, Any] | None = None,
     selection_strategy: str = "balanced",
+    room_design_spec: dict[str, Any] | None = None,
+    selection_mode: str | None = None,
 ) -> dict[str, Any]:
     run_dir = targets_json_path.parent
     prompt_text = None
@@ -2412,6 +2609,8 @@ def _load_matcher_context(
         "room_style_tokens": _normalize_text_tokens(room_style_hint),
         "style_label": _normalize_style_label(style_profile.get("style_label") or room.get("style_label")),
         "supplier_selection_strategy": strategy,
+        "supplier_selection_mode": normalize_selection_mode(selection_mode or strategy),
+        "room_design_spec": room_design_spec if isinstance(room_design_spec, dict) else None,
         "user_preferences": _normalize_user_preferences(user_preferences),
     }
 
@@ -2451,19 +2650,26 @@ def _target_is_large_furniture_candidate(target: dict[str, Any]) -> bool:
         "sofa",
         "armchair",
         "chair",
+        "dining_table",
         "coffee_table",
         "side_table",
+        "kitchenware",
+        "kitchen_faucet",
+        "food_drink",
+        "decorative_set",
+        "plant_planter_vase",
         "tv_stand",
         "computer",
         "lamp_table",
         "lamp_floor",
         "lamp_ceiling",
         "mirror",
+        "bathroom_sink",
     }
     if semantic_group not in allowed_groups:
         return False
 
-    if semantic_group in {"lamp_table", "lamp_floor", "lamp_ceiling", "mirror"}:
+    if semantic_group in {"lamp_table", "lamp_floor", "lamp_ceiling", "mirror", "bathroom_sink", "kitchenware", "kitchen_faucet", "food_drink", "decorative_set", "plant_planter_vase"}:
         return True
 
     return largest_axis >= 0.55 or volume >= 0.06
@@ -2523,6 +2729,8 @@ def build_bindings_with_candidates(
     selection_strategy: str = "balanced",
     user_preferences: dict[str, Any] | None = None,
     llm_settings: dict[str, Any] | None = None,
+    room_design_spec: dict[str, Any] | None = None,
+    selection_mode: str | None = None,
 ) -> dict[str, Any]:
     data = read_json(targets_json_path)
     targets = data.get("targets") or []
@@ -2534,7 +2742,12 @@ def build_bindings_with_candidates(
         data,
         user_preferences=user_preferences,
         selection_strategy=selection_strategy,
+        room_design_spec=room_design_spec,
+        selection_mode=selection_mode,
     )
+    design_spec_enabled = isinstance(room_design_spec, dict)
+    normalized_selection_mode = _selection_mode(context)
+    price_stats = build_price_stats(catalog_rows) if design_spec_enabled else {}
 
     bindings: list[dict[str, Any]] = []
     matched_count = 0
@@ -2562,6 +2775,7 @@ def build_bindings_with_candidates(
             "chosen_candidate": None,
             "selection_notes": [],
             "supplier_selection_strategy": context.get("supplier_selection_strategy"),
+            "supplier_selection_mode": normalized_selection_mode,
             "user_preferences": _target_user_preferences(target, context),
             "llm_rerank": None,
         }
@@ -2582,10 +2796,28 @@ def build_bindings_with_candidates(
             if ranked is None:
                 continue
             rank_key, reasons = ranked
+            if design_spec_enabled:
+                final_score, design_breakdown = rank_candidate_for_mode(
+                    target=target,
+                    row=row,
+                    room_design_spec=room_design_spec or {},
+                    mode=normalized_selection_mode,
+                    price_stats=price_stats,
+                )
+                reasons = {**reasons, **design_breakdown}
+                rank_key = (
+                    0 if design_breakdown.get("gate_passed", True) else 1,
+                    -round(float(final_score), 6),
+                    *rank_key[:-1],
+                    str(row.get("unique_key") or ""),
+                )
             scored.append((rank_key, row, reasons))
 
         scored.sort(key=lambda x: x[0])
-        top = scored[: max(0, int(top_k))]
+        effective_top_k = max(0, int(top_k))
+        if str(target.get("semantic_group") or "").strip() == "bathroom_sink":
+            effective_top_k = max(effective_top_k, 200)
+        top = scored[:effective_top_k]
 
         top_candidates = []
         for rank_key, row, reasons in top:
@@ -2637,6 +2869,8 @@ def build_bindings_with_candidates(
                     "height_cm": row.get("height_cm"),
                     "description": row.get("description"),
                     "image_color_features": row.get("image_color_features"),
+                    "selection_mode": normalized_selection_mode,
+                    "final_score": reasons.get("final_score"),
                     "score_breakdown": reasons,
                     "rich_card": _row_is_rich(row),
                 }
@@ -2655,29 +2889,37 @@ def build_bindings_with_candidates(
                 binding["llm_rerank"] = llm_rerank_info
         binding["top_candidates"] = top_candidates
 
-        acceptable_count = 0
+        accepted_candidates: list[tuple[int, dict[str, Any]]] = []
         rejection_notes: list[str] = []
         for idx, candidate in enumerate(top_candidates):
             is_acceptable, accept_info = _candidate_acceptability(target, candidate)
             candidate["acceptability"] = accept_info
             if is_acceptable:
-                acceptable_count += 1
+                accepted_candidates.append((idx, candidate))
             elif len(rejection_notes) < 3:
                 reason = str(accept_info.get("reject_reason") or "rejected")
                 title = str(candidate.get("title") or candidate.get("unique_key") or "candidate")
                 rejection_notes.append(f"{title}:{reason}")
 
-        if top_candidates and acceptable_count > 0:
+        if accepted_candidates:
             matched_count += 1
-            binding["chosen_candidate"] = top_candidates[0]
-            binding["selection_notes"].append("selected_candidate_index:1")
+            chosen_index, chosen_candidate = accepted_candidates[0]
+            binding["chosen_candidate"] = chosen_candidate
+            binding["selection_notes"].append(f"selected_candidate_index:{chosen_index + 1}")
             if isinstance(llm_rerank_info, dict) and llm_rerank_info.get("status") == "applied":
-                binding["selection_status"] = "llm_reranked_top1_selected"
+                binding["selection_status"] = (
+                    "llm_reranked_top1_selected" if chosen_index == 0 else "llm_reranked_first_acceptable_selected"
+                )
                 binding["selection_notes"].append("selected_after_llm_rerank")
             else:
-                binding["selection_status"] = "heuristic_top1_selected"
+                binding["selection_status"] = (
+                    "heuristic_top1_selected" if chosen_index == 0 else "heuristic_first_acceptable_selected"
+                )
             binding["provenance"]["final_asset_source"] = "supplier_catalog"
-            binding["selection_notes"].append("top1_selected_by_similarity_order")
+            if chosen_index == 0:
+                binding["selection_notes"].append("top1_selected_by_similarity_order")
+            else:
+                binding["selection_notes"].append("selected_first_acceptable_candidate_not_top1")
             if rejection_notes:
                 binding["selection_notes"].append("rejected_before_selection:" + " | ".join(rejection_notes))
         else:
@@ -2701,6 +2943,8 @@ def build_bindings_with_candidates(
             "matched_target_count": matched_count,
             "top_k": int(top_k),
             "supplier_selection_strategy": context.get("supplier_selection_strategy"),
+            "supplier_selection_mode": normalized_selection_mode,
+            "room_design_spec_enabled": design_spec_enabled,
             "style_llm_policy": {
                 "min_confidence": STYLE_LLM_MIN_CONFIDENCE,
                 "min_quality_score": STYLE_LLM_MIN_QUALITY,
@@ -2746,6 +2990,8 @@ def build_cli() -> argparse.ArgumentParser:
         default="balanced",
         help="Supplier candidate ranking strategy: cheapest, cheap_style, style, or balanced.",
     )
+    ap.add_argument("--selection-mode", choices=["cheapest", "optimal", "best_match"], default=None)
+    ap.add_argument("--room-design-spec", default=None, help="Optional room_design_spec.json for design-aware scoring")
     ap.add_argument("--user-preferences-json", default=None, help="Optional JSON with global/by_target_id/by_semantic_group manual constraints")
     ap.add_argument("--max-price-rub", type=float, default=None, help="Global max acceptable price in RUB")
     ap.add_argument("--preferred-color", action="append", default=[], help="Preferred color token; may be repeated")
@@ -2801,6 +3047,9 @@ def main() -> None:
         "ollama_temperature": float(args.ollama_temperature),
         "top_n": int(args.llm_top_n),
     }
+    room_design_spec = read_json(args.room_design_spec) if args.room_design_spec else None
+    if room_design_spec is not None and not isinstance(room_design_spec, dict):
+        raise RuntimeError("room design spec must be a JSON object")
 
     if not db_paths and not json_paths:
         raise RuntimeError("Нужно передать хотя бы один --supplier-db или --supplier-json")
@@ -2823,6 +3072,8 @@ def main() -> None:
         selection_strategy=str(args.selection_strategy),
         user_preferences=user_preferences,
         llm_settings=llm_settings,
+        room_design_spec=room_design_spec,
+        selection_mode=args.selection_mode,
     )
     write_json(out_path, result)
     print(f"catalog_rows = {len(catalog_rows)}")

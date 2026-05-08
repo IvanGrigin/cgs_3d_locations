@@ -17,7 +17,7 @@ STRAIGHT_LAYOUT_ALIASES = {
     "линейная",
 }
 
-MIN_WIDTH_MM = 1800
+MIN_WIDTH_MM = 1500
 MIN_SINK_COOKTOP_GAP_MM = 400
 PREFERRED_SINK_COOKTOP_GAP_MM = 600
 
@@ -47,6 +47,7 @@ def _as_bool(value: Any, default: bool = False) -> bool:
 def _normalize_required(required_appliances: dict[str, Any] | None) -> dict[str, Any]:
     required = dict(required_appliances or {})
     required["sink"] = True
+    required["faucet"] = True
     required["microwave"] = True
     required.setdefault("cooktop", True)
     required.setdefault("oven", bool(required.get("cooktop", True)))
@@ -315,7 +316,7 @@ def _build_default_modules(available_width_mm: int, required: dict[str, Any], wa
         )
 
     working_width = available_width_mm - _sum_width(modules)
-    cooktop_enabled = bool(required.get("cooktop")) and working_width >= 1200
+    cooktop_enabled = bool(required.get("cooktop")) and working_width >= 1800
     if required.get("cooktop") and not cooktop_enabled:
         warnings.append("removed_due_to_insufficient_width:cooktop")
 
@@ -539,6 +540,87 @@ def _build_upper_modules(base_modules: list[dict[str, Any]], required: dict[str,
     return upper, decor, warnings
 
 
+def _blocked_countertop_intervals(base_modules: list[dict[str, Any]], margin_mm: int = 120) -> list[tuple[int, int]]:
+    intervals: list[tuple[int, int]] = []
+    for module in base_modules:
+        x = int(module.get("x_mm") or 0)
+        width = int(module.get("width_mm") or 0)
+        if not module.get("has_countertop", True):
+            continue
+        if module.get("cutouts") or module.get("type") in {"sink_cabinet", "oven_cabinet", "dishwasher_slot"}:
+            intervals.append((max(0, x - margin_mm), x + width + margin_mm))
+    return intervals
+
+
+def _find_countertop_spot(
+    base_modules: list[dict[str, Any]],
+    *,
+    min_width_mm: int,
+    preferred_y_mm: int,
+    used_spots: list[tuple[int, int]],
+) -> tuple[int, int, str | None] | None:
+    blocked = [*_blocked_countertop_intervals(base_modules), *used_spots]
+    candidates: list[tuple[int, int, str]] = []
+    for module in base_modules:
+        if not module.get("has_countertop", True):
+            continue
+        if module.get("type") in {"sink_cabinet", "oven_cabinet"}:
+            continue
+        start = int(module.get("x_mm") or 0)
+        end = start + int(module.get("width_mm") or 0)
+        free_start, free_end = start, end
+        for left, right in blocked:
+            if right <= free_start or left >= free_end:
+                continue
+            if left <= free_start < right:
+                free_start = min(free_end, right)
+            elif free_start < left < free_end:
+                free_end = max(free_start, left)
+        if free_end - free_start >= min_width_mm:
+            candidates.append((free_start, free_end, str(module.get("id") or "")))
+    if not candidates:
+        return None
+    start, end, module_id = max(candidates, key=lambda item: item[1] - item[0])
+    x = (start + end) // 2
+    used_spots.append((x - min_width_mm // 2 - 80, x + min_width_mm // 2 + 80))
+    return x, preferred_y_mm, module_id or None
+
+
+def _build_countertop_accessories(base_modules: list[dict[str, Any]], required: dict[str, Any]) -> list[dict[str, Any]]:
+    if not _as_bool(required.get("decor_accessories"), True):
+        return []
+
+    top_z = _dim("plinth_height", 100) + _dim("base_body_height", 720) + _dim("countertop_thickness", 38) + 2
+    used_spots: list[tuple[int, int]] = []
+    items: list[dict[str, Any]] = []
+    specs = [
+        ("decor_flowers_vase_001", "flowers_vase", 260, 440, 4500),
+        ("decor_oil_bottles_001", "oil_bottles_decor", 220, 130, 2200),
+        ("decor_kitchen_set_001", "decorative_kitchen_set", 300, 360, 2800),
+    ]
+
+    for item_id, item_type, min_width, y_mm, estimate in specs:
+        spot = _find_countertop_spot(base_modules, min_width_mm=min_width, preferred_y_mm=y_mm, used_spots=used_spots)
+        if spot is None:
+            continue
+        x_mm, y_mm, module_id = spot
+        items.append(
+            {
+                "id": item_id,
+                "type": item_type,
+                "placement": "countertop",
+                "x_mm": x_mm,
+                "y_mm": y_mm,
+                "z_mm": top_z,
+                "orientation": "x",
+                "support_module_id": module_id,
+                "estimated_price": estimate,
+                "price_currency": "RUB",
+            }
+        )
+    return items
+
+
 def _build_functional_zones(base_modules: list[dict[str, Any]], upper_modules: list[dict[str, Any]], decor_items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     zones: list[dict[str, Any]] = []
     for module in base_modules:
@@ -568,6 +650,8 @@ def _build_functional_zones(base_modules: list[dict[str, Any]], upper_modules: l
     for item in decor_items:
         if item["type"] == "microwave":
             zones.append({"role": "microwave", "item_id": item["id"], "placement": item.get("placement")})
+        elif item["type"] in {"flowers_vase", "oil_bottles_decor", "decorative_kitchen_set"}:
+            zones.append({"role": item["type"], "item_id": item["id"], "placement": item.get("placement")})
     return zones
 
 
@@ -618,6 +702,9 @@ def _build_asset_targets(functional_zones: list[dict[str, Any]]) -> list[dict[st
     for role in ("fridge", "sink", "cooktop", "hood", "microwave", "water_appliance"):
         if any(zone["role"] == role or (role == "cooktop" and zone["role"] == "cooking") for zone in functional_zones):
             targets.append({"role": role, "prefer_fbx": True})
+    for role in ("flowers_vase", "oil_bottles_decor", "decorative_kitchen_set"):
+        if any(zone["role"] == role for zone in functional_zones):
+            targets.append({"role": role, "prefer_fbx": True, "optional": True})
     targets.extend(
         [
             {"role": "body", "prefer_material": "board_sheet"},
@@ -655,6 +742,7 @@ def solve_kitchen_layout(
     countertop_segments = _build_countertop_segments(base_modules)
     backsplash_segments = _build_backsplash_segments(countertop_segments)
     upper_modules, decor_items, upper_warnings = _build_upper_modules(base_modules, required)
+    decor_items.extend(_build_countertop_accessories(base_modules, required))
     warnings.extend(upper_warnings)
 
     has_cooktop = any("cooktop" in module.get("cutouts", []) for module in base_modules)

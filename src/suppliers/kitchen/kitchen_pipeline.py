@@ -10,6 +10,13 @@ from .kitchen_catalog_loader import load_kitchen_material_catalog
 from .kitchen_constants import SELECTION_MODES
 from .kitchen_design_spec import build_kitchen_design_spec
 from .kitchen_layout_solver import solve_kitchen_layout
+from .kitchen_llm_decisions import (
+    append_appliance_hints_to_prompt,
+    apply_llm_preferences_to_design_spec,
+    infer_prompt_preferences_with_llm,
+    rerank_appliance_assets_with_llm,
+    rerank_material_bindings_with_llm,
+)
 from .kitchen_material_matcher import select_kitchen_materials
 
 
@@ -28,9 +35,18 @@ def generate_kitchen_variants(
     target_id: str = "kitchen_001",
     position: list[float] | None = None,
     rotation: list[float] | None = None,
+    llm_settings: dict[str, Any] | None = None,
 ) -> dict[str, dict[str, Any]]:
     materials = load_kitchen_material_catalog(material_catalog) if isinstance(material_catalog, (str, Path)) else material_catalog
-    required_appliances = required_appliances or {"sink": True, "cooktop": True, "oven": True, "hood": True}
+    required_appliances = required_appliances or {
+        "sink": True,
+        "faucet": True,
+        "cooktop": True,
+        "oven": True,
+        "hood": True,
+        "fridge": True,
+        "microwave": True,
+    }
     design_spec = build_kitchen_design_spec(
         user_prompt=user_prompt,
         recommended_colors=recommended_colors or {},
@@ -38,6 +54,15 @@ def generate_kitchen_variants(
         appliances=required_appliances,
         room_meta=room,
     )
+    llm_preferences = infer_prompt_preferences_with_llm(
+        user_prompt=user_prompt,
+        room=room,
+        kitchen_zone=kitchen_zone,
+        required_appliances=required_appliances,
+        llm_settings=llm_settings,
+    )
+    design_spec = apply_llm_preferences_to_design_spec(design_spec, llm_preferences)
+    appliance_prompt = append_appliance_hints_to_prompt(user_prompt, llm_preferences)
     if entry_zone and entry_zone.get("has_entry_handwash"):
         design_spec["functional_requirements"]["entry_handwash"] = True
     layout_plan = solve_kitchen_layout(kitchen_zone, plumbing_point, entry_zone, required_appliances, design_spec)
@@ -48,15 +73,34 @@ def generate_kitchen_variants(
             required_appliances=required_appliances,
             only_local_assets=True,
             top_n=5,
-            user_prompt=user_prompt,
+            user_prompt=appliance_prompt,
         )
         if appliance_catalog is not None
         else {"appliances": {}, "warnings": []}
     )
+    appliance_assets = rerank_appliance_assets_with_llm(
+        appliance_assets=appliance_assets,
+        user_prompt=appliance_prompt,
+        design_spec=design_spec,
+        llm_settings=llm_settings,
+    )
     variants: dict[str, dict[str, Any]] = {}
     for mode in modes:
         selected_materials = select_kitchen_materials(materials, design_spec, layout_plan, mode=mode, top_n=5)
-        bom = estimate_kitchen_bom(layout_plan, selected_materials, mode=mode, include_appliance_estimate=False)
+        selected_materials = rerank_material_bindings_with_llm(
+            selected_materials=selected_materials,
+            design_spec=design_spec,
+            user_prompt=user_prompt,
+            mode=mode,
+            llm_settings=llm_settings,
+        )
+        bom = estimate_kitchen_bom(
+            layout_plan,
+            selected_materials,
+            mode=mode,
+            include_appliance_estimate=False,
+            appliance_assets=appliance_assets,
+        )
         variants[mode] = build_kitchen_assembly_json(
             target_id=f"{target_id}_{mode}",
             layout_plan=layout_plan,
@@ -77,12 +121,14 @@ def is_kitchen_target(target: dict[str, Any]) -> bool:
 
 
 def build_kitchen_zone_from_target(target: dict[str, Any], room: dict[str, Any] | None = None) -> dict[str, Any]:
-    dims = target.get("dimensions") or target.get("bbox_m") or target.get("size") or {}
+    dims = target.get("dimensions") or target.get("bbox_m") or target.get("size_m") or target.get("size") or {}
     width_m = None
     if isinstance(dims, dict):
         width_m = dims.get("width_m") or dims.get("x") or dims.get("width")
     elif isinstance(dims, list) and dims:
         width_m = dims[0]
+    if target.get("kitchen_width_m"):
+        width_m = target.get("kitchen_width_m")
     try:
         width_mm = int(round(float(width_m) * 1000.0)) if width_m else 3000
     except Exception:

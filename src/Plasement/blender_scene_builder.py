@@ -46,6 +46,7 @@ def _parse_argv(argv: List[str]) -> argparse.Namespace:
     ap.add_argument("--import-glb", action="store_true", help="Compat flag, ignored by builder")
     ap.add_argument("--save-blend", default=None)
     ap.add_argument("--render", default=None)
+    ap.add_argument("--build-report", default=None, help="Write JSON build diagnostics sidecar.")
     ap.add_argument("--draw-aabb", action="store_true")
     ap.add_argument(
         "--no-bbox-fallback",
@@ -58,8 +59,10 @@ def _parse_argv(argv: List[str]) -> argparse.Namespace:
     ap.add_argument("--force-tint", action="store_true")
     ap.add_argument("--highlight-item-ids", default=None, help="Comma-separated placement/item ids to draw black bbox around.")
     ap.add_argument("--hide-room-shell", action="store_true", help="Hide walls, ceiling and exterior shell objects before render.")
+    ap.add_argument("--render-layer", default="all", choices=["all", "kitchen", "room_shell", "surfaces", "windows", "curtains", "tables_chairs", "non_kitchen"], help="Optional visibility filter for layer renders/GIFs.")
     ap.add_argument("--turntable-render-dir", default=None, help="Render turntable PNG sequence to directory.")
     ap.add_argument("--turntable-frames", type=int, default=24, help="Frame count for turntable render sequence.")
+    ap.add_argument("--turntable-frame-index", type=int, default=None, help="Render only this turntable frame index.")
     ap.add_argument("--turntable-elevation-deg", type=float, default=30.0, help="Camera elevation angle above floor-parallel orbit plane.")
 
     # Texture policy
@@ -545,24 +548,86 @@ def _aabb_from_object_family_root(obj: bpy.types.Object) -> Optional[Dict[str, f
     }
 
 
-def _blend_source_name_from_item(item: Dict) -> str:
+def _blend_source_names_from_item(item: Dict) -> List[str]:
+    candidates: List[str] = []
+
     source = item.get("source") or {}
     if isinstance(source, dict):
-        name = str(source.get("blend_object_name") or "").strip()
-        if name:
-            return name
+        candidates.extend(
+            [
+                str(source.get("blend_object_name") or "").strip(),
+                str(source.get("original_blend_object_name") or "").strip(),
+            ]
+        )
+
     meta = item.get("meta") or {}
     meta_source = meta.get("source") or {}
     if isinstance(meta_source, dict):
-        return str(meta_source.get("blend_object_name") or "").strip()
-    return ""
+        candidates.extend(
+            [
+                str(meta_source.get("blend_object_name") or "").strip(),
+                str(meta_source.get("original_blend_object_name") or "").strip(),
+            ]
+        )
+
+    original = meta.get("original_generated_item") or {}
+    if isinstance(original, dict):
+        candidates.append(str(original.get("blend_object_name") or "").strip())
+        original_source = original.get("source") or {}
+        if isinstance(original_source, dict):
+            candidates.extend(
+                [
+                    str(original_source.get("blend_object_name") or "").strip(),
+                    str(original_source.get("original_blend_object_name") or "").strip(),
+                ]
+            )
+
+    out: List[str] = []
+    seen: set[str] = set()
+    for name in candidates:
+        if name and name not in seen:
+            out.append(name)
+            seen.add(name)
+    return out
+
+
+def _blend_source_name_from_item(item: Dict) -> str:
+    names = _blend_source_names_from_item(item)
+    return names[0] if names else ""
+
+
+def _strip_blender_numeric_suffix(name: str) -> str:
+    return re.sub(r"\.\d{3}$", "", str(name or "").strip())
 
 
 def _get_scene_source_object(blend_object_name: str) -> Optional[bpy.types.Object]:
     name = str(blend_object_name or "").strip()
     if not name:
         return None
-    return bpy.data.objects.get(name)
+    obj = bpy.data.objects.get(name)
+    if obj is not None:
+        return obj
+
+    base_name = _strip_blender_numeric_suffix(name)
+    if base_name and base_name != name:
+        obj = bpy.data.objects.get(base_name)
+        if obj is not None:
+            return obj
+
+    # Linked/appended Infinigen blends can gain Blender numeric suffixes when
+    # names collide. Keep supplier fallback tied to the original source mesh
+    # instead of dropping to a bbox only because of a harmless rename.
+    for candidate in bpy.data.objects:
+        candidate_name = str(getattr(candidate, "name", "") or "")
+        if candidate_name.startswith(f"{name}."):
+            return candidate
+        if base_name and (
+            candidate_name == base_name
+            or candidate_name.startswith(f"{base_name}.")
+            or _strip_blender_numeric_suffix(candidate_name) == base_name
+        ):
+            return candidate
+    return None
 
 
 def _hide_object_family(root: bpy.types.Object) -> None:
@@ -1321,12 +1386,20 @@ def _frame_camera_on_bounds(bb_min: mathutils.Vector, bb_max: mathutils.Vector) 
     center = (bb_min + bb_max) * 0.5
     dims = bb_max - bb_min
     radius = max(dims.x, dims.y, dims.z, 0.1)
+    has_kitchen = any(
+        obj.get("cgs_procedural_assembly") == "kitchen"
+        for obj in bpy.data.objects
+        if not bool(getattr(obj, "hide_render", False))
+    )
 
     cam_data = bpy.data.cameras.new("Camera")
     cam = bpy.data.objects.new("Camera", cam_data)
     bpy.context.scene.collection.objects.link(cam)
 
-    cam.location = (center.x - 1.6 * radius, center.y - 1.6 * radius, center.z + 1.2 * radius)
+    if has_kitchen:
+        cam.location = (center.x - 0.55 * radius, center.y + 1.85 * radius, center.z + 1.0 * radius)
+    else:
+        cam.location = (center.x - 1.6 * radius, center.y - 1.6 * radius, center.z + 1.2 * radius)
     cam.data.lens = 35
     direction = mathutils.Vector((center.x, center.y, center.z)) - cam.location
     cam.rotation_euler = direction.to_track_quat("-Z", "Y").to_euler()
@@ -1379,6 +1452,19 @@ def _item_semantic_group(item: Dict) -> str:
         or ""
     ).strip().lower()
     if group:
+        if group == "tv_projector_screen":
+            text = " ".join(
+                str(value or "").lower()
+                for value in (
+                    item.get("category"),
+                    _item_name(item),
+                    supplier_candidate.get("title"),
+                    supplier_candidate.get("category_raw"),
+                    supplier_candidate.get("category_norm"),
+                )
+            )
+            if any(token in text for token in ("monitor", "монитор", "gaming", "игров")):
+                return "computer"
         return group
 
     category = str(item.get("category") or "").strip().lower()
@@ -1427,6 +1513,49 @@ def _item_semantic_group(item: Dict) -> str:
     if "sofa" in text or "couch" in text or "диван" in text:
         return "sofa"
     return ""
+
+
+def _is_procedural_kitchen_item(item: Dict) -> bool:
+    meta = item.get("meta") if isinstance(item.get("meta"), dict) else {}
+    asset = item.get("asset") if isinstance(item.get("asset"), dict) else {}
+    text = " ".join(
+        str(x or "")
+        for x in (
+            item.get("category"),
+            item.get("type"),
+            item.get("assembly_type"),
+            asset.get("kind"),
+            asset.get("assembly_type"),
+            meta.get("procedural_assembly"),
+            meta.get("assembly_type"),
+        )
+    ).lower()
+    return "procedural_kitchen" in text or "kitchen_set" in text or text.strip() == "kitchen"
+
+
+def _kitchen_assembly_from_scene_item(item: Dict, aabb: Dict[str, float]) -> Dict:
+    meta = item.get("meta") if isinstance(item.get("meta"), dict) else {}
+    assembly = dict(meta)
+    assembly.update({k: v for k, v in item.items() if k not in {"meta", "asset", "source"}})
+    width = max(0.1, float(aabb.get("x_max", 0.0)) - float(aabb.get("x_min", 0.0)))
+    depth = max(0.1, float(aabb.get("y_max", 0.0)) - float(aabb.get("y_min", 0.0)))
+    height = max(0.1, float(aabb.get("z_max", 2.2)) - float(aabb.get("z_min", 0.0)))
+    assembly.setdefault("id", item.get("id") or "kitchen_assembly")
+    assembly.setdefault("type", "procedural_assembly")
+    assembly.setdefault("category", "kitchen_set")
+    assembly.setdefault("assembly_type", "procedural_kitchen")
+    raw_position = item.get("position")
+    if isinstance(raw_position, (list, tuple)) and len(raw_position) >= 3:
+        assembly["_scene_root_position"] = [float(raw_position[0]), float(raw_position[1]), float(raw_position[2])]
+    else:
+        assembly["_scene_root_position"] = [
+            float(aabb.get("x_min", 0.0)),
+            float(aabb.get("y_min", 0.0)),
+            float(aabb.get("z_min", 0.0)),
+        ]
+    assembly["position"] = [0.0, 0.0, 0.0]
+    assembly.setdefault("dimensions", {"width_m": width, "depth_m": depth, "height_m": height})
+    return assembly
 
 
 def _item_mount_mode(item: Dict) -> str:
@@ -1563,6 +1692,64 @@ def _hide_room_shell_objects() -> int:
     return hidden
 
 
+def _object_family_text(obj: bpy.types.Object) -> str:
+    values: list[str] = []
+    cur = obj
+    seen = set()
+    while cur is not None and cur.name not in seen:
+        seen.add(cur.name)
+        values.append(cur.name)
+        for key in ("cgs_procedural_assembly", "cgs_procedural_proxy", "cgs_item_id", "cgs_light_semantic_group"):
+            try:
+                values.append(str(cur.get(key) or ""))
+            except Exception:
+                pass
+        cur = cur.parent
+    for col in obj.users_collection:
+        values.append(col.name)
+    return " ".join(values).lower()
+
+
+def _object_matches_render_layer(obj: bpy.types.Object, layer: str) -> bool:
+    text = _object_family_text(obj)
+    if layer == "all":
+        return True
+    if layer == "kitchen":
+        return "proceduralkitchen" in text or "procedural_assembly kitchen" in text or "kitchen" in text
+    if layer == "non_kitchen":
+        return not _object_matches_render_layer(obj, "kitchen")
+    if layer in {"room_shell", "surfaces"}:
+        return any(token in text for token in ("wall", "floor", "ceiling", "window", "door", "supplier wallpaper", "supplier floor"))
+    if layer == "windows":
+        return any(token in text for token in ("window", "glass", "окон", "win_"))
+    if layer == "curtains":
+        return any(token in text for token in ("curtain", "shtor", "штор", "занавес", "procedural_proxy curtain"))
+    if layer == "tables_chairs":
+        return any(token in text for token in ("table", "chair", "dining", "стол", "стул"))
+    return True
+
+
+def _apply_render_layer_visibility(layer: str) -> int:
+    layer = str(layer or "all").strip().lower()
+    if layer == "all":
+        return 0
+    changed = 0
+    for obj in list(bpy.data.objects):
+        if obj.type in {"CAMERA", "LIGHT"}:
+            continue
+        show = _object_matches_render_layer(obj, layer)
+        try:
+            obj.hide_set(not show)
+        except Exception:
+            pass
+        try:
+            obj.hide_render = not show
+        except Exception:
+            pass
+        changed += 1
+    return changed
+
+
 def _looks_like_overlay_helper_name(name: str) -> bool:
     low = str(name or "").strip().lower()
     if not low:
@@ -1605,6 +1792,98 @@ def _add_basic_lights(bb_min: mathutils.Vector, bb_max: mathutils.Vector) -> Non
         area.rotation_euler = direction.to_track_quat("-Z", "Y").to_euler()
     except Exception:
         pass
+
+
+def _functional_light_location(aabb: Dict[str, float], semantic_group: str) -> Tuple[float, float, float]:
+    cx = 0.5 * (float(aabb["x_min"]) + float(aabb["x_max"]))
+    cy = 0.5 * (float(aabb["y_min"]) + float(aabb["y_max"]))
+    z_min = float(aabb["z_min"])
+    z_max = float(aabb["z_max"])
+    height = max(z_max - z_min, 1e-6)
+    if semantic_group == "lamp_ceiling":
+        return cx, cy, z_min + min(0.22, height * 0.35)
+    if semantic_group == "lamp_table":
+        return cx, cy, z_min + height * 0.70
+    if semantic_group == "lamp_floor":
+        return cx, cy, z_min + height * 0.78
+    return cx, cy, z_min + height * 0.65
+
+
+def _make_emissive_marker_material() -> bpy.types.Material:
+    mat = bpy.data.materials.get("MAT_CGS_FUNCTIONAL_LIGHT_MARKER")
+    if mat is not None:
+        return mat
+    mat = bpy.data.materials.new("MAT_CGS_FUNCTIONAL_LIGHT_MARKER")
+    mat.use_nodes = True
+    nt = mat.node_tree
+    for node in list(nt.nodes):
+        nt.nodes.remove(node)
+    out = nt.nodes.new("ShaderNodeOutputMaterial")
+    emission = nt.nodes.new("ShaderNodeEmission")
+    emission.inputs["Color"].default_value = (1.0, 0.82, 0.48, 1.0)
+    emission.inputs["Strength"].default_value = 5.0
+    nt.links.new(emission.outputs["Emission"], out.inputs["Surface"])
+    return mat
+
+
+def _add_emissive_marker(location: Tuple[float, float, float], radius: float, name: str) -> None:
+    try:
+        bpy.ops.mesh.primitive_uv_sphere_add(segments=16, ring_count=8, radius=max(float(radius), 0.025), location=location)
+        marker = bpy.context.object
+        marker.name = name
+        marker.data.name = f"{name}_Mesh"
+        marker.data.materials.append(_make_emissive_marker_material())
+        marker.hide_select = True
+    except Exception:
+        pass
+
+
+def _add_functional_light_for_item(item: Dict, aabb: Dict[str, float], parent: Optional[bpy.types.Object] = None) -> int:
+    semantic_group = _item_semantic_group(item)
+    if semantic_group not in {"lamp_ceiling", "lamp_table", "lamp_floor", "lamp_wall"}:
+        return 0
+    item_id = str(item.get("id") or "").strip() or _item_name(item)
+    base_name = f"CGS_FunctionalLight_{item_id}"
+    if bpy.data.objects.get(base_name):
+        return 0
+
+    loc = _functional_light_location(aabb, semantic_group)
+    width = max(float(aabb["x_max"]) - float(aabb["x_min"]), 0.05)
+    depth = max(float(aabb["y_max"]) - float(aabb["y_min"]), 0.05)
+    height = max(float(aabb["z_max"]) - float(aabb["z_min"]), 0.05)
+    footprint = max(width, depth)
+
+    if semantic_group == "lamp_ceiling":
+        light_type = "POINT"
+        energy = max(420.0, min(1100.0, 700.0 * footprint))
+        soft_size = max(0.35, min(1.25, footprint * 0.75))
+        marker_radius = max(0.035, min(0.07, footprint * 0.05))
+    elif semantic_group == "lamp_floor":
+        light_type = "POINT"
+        energy = 260.0
+        soft_size = max(0.22, min(0.65, footprint * 0.8))
+        marker_radius = 0.04
+    else:
+        light_type = "POINT"
+        energy = 130.0
+        soft_size = max(0.12, min(0.35, footprint * 0.8))
+        marker_radius = 0.028
+
+    try:
+        light_data = bpy.data.lights.new(base_name, light_type)
+        light_data.energy = energy
+        light_data.shadow_soft_size = soft_size
+        light_obj = bpy.data.objects.new(base_name, light_data)
+        bpy.context.scene.collection.objects.link(light_obj)
+        light_obj.location = loc
+        light_obj["cgs_functional_light"] = True
+        light_obj["cgs_light_semantic_group"] = semantic_group
+        if parent is not None:
+            light_obj["cgs_light_fixture_parent"] = parent.name
+        _add_emissive_marker(loc, marker_radius, f"{base_name}_Emitter")
+        return 1
+    except Exception:
+        return 0
 
 
 def _pack_assets_best_effort() -> None:
@@ -1750,6 +2029,7 @@ def _render_turntable_sequence(
     elevation_deg: float = 30.0,
     room_bb_min: Optional[mathutils.Vector] = None,
     room_bb_max: Optional[mathutils.Vector] = None,
+    frame_index: Optional[int] = None,
 ) -> None:
     scene = bpy.context.scene
     cam = _ensure_scene_camera(bb_min, bb_max)
@@ -1782,8 +2062,14 @@ def _render_turntable_sequence(
         pass
 
     try:
-        for idx in range(max(int(frame_count), 1)):
-            angle = (2.0 * math.pi * idx) / max(int(frame_count), 1)
+        total = max(int(frame_count), 1)
+        only_idx = int(frame_index) if frame_index is not None else None
+        if only_idx is not None and (only_idx < 0 or only_idx >= total):
+            raise ValueError(f"turntable frame index out of range: {only_idx} for {total} frames")
+        for idx in range(total):
+            if only_idx is not None and idx != only_idx:
+                continue
+            angle = (2.0 * math.pi * idx) / total
             cam.location = (
                 target.x + orbit_radius * math.cos(angle),
                 target.y + orbit_radius * math.sin(angle),
@@ -2110,6 +2396,27 @@ def _safe_import_supported_mesh(mesh_path: str) -> tuple[List[bpy.types.Object],
             except Exception:
                 pass
         return [], f"{type(exc).__name__}: {exc}"
+
+
+def _remove_or_hide_non_mesh_import_objects(objs: List[bpy.types.Object]) -> tuple[List[bpy.types.Object], List[Dict[str, str]]]:
+    kept: List[bpy.types.Object] = []
+    removed: List[Dict[str, str]] = []
+    for obj in objs:
+        if obj.type == "MESH":
+            kept.append(obj)
+            continue
+        removed.append({"name": str(obj.name), "type": str(obj.type)})
+        if obj.type == "ARMATURE":
+            obj.hide_viewport = True
+            obj.hide_render = True
+            kept.append(obj)
+            continue
+        try:
+            bpy.data.objects.remove(obj, do_unlink=True)
+        except Exception:
+            obj.hide_viewport = True
+            obj.hide_render = True
+    return kept, removed
 
 
 # ============================================================
@@ -3502,6 +3809,187 @@ def _assign_material_to_object(obj: bpy.types.Object, mat: bpy.types.Material) -
             me.materials[i] = mat
 
 
+def _flip_mesh_objects_local_z(objs: List[bpy.types.Object]) -> None:
+    for obj in objs:
+        if obj.type != "MESH" or obj.data is None:
+            continue
+        mesh = obj.data
+        if not mesh.vertices:
+            continue
+        z_values = [float(vertex.co.z) for vertex in mesh.vertices]
+        z_mid2 = min(z_values) + max(z_values)
+        for vertex in mesh.vertices:
+            vertex.co.z = z_mid2 - float(vertex.co.z)
+        try:
+            mesh.flip_normals()
+        except Exception:
+            pass
+        try:
+            mesh.update()
+        except Exception:
+            pass
+
+
+def _make_curtain_proxy_mesh(
+    *,
+    item: dict,
+    aabb: dict,
+    rotation_deg_engine: float,
+    texture_path: Optional[str],
+    collection: bpy.types.Collection,
+    name: str,
+) -> Optional[bpy.types.Object]:
+    if not texture_path or not Path(texture_path).expanduser().is_file():
+        return None
+
+    size_m = item.get("size_m") if isinstance(item.get("size_m"), list) else []
+    width = float(size_m[0]) if len(size_m) >= 1 else max(float(aabb["x_max"]) - float(aabb["x_min"]), 0.4)
+    depth = float(size_m[1]) if len(size_m) >= 2 else max(float(aabb["y_max"]) - float(aabb["y_min"]), 0.06)
+    height = float(size_m[2]) if len(size_m) >= 3 else max(float(aabb["z_max"]) - float(aabb["z_min"]), 0.6)
+    width = max(width, 0.4)
+    depth = max(depth, 0.04)
+    height = max(height, 0.6)
+
+    cx = 0.5 * (float(aabb["x_min"]) + float(aabb["x_max"]))
+    cy = 0.5 * (float(aabb["y_min"]) + float(aabb["y_max"]))
+    cz = 0.5 * (float(aabb["z_min"]) + float(aabb["z_max"]))
+
+    cols = 48
+    rows = 10
+    amplitude = min(max(depth * 0.42, 0.025), 0.09)
+    verts: list[tuple[float, float, float]] = []
+    uvs: list[tuple[float, float]] = []
+    faces: list[tuple[int, int, int, int]] = []
+
+    for j in range(rows + 1):
+        v = j / rows
+        z = -height * 0.5 + height * v
+        bottom_softening = 1.0 - 0.10 * max(0.0, (0.16 - v) / 0.16)
+        for i in range(cols + 1):
+            u = i / cols
+            x = -width * 0.5 + width * u
+            fold = math.sin(u * math.tau * 7.5) * amplitude * bottom_softening
+            # Slight center overlap suggests two curtain panels without splitting UVs.
+            center_pull = -0.012 * math.exp(-((u - 0.5) ** 2) / 0.003)
+            verts.append((x, fold + center_pull, z))
+            uvs.append((u, 1.0 - v))
+
+    for j in range(rows):
+        for i in range(cols):
+            a = j * (cols + 1) + i
+            faces.append((a, a + 1, a + cols + 2, a + cols + 1))
+
+    mesh = bpy.data.meshes.new(f"{name}_mesh")
+    mesh.from_pydata(verts, [], faces)
+    mesh.update()
+
+    uv_layer = mesh.uv_layers.new(name="UVMap")
+    for poly in mesh.polygons:
+        for loop_index in poly.loop_indices:
+            uv_layer.data[loop_index].uv = uvs[mesh.loops[loop_index].vertex_index]
+
+    obj = bpy.data.objects.new(f"{name}_cloth", mesh)
+    collection.objects.link(obj)
+    obj.location = (cx, cy, cz)
+    obj.rotation_euler[2] = math.radians(rotation_deg_engine)
+    try:
+        for poly in mesh.polygons:
+            poly.use_smooth = True
+    except Exception:
+        pass
+
+    mat = _make_image_material(
+        f"MAT_{name}_Shtorystore",
+        str(Path(texture_path).expanduser().resolve()),
+        uv_scale=1.0,
+        extension="EXTEND",
+    )
+    _assign_material_to_object(obj, mat)
+
+    parent = bpy.data.objects.new(name, None)
+    parent.empty_display_type = "CUBE"
+    parent.empty_display_size = 0.25
+    collection.objects.link(parent)
+    parent.location = (cx, cy, cz)
+    obj.parent = parent
+    obj.matrix_parent_inverse = parent.matrix_world.inverted()
+    parent["cgs_placement_score"] = 0.0
+    parent["cgs_placement_confidence"] = "high"
+    parent["cgs_procedural_proxy"] = "curtain"
+
+    # Add a very thin rod so the proxy reads as a window treatment in renders.
+    try:
+        bpy.ops.mesh.primitive_cylinder_add(
+            vertices=24,
+            radius=0.018,
+            depth=width + 0.16,
+            location=(cx, cy, float(aabb["z_max"]) + 0.015),
+            rotation=(0.0, math.radians(90.0), math.radians(rotation_deg_engine)),
+        )
+        rod = bpy.context.object
+        if rod is not None:
+            rod.name = f"{name}_rod"
+            _unlink_from_all_collections(rod)
+            collection.objects.link(rod)
+            rod.parent = parent
+            rod.matrix_parent_inverse = parent.matrix_world.inverted()
+            rod_mat = _make_pbr_material(f"MAT_{name}_Rod", PBRMaps(), tint_rgb=(0.08, 0.075, 0.065), tex_scale=1.0)
+            _assign_material_to_object(rod, rod_mat)
+    except Exception:
+        pass
+
+    return parent
+
+
+def _apply_curtain_planar_uv(
+    *,
+    parent: bpy.types.Object,
+    aabb: dict,
+    rotation_deg_engine: float,
+    tile_size_m: float = 0.65,
+    mirror_repeat: bool = True,
+) -> None:
+    width = max(float(aabb["x_max"]) - float(aabb["x_min"]), float(aabb["y_max"]) - float(aabb["y_min"]), 0.1)
+    height = max(float(aabb["z_max"]) - float(aabb["z_min"]), 0.1)
+    cx = 0.5 * (float(aabb["x_min"]) + float(aabb["x_max"]))
+    cy = 0.5 * (float(aabb["y_min"]) + float(aabb["y_max"]))
+    z_min = float(aabb["z_min"])
+    yaw = math.radians(rotation_deg_engine)
+    axis = mathutils.Vector((math.cos(yaw), math.sin(yaw), 0.0))
+    center = mathutils.Vector((cx, cy, 0.0))
+    tile_size_m = max(0.12, float(tile_size_m or 0.65))
+
+    for obj in _iter_mesh_children(parent):
+        if obj.type != "MESH" or obj.data is None:
+            continue
+        mesh = obj.data
+        if not mesh.uv_layers:
+            uv_layer = mesh.uv_layers.new(name="ShtorystorePlanarUV")
+        else:
+            uv_layer = mesh.uv_layers.active
+            uv_layer.name = "ShtorystorePlanarUV"
+        for poly in mesh.polygons:
+            for loop_index in poly.loop_indices:
+                vertex_index = mesh.loops[loop_index].vertex_index
+                p = obj.matrix_world @ mesh.vertices[vertex_index].co
+                rel = mathutils.Vector((p.x, p.y, 0.0)) - center
+                if mirror_repeat:
+                    u = (rel.dot(axis) + width * 0.5) / tile_size_m
+                    v = (float(p.z) - z_min) / tile_size_m
+                    uv_layer.data[loop_index].uv = (u, v)
+                else:
+                    u = (rel.dot(axis) / width) + 0.5
+                    v = (float(p.z) - z_min) / height
+                    uv_layer.data[loop_index].uv = (
+                        max(0.0, min(1.0, u)),
+                        max(0.0, min(1.0, 1.0 - v)),
+                    )
+        try:
+            mesh.update()
+        except Exception:
+            pass
+
+
 def _make_bbox_wire_material(name: str, rgba: Tuple[float, float, float, float]) -> bpy.types.Material:
     mat = bpy.data.materials.get(name)
     if mat is None:
@@ -4503,9 +4991,28 @@ def place_in_aabb(
         cur = mathutils.Vector((max(cur.x, eps), max(cur.y, eps), max(cur.z, eps)))
         sx, sy, sz = tgt.x / cur.x, tgt.y / cur.y, tgt.z / cur.z
 
-        if (fit_mode or "stretch").lower() == "uniform":
+        fit_mode_l = (fit_mode or "stretch").lower()
+        if fit_mode_l == "uniform":
             k = min(sx, sy, sz)
             parent.scale = (parent.scale.x * k, parent.scale.y * k, parent.scale.z * k)
+        elif fit_mode_l in {"curtain_soft_width", "curtain_window_soft_width"}:
+            width_squeeze = 0.92
+            if tgt.x >= tgt.y:
+                width_factor = sx * width_squeeze
+                depth_factor = sy
+                parent.scale = (
+                    parent.scale.x * width_factor,
+                    parent.scale.y * depth_factor,
+                    parent.scale.z * sz,
+                )
+            else:
+                width_factor = sy * width_squeeze
+                depth_factor = sx
+                parent.scale = (
+                    parent.scale.x * depth_factor,
+                    parent.scale.y * width_factor,
+                    parent.scale.z * sz,
+                )
         else:
             parent.scale = (parent.scale.x * sx, parent.scale.y * sy, parent.scale.z * sz)
 
@@ -4682,7 +5189,7 @@ def build_scene(
     overlay_bbox_only: bool = False,
     bbox_fallback_missing_mesh: bool = True,
     highlight_item_ids: Optional[set[str]] = None,
-) -> None:
+) -> Dict[str, object]:
     use_reference_scene = bool(reference_blend)
     if not use_reference_scene:
         reset_scene()
@@ -4730,6 +5237,8 @@ def build_scene(
     item_actual_aabbs: Dict[str, Dict[str, float]] = {}
     item_roots: Dict[str, bpy.types.Object] = {}
     item_issue_reasons: Dict[str, List[str]] = {}
+    removed_non_mesh_import_objects: List[Dict[str, str]] = []
+    functional_light_count = 0
 
     room_data_for_build = data if _has_room_spec(data) else _room_spec_from_bounds(
         room_engine=room_engine if isinstance(room_engine, dict) else {},
@@ -4807,6 +5316,15 @@ def build_scene(
         best = min(allowed, key=lambda t: (abs(((a - t + 180.0) % 360.0) - 180.0), t))
         return best
 
+    def _item_yaw_deg(value) -> float:
+        if isinstance(value, (list, tuple)):
+            if len(value) >= 3:
+                return float(value[2] or 0.0)
+            if value:
+                return float(value[0] or 0.0)
+            return 0.0
+        return float(value or 0.0)
+
     for it in items:
         aabb_eng = dict(it.get("aabb") or it.get("bbox") or {})
         if not aabb_eng:
@@ -4822,8 +5340,15 @@ def build_scene(
         force_placeholder_bbox = bool(meta.get("placeholder_bbox"))
         preserve_raw_aabb = bool(overlay_bbox_only or force_placeholder_bbox)
         source = it.get("source") or {}
-        source_blend_name = _blend_source_name_from_item(it)
-        source_scene_obj = _get_scene_source_object(source_blend_name) if use_reference_scene else None
+        source_blend_candidates = _blend_source_names_from_item(it)
+        source_blend_name = source_blend_candidates[0] if source_blend_candidates else ""
+        source_scene_obj = None
+        if use_reference_scene:
+            for candidate_source_name in source_blend_candidates:
+                source_scene_obj = _get_scene_source_object(candidate_source_name)
+                if source_scene_obj is not None:
+                    source_blend_name = candidate_source_name
+                    break
         preserve_reference_vertical_anchor = bool(
             use_reference_scene
             and meta.get("supplier_binding_applied")
@@ -4862,7 +5387,7 @@ def build_scene(
                 aabb_eng["z_max"] = float(z_ceil)
                 aabb_eng["z_min"] = float(z_ceil) - sz
 
-        rot_raw = float(it.get("rotation", it.get("yaw_deg", it.get("rotation_deg", 0.0))) or 0.0)
+        rot_raw = _item_yaw_deg(it.get("rotation", it.get("yaw_deg", it.get("rotation_deg", 0.0))))
         rot_deg = _quantize_rot_0_90_180_270(rot_raw)
 
         fit_mode = _item_mesh_fit_mode(it)
@@ -4883,11 +5408,82 @@ def build_scene(
 
         texture_scale = float(it.get("texture_scale", 1.0) or 1.0)
         tint_rgb = _supplier_candidate_tint_rgb(it, fallback_name=str(name))
+        asset = _item_asset_dict(it)
+        asset_kind = str((asset.get("kind") or "")).strip()
 
         placed_ok = False
         using_reference_object = False
 
         if not overlay_bbox_only:
+            if _is_procedural_kitchen_item(it):
+                try:
+                    from src.suppliers.kitchen.kitchen_blender_builder import build_kitchen_assembly_in_blender
+                except Exception:
+                    try:
+                        from suppliers.kitchen.kitchen_blender_builder import build_kitchen_assembly_in_blender
+                    except Exception as exc:
+                        build_kitchen_assembly_in_blender = None
+                        _log(verbose, f"⚠️ kitchen builder import failed for {name}: {exc}")
+                if build_kitchen_assembly_in_blender is not None:
+                    assembly = _kitchen_assembly_from_scene_item(it, aabb_eng)
+                    kitchen_collection_name = f"ProceduralKitchen_{item_id or name}"
+                    created_kitchen = build_kitchen_assembly_in_blender(
+                        assembly,
+                        parent_collection_name=kitchen_collection_name,
+                    )
+                    if created_kitchen:
+                        root = bpy.data.objects.new(f"{name}_procedural_root", None)
+                        coll_items.objects.link(root)
+                        root.location = tuple(float(v) for v in (assembly.get("_scene_root_position") or [0.0, 0.0, 0.0])[:3])
+                        root.rotation_euler[2] = math.radians(float(rot_deg or 0.0))
+                        created_set = set(created_kitchen)
+                        parented_roots = set()
+                        for obj in created_kitchen:
+                            try:
+                                parent_obj = getattr(obj, "parent", None)
+                                if parent_obj is not None and str(getattr(parent_obj, "name", "")).startswith("kitchen_appliance_asset_root"):
+                                    target_obj = parent_obj
+                                elif parent_obj in created_set:
+                                    continue
+                                else:
+                                    target_obj = obj
+
+                                if target_obj not in parented_roots:
+                                    target_obj.parent = root
+                                    parented_roots.add(target_obj)
+
+                                obj["cgs_item_id"] = item_id
+                                obj["cgs_procedural_assembly"] = "kitchen"
+                            except Exception:
+                                pass
+                        root["cgs_item_id"] = item_id
+                        root["cgs_procedural_assembly"] = "kitchen"
+                        placed_ok = True
+                        if item_id:
+                            item_roots[item_id] = root
+                            actual_aabb = _aabb_from_object_family_root(root)
+                            if actual_aabb is not None:
+                                item_actual_aabbs[item_id] = actual_aabb
+                if placed_ok:
+                    continue
+
+            if asset_kind == "procedural_curtain_proxy":
+                parent = _make_curtain_proxy_mesh(
+                    item=it,
+                    aabb=aabb_eng,
+                    rotation_deg_engine=rot_deg,
+                    texture_path=texture_path,
+                    collection=coll_items,
+                    name=name,
+                )
+                if parent is not None:
+                    placed_ok = True
+                    if item_id:
+                        item_roots[item_id] = parent
+                        actual_aabb = _aabb_from_object_family_root(parent)
+                        if actual_aabb is not None:
+                            item_actual_aabbs[item_id] = actual_aabb
+
             candidate_specs: List[Tuple[int, dict, str]] = []
             seen_mesh_paths: set[str] = set()
             for rank_idx, candidate in enumerate(supplier_candidate_pool):
@@ -4934,6 +5530,11 @@ def build_scene(
                         created_names = sorted(after_names - before_names)
 
                         if objs:
+                            objs, removed_non_mesh = _remove_or_hide_non_mesh_import_objects(objs)
+                            removed_non_mesh_import_objects.extend(removed_non_mesh)
+                            if not any(o.type == "MESH" for o in objs):
+                                last_error = "imported_asset_has_no_mesh_objects"
+                                continue
                             imported_from = candidate_path
                             print(f"[DBG] import_supported_mesh returned {len(objs)} objects for {name}")
                             print(f"[DBG] bpy created {len(created_names)} objects for {name}: {created_names[:20]}")
@@ -4944,6 +5545,9 @@ def build_scene(
 
                     if not objs:
                         continue
+
+                    if asset_kind == "curtain_fbx_textured" and bool(asset.get("vertical_flip")):
+                        _flip_mesh_objects_local_z(objs)
 
                     parent = place_in_aabb(
                         objs=objs,
@@ -5006,7 +5610,30 @@ def build_scene(
 
                     effective_mesh_path = best_imported_from or best_mesh_path or mesh_path
                     if effective_mesh_path:
-                        if force_tint:
+                        if asset_kind == "curtain_fbx_textured" and texture_path and os.path.isfile(texture_path):
+                            tiling = asset.get("texture_tiling") if isinstance(asset.get("texture_tiling"), dict) else {}
+                            curtain_tile_size_m = float(tiling.get("tile_size_m") or 0.65)
+                            curtain_mirror_repeat = str(tiling.get("mode") or "mirror_repeat").strip().lower() in {
+                                "mirror",
+                                "mirrored",
+                                "mirror_repeat",
+                            }
+                            _apply_curtain_planar_uv(
+                                parent=parent,
+                                aabb=aabb_eng,
+                                rotation_deg_engine=rot_deg,
+                                tile_size_m=curtain_tile_size_m,
+                                mirror_repeat=curtain_mirror_repeat,
+                            )
+                            mat = _make_image_material(
+                                name=f"Mat_{name}_Shtorystore",
+                                image_path=texture_path,
+                                uv_scale=1.0,
+                                extension=("MIRROR" if curtain_mirror_repeat else "EXTEND"),
+                            )
+                            for o in _iter_mesh_children(parent):
+                                _assign_material_to_object(o, mat)
+                        elif force_tint:
                             mat = _make_pbr_material(
                                 name=f"Mat_{name}_Tint",
                                 maps=PBRMaps(),
@@ -5060,7 +5687,7 @@ def build_scene(
                     actual_aabb = _aabb_from_object_family_root(source_scene_obj)
                     if actual_aabb is not None:
                         item_actual_aabbs[item_id] = actual_aabb
-            else:
+            elif not placed_ok:
                 print(f"⚠️ {name}: mesh_path не найден в placement/asset или файл отсутствует: {mesh_path_raw}")
 
         force_bbox = overlay_bbox_only or force_placeholder_bbox
@@ -5145,6 +5772,25 @@ def build_scene(
         item_actual_aabbs[item_id] = moved_aabb
         occupied_support_aabbs.setdefault(anchor_id, []).append(moved_aabb)
 
+    if not overlay_bbox_only:
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            semantic_group = _item_semantic_group(item)
+            if semantic_group not in {"lamp_ceiling", "lamp_table", "lamp_floor", "lamp_wall"}:
+                continue
+            item_id = str(item.get("id") or "").strip()
+            light_aabb = item_actual_aabbs.get(item_id) if item_id else None
+            if light_aabb is None:
+                light_aabb = dict(item.get("aabb") or item.get("bbox") or {})
+            if not light_aabb:
+                continue
+            functional_light_count += _add_functional_light_for_item(
+                item,
+                light_aabb,
+                parent=item_roots.get(item_id) if item_id else None,
+            )
+
     def _aabb_overlap_3d(a: Dict[str, float], b: Dict[str, float], margin: float = 0.01) -> bool:
         return (
             float(a["x_max"]) > float(b["x_min"]) + margin
@@ -5227,6 +5873,25 @@ def build_scene(
         _add_basic_lights(bb_min, bb_max)
         _force_material_preview_if_ui()
 
+    item_issues = {
+        str(item_id): sorted(set(str(reason) for reason in reasons))
+        for item_id, reasons in item_issue_reasons.items()
+        if reasons
+    }
+    return {
+        "schema": "blender_scene_builder_report/v1",
+        "json_path": str(json_file),
+        "reference_blend": str(reference_blend or ""),
+        "item_issues": item_issues,
+        "removed_non_mesh_import_objects": removed_non_mesh_import_objects,
+        "functional_light_count": int(functional_light_count),
+        "used_alternative_candidate_count": sum(
+            1
+            for reasons in item_issues.values()
+            if any(str(reason).startswith("used_alternative_candidate:") for reason in reasons)
+        ),
+    }
+
 # ============================================================
 # RUN
 # ============================================================
@@ -5234,11 +5899,23 @@ def build_scene(
 def main() -> None:
     args = _parse_argv(sys.argv)
 
+    if args.project_root:
+        project_root = Path(args.project_root).expanduser().resolve()
+        candidate_paths = [project_root]
+        if project_root.name == "src":
+            candidate_paths.append(project_root.parent)
+        else:
+            candidate_paths.append(project_root / "src")
+        for candidate in candidate_paths:
+            candidate_str = str(candidate)
+            if candidate.exists() and candidate_str not in sys.path:
+                sys.path.insert(0, candidate_str)
+
     json_path = str(Path(args.json).expanduser().resolve())
 
     keep_existing = not (args.rebuild_materials or args.no_keep_existing_mats)
 
-    build_scene(
+    build_report = build_scene(
         json_path=json_path,
         draw_aabb=bool(args.draw_aabb),
         force_tint=bool(args.force_tint),
@@ -5253,8 +5930,15 @@ def main() -> None:
         highlight_item_ids=_parse_id_set(args.highlight_item_ids),
     )
 
+    if args.build_report:
+        report_path = Path(args.build_report).expanduser().resolve()
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        report_path.write_text(json.dumps(build_report, ensure_ascii=False, indent=2), encoding="utf-8")
+
     if args.hide_room_shell:
         _hide_room_shell_objects()
+    if str(args.render_layer or "all") != "all":
+        _apply_render_layer_visibility(str(args.render_layer or "all"))
 
     if not args.no_pack_assets:
         _pack_assets_best_effort()
@@ -5304,6 +5988,7 @@ def main() -> None:
             elevation_deg=float(args.turntable_elevation_deg or 0.0),
             room_bb_min=(room_bounds[0] if room_bounds else None),
             room_bb_max=(room_bounds[1] if room_bounds else None),
+            frame_index=args.turntable_frame_index,
         )
 
 

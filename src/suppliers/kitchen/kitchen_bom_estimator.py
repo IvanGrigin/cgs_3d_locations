@@ -107,11 +107,63 @@ def _add_item(
     )
 
 
+def _asset_price(asset: dict[str, Any] | None, default: float) -> float:
+    value = (asset or {}).get("price")
+    if isinstance(value, (int, float)) and value > 100:
+        return float(value)
+    try:
+        parsed = float(str(value).replace(" ", "").replace(",", ".")) if value is not None else 0.0
+        if parsed > 100:
+            return parsed
+    except Exception:
+        pass
+    return default
+
+
+def _add_decor_items(
+    items: list[dict[str, Any]],
+    layout_plan: dict[str, Any],
+    appliance_assets: dict[str, Any] | None,
+) -> float:
+    role_defaults = {
+        "flowers_vase": 4500.0,
+        "oil_bottles_decor": 2200.0,
+        "decorative_kitchen_set": 2800.0,
+        "small_kitchen_appliance": 6500.0,
+    }
+    bindings = ((appliance_assets or {}).get("appliances") or {})
+    total = 0.0
+    for decor in layout_plan.get("decor_items") or []:
+        role = str(decor.get("type") or "")
+        if role not in role_defaults:
+            continue
+        chosen = ((bindings.get(role) or {}).get("chosen_asset") or {})
+        default_price = float(decor.get("estimated_price") or role_defaults[role])
+        unit_price = _asset_price(chosen, default_price)
+        name = chosen.get("title") or role
+        items.append(
+            {
+                "role": role,
+                "sku": chosen.get("unique_key"),
+                "name": name,
+                "kitchen_role": "kitchen_accessory",
+                "unit": "piece",
+                "quantity": 1.0,
+                "unit_price": round(unit_price, 2),
+                "total_price": round(unit_price, 2),
+                "note": f"decor_item_id={decor.get('id')}, placement={decor.get('placement')}",
+            }
+        )
+        total += unit_price
+    return total
+
+
 def estimate_kitchen_bom(
     layout_plan: dict[str, Any],
     selected_materials: dict[str, Any],
     mode: str = "optimal",
     include_appliance_estimate: bool = False,
+    appliance_assets: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     facade = _material_binding(selected_materials, "facade")
     body = _material_binding(selected_materials, "body")
@@ -147,6 +199,7 @@ def estimate_kitchen_bom(
         _add_item(items, "joint_profile", joint_profile, countertop_piece_count - 1, "piece", note="countertop joints")
     if countertop_width > 0:
         _add_item(items, "end_profile", end_profile, 2, "piece", note="visible countertop ends")
+    decor_accessory_estimate = _add_decor_items(items, layout_plan, appliance_assets)
 
     base_count = len([m for m in layout_plan.get("base_modules") or [] if m.get("type") != "fridge_slot"])
     upper_count = len(layout_plan.get("upper_modules") or [])
@@ -183,6 +236,7 @@ def estimate_kitchen_bom(
             "sink_and_faucet_estimate": round(sink_and_faucet_estimate, 2),
             "entry_handwash_estimate": round(handwash_estimate, 2),
             "appliance_estimate": round(appliance_estimate, 2),
+            "decor_accessory_estimate": round(decor_accessory_estimate, 2),
         },
         "total_material_price": total_material_price,
         "total_estimated_price": total_estimated_price,

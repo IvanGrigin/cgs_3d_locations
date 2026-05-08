@@ -14,6 +14,7 @@ import shutil
 import subprocess
 import sys
 from copy import deepcopy
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
@@ -26,6 +27,9 @@ try:
         load_supplier_catalog_json,
         read_json as read_supplier_matcher_json,
     )
+    from .suppliers.room_design_spec_builder import build_room_design_spec
+    from .suppliers.supplier_scene_consistency import apply_supplier_scene_consistency
+    from .suppliers.supplier_variant_validator import main as supplier_variant_validator_main
     from .pipeline_artifacts import (
         blender_outputs_for_mode,
         build_scene_artifacts,
@@ -34,6 +38,18 @@ try:
         run_blender_for_mode,
     )
     from .pipeline_scene_repair import add_scene_repair_arguments, maybe_repair_scene_json
+    from .pipeline.curtain_stage import (
+        discover_supplier_curtain_models,
+        discover_curtain_models,
+        load_curtain_catalog,
+        write_json as write_curtain_json,
+    )
+    from .pipeline.infinigen_scene_improvers import (
+        apply_curtains_to_scene,
+        normalize_chandelier_positions_in_scene,
+        repair_furniture_intersections_in_scene,
+    )
+    from .pipeline.kitchen_stage import apply_kitchen_stage_to_artifacts
     from .pipeline.flooring_stage import apply_flooring_to_scene, run_flooring_selection, write_json as write_flooring_json
     from .pipeline.wall_stage import apply_wall_material_to_scene_with_catalog, run_wall_selection, write_json as write_wall_json
     from .supplier_replacement_report import write_supplier_replacement_reports
@@ -69,6 +85,9 @@ except ImportError:
         load_supplier_catalog_json,
         read_json as read_supplier_matcher_json,
     )
+    from suppliers.room_design_spec_builder import build_room_design_spec
+    from suppliers.supplier_scene_consistency import apply_supplier_scene_consistency
+    from suppliers.supplier_variant_validator import main as supplier_variant_validator_main
     from pipeline_artifacts import (
         blender_outputs_for_mode,
         build_scene_artifacts,
@@ -77,6 +96,18 @@ except ImportError:
         run_blender_for_mode,
     )
     from pipeline_scene_repair import add_scene_repair_arguments, maybe_repair_scene_json
+    from pipeline.curtain_stage import (
+        discover_supplier_curtain_models,
+        discover_curtain_models,
+        load_curtain_catalog,
+        write_json as write_curtain_json,
+    )
+    from pipeline.infinigen_scene_improvers import (
+        apply_curtains_to_scene,
+        normalize_chandelier_positions_in_scene,
+        repair_furniture_intersections_in_scene,
+    )
+    from pipeline.kitchen_stage import apply_kitchen_stage_to_artifacts
     from pipeline.flooring_stage import apply_flooring_to_scene, run_flooring_selection, write_json as write_flooring_json
     from pipeline.wall_stage import apply_wall_material_to_scene_with_catalog, run_wall_selection, write_json as write_wall_json
     from supplier_replacement_report import write_supplier_replacement_reports
@@ -392,562 +423,6 @@ def _merge_surface_materials_into_pricing_stub(
     write_json(pricing_stub_path, data)
 
 
-def _scene_room_polygon(room: dict[str, Any]) -> list[tuple[float, float]]:
-    raw = room.get("floor_polygon") or room.get("floor_polygon_xz") or []
-    out: list[tuple[float, float]] = []
-    if isinstance(raw, list):
-        for point in raw:
-            if not isinstance(point, dict):
-                continue
-            x = _to_float(point.get("x"))
-            y = _to_float(point.get("y", point.get("z")))
-            if x is not None and y is not None:
-                out.append((float(x), float(y)))
-    return out
-
-
-def _poly_bounds(poly: list[tuple[float, float]]) -> tuple[float, float, float, float]:
-    xs = [p[0] for p in poly]
-    ys = [p[1] for p in poly]
-    return min(xs), max(xs), min(ys), max(ys)
-
-
-def _point_in_poly_xy(x: float, y: float, poly: list[tuple[float, float]]) -> bool:
-    inside = False
-    n = len(poly)
-    if n < 3:
-        return False
-    j = n - 1
-    for i in range(n):
-        xi, yi = poly[i]
-        xj, yj = poly[j]
-        if ((yi > y) != (yj > y)) and (x < (xj - xi) * (y - yi) / max(yj - yi, 1e-12) + xi):
-            inside = not inside
-        j = i
-    return inside
-
-
-def _dist_point_segment_xy(px: float, py: float, ax: float, ay: float, bx: float, by: float) -> float:
-    vx, vy = bx - ax, by - ay
-    wx, wy = px - ax, py - ay
-    denom = vx * vx + vy * vy
-    if denom <= 1e-12:
-        return math.hypot(px - ax, py - ay)
-    t = max(0.0, min(1.0, (wx * vx + wy * vy) / denom))
-    return math.hypot(px - (ax + t * vx), py - (ay + t * vy))
-
-
-def _dist_to_poly_edges_xy(x: float, y: float, poly: list[tuple[float, float]]) -> float:
-    if len(poly) < 2:
-        return 0.0
-    return min(
-        _dist_point_segment_xy(x, y, poly[i][0], poly[i][1], poly[(i + 1) % len(poly)][0], poly[(i + 1) % len(poly)][1])
-        for i in range(len(poly))
-    )
-
-
-def _room_sample_points(poly: list[tuple[float, float]], *, step: float, wall_margin: float = 0.0) -> list[tuple[float, float]]:
-    x_min, x_max, y_min, y_max = _poly_bounds(poly)
-    points: list[tuple[float, float]] = []
-    x = x_min
-    while x <= x_max + 1e-9:
-        y = y_min
-        while y <= y_max + 1e-9:
-            if _point_in_poly_xy(x, y, poly) and _dist_to_poly_edges_xy(x, y, poly) >= wall_margin:
-                points.append((x, y))
-            y += step
-        x += step
-    if points:
-        return points
-    cx = 0.5 * (x_min + x_max)
-    cy = 0.5 * (y_min + y_max)
-    return [(cx, cy)] if _point_in_poly_xy(cx, cy, poly) else []
-
-
-def _is_chandelier_item(item: dict[str, Any]) -> bool:
-    text = f"{item.get('name') or ''} {item.get('category') or ''} {item.get('semantic_group') or ''}".lower()
-    positive = ("chandelier", "ceilinglamp", "ceiling_lamp", "ceiling light", "ceiling_light", "pendant", "люстр", "потолоч")
-    negative = ("floorlamp", "floor_lamp", "tablelamp", "table_lamp", "walllamp", "wall_lamp", "торшер", "настоль", "бра")
-    return any(token in text for token in positive) and not any(token in text for token in negative)
-
-
-def _shift_item_xy(item: dict[str, Any], dx: float, dy: float) -> None:
-    pos = item.get("position_m")
-    if isinstance(pos, list) and len(pos) >= 2:
-        pos[0] = float(pos[0]) + dx
-        pos[1] = float(pos[1]) + dy
-    aabb = item.get("aabb")
-    if isinstance(aabb, dict):
-        for key in ("x_min", "x_max"):
-            if key in aabb:
-                aabb[key] = float(aabb[key]) + dx
-        for key in ("y_min", "y_max"):
-            if key in aabb:
-                aabb[key] = float(aabb[key]) + dy
-
-
-def normalize_chandelier_positions_in_scene(
-    scene: dict[str, Any],
-    *,
-    wall_clearance_m: float = 1.0,
-    sample_step_m: float = 0.35,
-) -> tuple[dict[str, Any], dict[str, Any]]:
-    updated = deepcopy(scene)
-    room = updated.get("room") if isinstance(updated.get("room"), dict) else {}
-    poly = _scene_room_polygon(room)
-    placements = updated.get("placements") if isinstance(updated.get("placements"), list) else []
-    chandeliers = [item for item in placements if isinstance(item, dict) and _is_chandelier_item(item)]
-    info: dict[str, Any] = {
-        "enabled": True,
-        "chandelier_count": len(chandeliers),
-        "wall_clearance_m": wall_clearance_m,
-        "moved": [],
-    }
-    if len(poly) < 3 or not chandeliers:
-        info["skipped_reason"] = "no_room_polygon_or_no_chandeliers"
-        return updated, info
-
-    candidate_points = _room_sample_points(poly, step=sample_step_m, wall_margin=wall_clearance_m)
-    if not candidate_points:
-        candidate_points = _room_sample_points(poly, step=sample_step_m, wall_margin=0.0)
-        info["clearance_fallback"] = True
-    if not candidate_points:
-        info["skipped_reason"] = "no_valid_room_points"
-        return updated, info
-
-    x_min, x_max, y_min, y_max = _poly_bounds(poly)
-    centroid = (0.5 * (x_min + x_max), 0.5 * (y_min + y_max))
-    first = min(candidate_points, key=lambda p: math.hypot(p[0] - centroid[0], p[1] - centroid[1]))
-    centers = [first]
-    while len(centers) < len(chandeliers):
-        centers.append(
-            max(
-                candidate_points,
-                key=lambda p: min(math.hypot(p[0] - c[0], p[1] - c[1]) for c in centers),
-            )
-        )
-
-    coverage_points = _room_sample_points(poly, step=sample_step_m, wall_margin=0.0)
-    coverage_radius = max(
-        (min(math.hypot(p[0] - c[0], p[1] - c[1]) for c in centers) for p in coverage_points),
-        default=0.0,
-    )
-    for item, center in zip(chandeliers, centers):
-        pos = item.get("position_m")
-        if not (isinstance(pos, list) and len(pos) >= 2):
-            continue
-        old_xy = (float(pos[0]), float(pos[1]))
-        dx, dy = center[0] - old_xy[0], center[1] - old_xy[1]
-        _shift_item_xy(item, dx, dy)
-        meta = item.setdefault("meta", {})
-        if isinstance(meta, dict):
-            meta["chandelier_normalized"] = True
-            meta["chandelier_coverage_radius_m"] = round(coverage_radius, 3)
-        info["moved"].append(
-            {
-                "id": item.get("id"),
-                "old_xy": [round(old_xy[0], 4), round(old_xy[1], 4)],
-                "new_xy": [round(center[0], 4), round(center[1], 4)],
-                "move_m": round(math.hypot(dx, dy), 4),
-            }
-        )
-    info["coverage_radius_m"] = round(coverage_radius, 4)
-    return updated, info
-
-
-def _item_rect_xy(item: dict[str, Any]) -> tuple[float, float, float, float] | None:
-    aabb = item.get("aabb")
-    if isinstance(aabb, dict):
-        vals = [_to_float(aabb.get(k)) for k in ("x_min", "x_max", "y_min", "y_max")]
-        if all(v is not None for v in vals):
-            x_min, x_max, y_min, y_max = (float(v) for v in vals)  # type: ignore[arg-type]
-            if x_max > x_min and y_max > y_min:
-                return x_min, x_max, y_min, y_max
-    pos = item.get("position_m")
-    size = item.get("size_m")
-    if isinstance(pos, list) and isinstance(size, list) and len(pos) >= 2 and len(size) >= 2:
-        cx, cy = float(pos[0]), float(pos[1])
-        sx, sy = max(0.0, float(size[0])), max(0.0, float(size[1]))
-        return cx - sx * 0.5, cx + sx * 0.5, cy - sy * 0.5, cy + sy * 0.5
-    return None
-
-
-def _rect_area(rect: tuple[float, float, float, float]) -> float:
-    return max(0.0, rect[1] - rect[0]) * max(0.0, rect[3] - rect[2])
-
-
-def _rect_intersection_area(a: tuple[float, float, float, float], b: tuple[float, float, float, float]) -> float:
-    return max(0.0, min(a[1], b[1]) - max(a[0], b[0])) * max(0.0, min(a[3], b[3]) - max(a[2], b[2]))
-
-
-def _rect_shift(rect: tuple[float, float, float, float], dx: float, dy: float) -> tuple[float, float, float, float]:
-    return rect[0] + dx, rect[1] + dx, rect[2] + dy, rect[3] + dy
-
-
-def _rect_outside_room_area(rect: tuple[float, float, float, float], poly: list[tuple[float, float]]) -> float:
-    x_min, x_max, y_min, y_max = _poly_bounds(poly)
-    inside_bounds = (
-        max(rect[0], x_min),
-        min(rect[1], x_max),
-        max(rect[2], y_min),
-        min(rect[3], y_max),
-    )
-    outside = _rect_area(rect) - _rect_area(inside_bounds)
-    corners = [(rect[0], rect[2]), (rect[0], rect[3]), (rect[1], rect[2]), (rect[1], rect[3])]
-    if any(not _point_in_poly_xy(x, y, poly) for x, y in corners):
-        outside = max(outside, _rect_area(rect) * 0.25)
-    return max(0.0, outside)
-
-
-def _is_movable_furniture_item(item: dict[str, Any]) -> bool:
-    text = (
-        f"{item.get('name') or ''} {item.get('label') or ''} {item.get('category') or ''} "
-        f"{item.get('type') or ''} {item.get('semantic_group') or ''}"
-    ).lower()
-    blocked = (
-        "rug",
-        "lamp",
-        "light",
-        "plant",
-        "window",
-        "door",
-        "ceiling",
-        "wall",
-        "floor",
-        "decor",
-        "vase",
-        "book",
-        "pillow",
-        "clutter",
-        "accessory",
-        "ковер",
-        "торшер",
-        "люстр",
-        "раст",
-        "декор",
-        "ваза",
-        "книга",
-        "подушка",
-    )
-    if any(token in text for token in blocked):
-        return False
-    furniture_tokens = (
-        "cabinet",
-        "shelf",
-        "table",
-        "desk",
-        "sofa",
-        "chair",
-        "bed",
-        "dresser",
-        "wardrobe",
-        "stand",
-        "комод",
-        "шкаф",
-        "стеллаж",
-        "стол",
-        "диван",
-        "кресл",
-        "кровать",
-        "тумб",
-    )
-    return any(token in text for token in furniture_tokens)
-
-
-def _is_support_child_candidate(item: dict[str, Any]) -> bool:
-    text = (
-        f"{item.get('name') or ''} {item.get('label') or ''} {item.get('category') or ''} "
-        f"{item.get('type') or ''} {item.get('semantic_group') or ''}"
-    ).lower()
-    blocked = ("rug", "wall", "floor", "ceiling", "window", "door", "ковер", "стена", "пол", "окно", "двер")
-    return not any(token in text for token in blocked)
-
-
-def _z_range(item: dict[str, Any]) -> tuple[float, float] | None:
-    aabb = item.get("aabb")
-    if isinstance(aabb, dict):
-        z_min = _to_float(aabb.get("z_min"))
-        z_max = _to_float(aabb.get("z_max"))
-        if z_min is not None and z_max is not None and z_max >= z_min:
-            return float(z_min), float(z_max)
-    pos = item.get("position_m")
-    size = item.get("size_m")
-    if isinstance(pos, list) and isinstance(size, list) and len(pos) >= 3 and len(size) >= 3:
-        cz = float(pos[2])
-        sz = max(0.0, float(size[2]))
-        return cz - sz * 0.5, cz + sz * 0.5
-    return None
-
-
-def _rect_contains_center(container: tuple[float, float, float, float], child: tuple[float, float, float, float], margin: float = 0.08) -> bool:
-    cx = 0.5 * (child[0] + child[1])
-    cy = 0.5 * (child[2] + child[3])
-    return (container[0] - margin) <= cx <= (container[1] + margin) and (container[2] - margin) <= cy <= (container[3] + margin)
-
-
-def _support_child_indices(
-    *,
-    anchor_index: int,
-    placements: list[Any],
-    rects: list[tuple[float, float, float, float] | None],
-) -> set[int]:
-    anchor = placements[anchor_index]
-    if not isinstance(anchor, dict):
-        return set()
-    anchor_rect = rects[anchor_index]
-    anchor_z = _z_range(anchor)
-    if anchor_rect is None or anchor_z is None:
-        return set()
-    anchor_area = _rect_area(anchor_rect)
-    children: set[int] = set()
-    for idx, child in enumerate(placements):
-        if idx == anchor_index or not isinstance(child, dict) or not _is_support_child_candidate(child):
-            continue
-        if _is_movable_furniture_item(child):
-            continue
-        child_rect = rects[idx]
-        child_z = _z_range(child)
-        if child_rect is None or child_z is None:
-            continue
-        child_area = _rect_area(child_rect)
-        if child_area > anchor_area * 0.75:
-            continue
-        if not _rect_contains_center(anchor_rect, child_rect):
-            continue
-        overlap_ratio = _rect_intersection_area(anchor_rect, child_rect) / max(child_area, 1e-9)
-        if overlap_ratio < 0.55:
-            continue
-        on_top = abs(child_z[0] - anchor_z[1]) <= 0.18
-        inside = child_z[0] >= anchor_z[0] - 0.05 and child_z[1] <= anchor_z[1] + 0.10
-        if on_top or inside:
-            children.add(idx)
-    return children
-
-
-def _support_children_by_anchor(
-    *,
-    placements: list[Any],
-    rects: list[tuple[float, float, float, float] | None],
-) -> dict[int, set[int]]:
-    raw = {
-        idx: _support_child_indices(anchor_index=idx, placements=placements, rects=rects)
-        for idx in range(len(placements))
-        if rects[idx] is not None
-    }
-    candidates_by_child: dict[int, list[int]] = {}
-    for anchor_idx, children in raw.items():
-        for child_idx in children:
-            candidates_by_child.setdefault(child_idx, []).append(anchor_idx)
-    pruned: dict[int, set[int]] = {idx: set() for idx in raw}
-    for child_idx, anchor_indices in candidates_by_child.items():
-        child_z = _z_range(placements[child_idx]) if isinstance(placements[child_idx], dict) else None
-        if child_z is None:
-            continue
-
-        def score(anchor_idx: int) -> tuple[float, float, float]:
-            anchor = placements[anchor_idx]
-            anchor_rect = rects[anchor_idx]
-            anchor_z = _z_range(anchor) if isinstance(anchor, dict) else None
-            if anchor_rect is None or anchor_z is None:
-                return (9.0, 9.0, 9.0)
-            top_delta = abs(child_z[0] - anchor_z[1])
-            on_top_rank = 0.0 if top_delta <= 0.18 else 1.0
-            return (on_top_rank, top_delta if on_top_rank == 0.0 else 0.0, _rect_area(anchor_rect))
-
-        best_anchor = min(anchor_indices, key=score)
-        pruned.setdefault(best_anchor, set()).add(child_idx)
-    return pruned
-
-
-def _move_group_indices(anchor_index: int, children_by_anchor: dict[int, set[int]]) -> set[int]:
-    group = {anchor_index}
-    pending = list(children_by_anchor.get(anchor_index, set()))
-    while pending:
-        idx = pending.pop()
-        if idx in group:
-            continue
-        group.add(idx)
-        pending.extend(children_by_anchor.get(idx, set()))
-    return group
-
-
-def _union_rect(rects_for_group: list[tuple[float, float, float, float]]) -> tuple[float, float, float, float]:
-    return (
-        min(r[0] for r in rects_for_group),
-        max(r[1] for r in rects_for_group),
-        min(r[2] for r in rects_for_group),
-        max(r[3] for r in rects_for_group),
-    )
-
-
-def _collision_penalty_for_group(
-    group_rects: dict[int, tuple[float, float, float, float]],
-    *,
-    group_indices: set[int],
-    rects: list[tuple[float, float, float, float] | None],
-    movable_indices: set[int],
-    poly: list[tuple[float, float]],
-) -> float:
-    penalty = sum(_rect_outside_room_area(rect, poly) * 2.0 for rect in group_rects.values())
-    group_union = _union_rect(list(group_rects.values()))
-    for idx, other in enumerate(rects):
-        if idx in group_indices or other is None or idx not in movable_indices:
-            continue
-        penalty += _rect_intersection_area(group_union, other)
-    return penalty
-
-
-def _best_repair_shift_for_item(
-    *,
-    item_index: int,
-    group_indices: set[int],
-    rects: list[tuple[float, float, float, float] | None],
-    movable_indices: set[int],
-    poly: list[tuple[float, float]],
-    search_step_m: float,
-    max_shift_m: float,
-) -> tuple[float, float, float, float] | None:
-    old = rects[item_index]
-    if old is None:
-        return None
-    old_group_rects = {idx: rects[idx] for idx in group_indices if rects[idx] is not None}
-    if item_index not in old_group_rects:
-        return None
-    old_penalty = _collision_penalty_for_group(
-        old_group_rects,
-        group_indices=group_indices,
-        rects=rects,
-        movable_indices=movable_indices,
-        poly=poly,
-    )
-    old_group_union = _union_rect(list(old_group_rects.values()))
-    best = (old_penalty, _rect_area(old_group_union), 0.0, 0.0)
-    steps = max(1, int(math.ceil(max_shift_m / search_step_m)))
-    directions = [(0.0, 0.0)]
-    for k in range(16):
-        angle = (2.0 * math.pi * k) / 16.0
-        directions.append((math.cos(angle), math.sin(angle)))
-    for step_idx in range(1, steps + 1):
-        radius = min(max_shift_m, step_idx * search_step_m)
-        for ux, uy in directions[1:]:
-            dx, dy = ux * radius, uy * radius
-            cand_group_rects = {idx: _rect_shift(rect, dx, dy) for idx, rect in old_group_rects.items()}
-            penalty = _collision_penalty_for_group(
-                cand_group_rects,
-                group_indices=group_indices,
-                rects=rects,
-                movable_indices=movable_indices,
-                poly=poly,
-            )
-            cand_group_union = _union_rect(list(cand_group_rects.values()))
-            old_overlap = _rect_intersection_area(old_group_union, cand_group_union)
-            if penalty < best[0] - 1e-6 or (abs(penalty - best[0]) <= 1e-6 and old_overlap > best[1]):
-                best = (penalty, old_overlap, dx, dy)
-    if best[0] < old_penalty - 1e-6:
-        return best
-    return None
-
-
-def repair_furniture_intersections_in_scene(
-    scene: dict[str, Any],
-    *,
-    max_passes: int = 3,
-    search_step_m: float = 0.15,
-    max_shift_m: float = 1.2,
-) -> tuple[dict[str, Any], dict[str, Any]]:
-    updated = deepcopy(scene)
-    room = updated.get("room") if isinstance(updated.get("room"), dict) else {}
-    poly = _scene_room_polygon(room)
-    placements = updated.get("placements") if isinstance(updated.get("placements"), list) else []
-    info: dict[str, Any] = {"enabled": True, "passes": [], "moved": []}
-    if len(poly) < 3 or not placements:
-        info["skipped_reason"] = "no_room_polygon_or_no_placements"
-        return updated, info
-
-    movable_indices = {idx for idx, item in enumerate(placements) if isinstance(item, dict) and _is_movable_furniture_item(item)}
-    rects = [_item_rect_xy(item) if isinstance(item, dict) else None for item in placements]
-    children_by_anchor = _support_children_by_anchor(placements=placements, rects=rects)
-    info["support_groups"] = [
-        {
-            "anchor_id": placements[idx].get("id") if isinstance(placements[idx], dict) else idx,
-            "child_ids": [
-                placements[child_idx].get("id") if isinstance(placements[child_idx], dict) else child_idx
-                for child_idx in sorted(children)
-            ],
-        }
-        for idx, children in sorted(children_by_anchor.items())
-        if children
-    ]
-    for pass_idx in range(max(1, max_passes)):
-        trouble: set[int] = set()
-        for idx in movable_indices:
-            rect = rects[idx]
-            if rect is not None and _rect_outside_room_area(rect, poly) > 1e-6:
-                trouble.add(idx)
-        movable_list = sorted(movable_indices)
-        for pos_i, i in enumerate(movable_list):
-            ri = rects[i]
-            if ri is None:
-                continue
-            for j in movable_list[pos_i + 1 :]:
-                rj = rects[j]
-                if rj is None:
-                    continue
-                if _rect_intersection_area(ri, rj) > 1e-6:
-                    trouble.add(i if _rect_area(ri) <= _rect_area(rj) else j)
-        pass_info = {"pass": pass_idx + 1, "trouble_count": len(trouble), "accepted": []}
-        if not trouble:
-            info["passes"].append(pass_info)
-            break
-        for idx in sorted(trouble):
-            group_indices = _move_group_indices(idx, children_by_anchor)
-            move = _best_repair_shift_for_item(
-                item_index=idx,
-                group_indices=group_indices,
-                rects=rects,
-                movable_indices=movable_indices,
-                poly=poly,
-                search_step_m=search_step_m,
-                max_shift_m=max_shift_m,
-            )
-            if move is None:
-                continue
-            new_penalty, old_overlap, dx, dy = move
-            item = placements[idx]
-            old_rect = rects[idx]
-            if old_rect is None or not isinstance(item, dict):
-                continue
-            moved_ids = []
-            for move_idx in sorted(group_indices):
-                move_item = placements[move_idx]
-                move_rect = rects[move_idx]
-                if move_rect is None or not isinstance(move_item, dict):
-                    continue
-                _shift_item_xy(move_item, dx, dy)
-                rects[move_idx] = _rect_shift(move_rect, dx, dy)
-                meta = move_item.setdefault("meta", {})
-                if isinstance(meta, dict):
-                    meta["furniture_overlap_repaired"] = True
-                    meta["furniture_repair_anchor_id"] = item.get("id")
-                    meta["furniture_repair_group_move"] = move_idx != idx
-                moved_ids.append(move_item.get("id"))
-            accepted = {
-                "id": item.get("id"),
-                "moved_ids": moved_ids,
-                "dx": round(dx, 4),
-                "dy": round(dy, 4),
-                "move_m": round(math.hypot(dx, dy), 4),
-                "new_penalty": round(new_penalty, 6),
-                "old_new_overlap_area_m2": round(old_overlap, 6),
-            }
-            pass_info["accepted"].append(accepted)
-            info["moved"].append(accepted)
-        info["passes"].append(pass_info)
-        if not pass_info["accepted"]:
-            break
-    info["moved_count"] = len(info["moved"])
-    return updated, info
-
 
 def _maybe_apply_layout_postprocess(
     *,
@@ -975,6 +450,72 @@ def _maybe_apply_layout_postprocess(
     return out_path, info
 
 
+def _maybe_apply_kitchen_stage(
+    *,
+    args: argparse.Namespace,
+    artifacts: PlacementArtifacts,
+    run_dir: Path,
+    room_path: str,
+    prompt_text: str,
+    suffix: str,
+) -> tuple[PlacementArtifacts, dict[str, Any] | None]:
+    policy = str(getattr(args, "kitchens", "auto") or "auto").strip().lower()
+    if policy in {"off", "false", "0", "no", "none"}:
+        policy = "never"
+    if policy in {"on", "true", "1", "yes"}:
+        policy = "always"
+    if policy not in {"auto", "always", "never"}:
+        policy = "auto"
+
+    material_catalog = Path(str(getattr(args, "kitchen_material_catalog", "") or "")).expanduser()
+    if not material_catalog.is_absolute():
+        material_catalog = (Path.cwd() / material_catalog).resolve()
+    appliance_catalog = Path(str(getattr(args, "kitchen_appliance_catalog", "") or "")).expanduser()
+    if str(getattr(args, "kitchen_appliance_catalog", "") or "").strip():
+        if not appliance_catalog.is_absolute():
+            appliance_catalog = (Path.cwd() / appliance_catalog).resolve()
+    else:
+        appliance_catalog = None
+
+    print("🍳 kitchen: procedural гарнитур")
+    next_artifacts, info = apply_kitchen_stage_to_artifacts(
+        artifacts=artifacts,
+        run_dir=run_dir,
+        room_json_path=Path(room_path).expanduser().resolve(),
+        material_catalog=material_catalog,
+        appliance_catalog=appliance_catalog,
+        prompt_text=prompt_text,
+        mode=str(getattr(args, "kitchen_selection_mode", "optimal") or "optimal"),
+        policy=policy,
+        suffix=suffix,
+        dining_policy=str(getattr(args, "kitchen_dining", "auto") or "auto"),
+        accessories_policy=str(getattr(args, "kitchen_accessories", "auto") or "auto"),
+        accessory_llm_settings={
+            "provider": str(getattr(args, "kitchen_accessory_llm_provider", "none") or "none"),
+            "ollama_url": str(getattr(args, "kitchen_accessory_ollama_url", "") or "http://127.0.0.1:11434"),
+            "ollama_model": str(getattr(args, "kitchen_accessory_ollama_model", "") or "gpt-oss:20b"),
+            "ollama_timeout": int(getattr(args, "kitchen_accessory_ollama_timeout", 180) or 180),
+            "ollama_temperature": float(getattr(args, "kitchen_accessory_ollama_temperature", 0.2) or 0.2),
+            "ollama_num_ctx": int(getattr(args, "kitchen_accessory_ollama_num_ctx", 8192) or 8192),
+            "ollama_think": str(getattr(args, "kitchen_accessory_ollama_think", "low") or "low"),
+        },
+        kitchen_llm_settings={
+            "provider": str(getattr(args, "kitchen_llm_provider", "none") or "none"),
+            "ollama_url": str(getattr(args, "kitchen_ollama_url", "") or "http://127.0.0.1:11434"),
+            "ollama_model": str(getattr(args, "kitchen_ollama_model", "") or "gpt-oss:20b"),
+            "ollama_timeout": int(getattr(args, "kitchen_ollama_timeout", 180) or 180),
+            "ollama_temperature": float(getattr(args, "kitchen_ollama_temperature", 0.1) or 0.1),
+            "ollama_num_ctx": int(getattr(args, "kitchen_ollama_num_ctx", 8192) or 8192),
+            "ollama_think": str(getattr(args, "kitchen_ollama_think", "low") or "low"),
+        },
+    )
+    if info and info.get("replacement_count"):
+        print(f"🍳 kitchen generated: {info.get('replacement_count')} assembly item(s)")
+    elif info:
+        print(f"⏭ kitchen: пропуск ({info.get('skipped_reason')})")
+    return next_artifacts, info
+
+
 def _is_fatal_disk_full_error(exc: Exception) -> bool:
     text = str(exc).lower()
     return (
@@ -990,8 +531,10 @@ def _apply_supplier_bindings_for_artifacts(
     run_dir: Path,
     bindings_json_path: Path,
     require_local_asset: bool,
+    variant_suffix: str = "",
 ) -> dict[str, Any]:
-    supplier_placement_v1 = run_dir / "placement_supplier.v1.json"
+    suffix = f".{variant_suffix.strip('.')}" if str(variant_suffix or "").strip() else ""
+    supplier_placement_v1 = run_dir / f"placement_supplier{suffix}.v1.json"
     apply_supplier_bindings_to_json(
         input_json_path=artifacts.placement_v1,
         bindings_json_path=bindings_json_path,
@@ -1001,7 +544,7 @@ def _apply_supplier_bindings_for_artifacts(
 
     supplier_scene_v1 = None
     if artifacts.scene_v1 and artifacts.scene_v1.is_file():
-        supplier_scene_v1 = run_dir / "scene_supplier.v1.json"
+        supplier_scene_v1 = run_dir / f"scene_supplier{suffix}.v1.json"
         apply_supplier_bindings_to_json(
             input_json_path=artifacts.scene_v1,
             bindings_json_path=bindings_json_path,
@@ -1025,13 +568,347 @@ def _write_supplier_replacement_reports_for_artifacts(
     run_dir: Path,
     bindings_json_path: Path,
     supplier_info: dict[str, Any],
+    variant_suffix: str = "",
+    blender_build_report_path: str | Path | None = None,
 ) -> dict[str, Any]:
     scene_v1 = supplier_info.get("scene_v1")
+    suffix = f".{variant_suffix.strip('.')}" if str(variant_suffix or "").strip() else ""
     return write_supplier_replacement_reports(
         bindings_json_path=bindings_json_path,
         run_dir=run_dir,
         supplier_scene_json_path=str(scene_v1) if scene_v1 else None,
+        blender_build_report_path=blender_build_report_path,
+        short_filename=f"supplier_replacements{suffix}.short.md",
+        extended_filename=f"supplier_replacements{suffix}.full.md",
+        html_filename=f"supplier_replacements{suffix}.html",
+        summary_filename=f"supplier_replacements{suffix}.summary.json",
+        mode=str(variant_suffix or "").strip(".") or None,
     )
+
+
+def _load_json_if_file(path: str | Path | None) -> dict[str, Any] | None:
+    if not path:
+        return None
+    p = Path(path).expanduser()
+    if not p.is_file():
+        return None
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _variant_total_price(summary: dict[str, Any], warnings: list[str], mode: str) -> float | None:
+    total = 0.0
+    found = False
+    missing = 0
+    for target in summary.get("targets") or []:
+        if not isinstance(target, dict):
+            continue
+        if not target.get("chosen_candidate_id"):
+            continue
+        price = target.get("price")
+        if price is None:
+            missing += 1
+            continue
+        try:
+            total += float(price)
+            found = True
+        except Exception:
+            missing += 1
+    if missing:
+        warnings.append(f"{mode}: {missing} selected targets have no numeric price; total_price_estimate is partial.")
+    return round(total, 2) if found else None
+
+
+def _write_supplier_variants_comparison(run_dir: Path, variants: dict[str, Any]) -> Path | None:
+    if not variants:
+        return None
+    warnings: list[str] = []
+    modes = list(variants.keys())
+    variant_payload: dict[str, Any] = {}
+    summaries: dict[str, dict[str, Any]] = {}
+    for mode, info in variants.items():
+        reports = info.get("reports") or {}
+        rebind = info.get("rebind") or {}
+        summary = _load_json_if_file(reports.get("summary_json")) or {}
+        summaries[mode] = summary
+        local_warnings = list(summary.get("warnings") or []) if isinstance(summary.get("warnings"), list) else []
+        warnings.extend(f"{mode}: {x}" for x in local_warnings)
+        variant_payload[mode] = {
+            "bindings_path": info.get("bindings"),
+            "scene_path": rebind.get("scene_v1"),
+            "report_path": reports.get("html"),
+            "summary_path": reports.get("summary_json"),
+            "blend_path": (info.get("blender") or {}).get("blend_path"),
+            "blend_exists": bool((info.get("blender") or {}).get("blend_exists")),
+            "blender_status": (info.get("blender") or {}).get("blender_status") or "skipped",
+            "blender_error": (info.get("blender") or {}).get("blender_error"),
+            "counts": summary.get("counts") or {},
+            "score_averages": summary.get("score_averages") or {},
+            "total_price_estimate": _variant_total_price(summary, warnings, mode) if summary else None,
+        }
+
+    target_ids: set[str] = set()
+    target_by_mode: dict[str, dict[str, dict[str, Any]]] = {}
+    for mode, summary in summaries.items():
+        targets = {}
+        for target in summary.get("targets") or []:
+            if not isinstance(target, dict):
+                continue
+            target_id = str(target.get("target_id") or "").strip()
+            if not target_id:
+                continue
+            targets[target_id] = target
+            target_ids.add(target_id)
+        target_by_mode[mode] = targets
+
+    differences: list[dict[str, Any]] = []
+    for target_id in sorted(target_ids):
+        row: dict[str, Any] = {"target_id": target_id, "category": None}
+        ids: list[str] = []
+        prices: dict[str, float | None] = {}
+        scores: dict[str, float | None] = {}
+        for mode in modes:
+            target = target_by_mode.get(mode, {}).get(target_id) or {}
+            if row["category"] is None:
+                row["category"] = target.get("category")
+            candidate_id = target.get("chosen_candidate_id")
+            row[f"{mode}_candidate_id"] = candidate_id
+            ids.append(str(candidate_id or ""))
+            prices[mode] = target.get("price") if isinstance(target.get("price"), (int, float)) else None
+            scores[mode] = target.get("final_score") if isinstance(target.get("final_score"), (int, float)) else None
+        row["all_modes_same"] = len(set(ids)) <= 1
+        if "best_match" in prices and "cheapest" in prices and prices["best_match"] is not None and prices["cheapest"] is not None:
+            row["price_delta_best_vs_cheapest"] = round(float(prices["best_match"]) - float(prices["cheapest"]), 2)
+        else:
+            row["price_delta_best_vs_cheapest"] = None
+        if "best_match" in scores and "cheapest" in scores and scores["best_match"] is not None and scores["cheapest"] is not None:
+            row["score_delta_best_vs_cheapest"] = round(float(scores["best_match"]) - float(scores["cheapest"]), 6)
+        else:
+            row["score_delta_best_vs_cheapest"] = None
+        differences.append(row)
+
+    out = {
+        "modes": modes,
+        "variants": variant_payload,
+        "target_differences": differences,
+        "warnings": warnings,
+    }
+    out_path = run_dir / "supplier_variants.comparison.json"
+    write_json(out_path, out)
+    return out_path
+
+
+def _write_supplier_variants_manifest(
+    *,
+    run_dir: Path,
+    modes: list[str],
+    variants: dict[str, Any],
+    room_design_spec_path: str | None,
+    comparison_json: str | None,
+    validation_json: str | None = None,
+    warnings: list[str] | None = None,
+) -> Path:
+    artifacts: dict[str, Any] = {}
+    for mode in modes:
+        info = variants.get(mode) or {}
+        reports = info.get("reports") or {}
+        rebind = info.get("rebind") or {}
+        blender = info.get("blender") or {}
+        artifacts[mode] = {
+            "bindings": info.get("initial_bindings") or info.get("bindings"),
+            "consistent_bindings": info.get("consistent_bindings"),
+            "assets_bindings": info.get("bindings"),
+            "scene_json": rebind.get("scene_v1"),
+            "blend": blender.get("blend_path"),
+            "html_report": reports.get("html"),
+            "summary_json": reports.get("summary_json"),
+        }
+    out = {
+        "run_dir": str(run_dir.resolve()),
+        "room_design_spec_path": room_design_spec_path,
+        "modes": modes,
+        "artifacts": artifacts,
+        "comparison_json": comparison_json,
+        "validation_json": validation_json,
+        "created_at": datetime.now().isoformat(timespec="seconds"),
+        "warnings": warnings or [],
+    }
+    out_path = run_dir / "supplier_variants.manifest.json"
+    write_json(out_path, out)
+    return out_path
+
+
+def _parse_supplier_build_modes(raw: str | None, selection_modes: list[str]) -> list[str]:
+    requested = _parse_supplier_selection_modes(raw)
+    if requested:
+        allowed = set(selection_modes)
+        return [mode for mode in requested if mode in allowed]
+    return list(selection_modes)
+
+
+def _mark_supplier_blender_skipped(variants: dict[str, Any], reason: str = "skip_blender") -> None:
+    for info in variants.values():
+        info["blender"] = {
+            "blend_path": None,
+            "blend_exists": False,
+            "blender_status": "skipped",
+            "blender_error": reason,
+            "build_report": None,
+        }
+
+
+def _run_supplier_blender_variants(
+    *,
+    cfg_runtime: dict[str, Any],
+    args: argparse.Namespace,
+    run_dir: Path,
+    layout_mode: str,
+    effective_room_path: str,
+    variants: dict[str, Any],
+) -> None:
+    build_modes = _parse_supplier_build_modes(getattr(args, "supplier_build_modes", None), list(variants.keys()))
+    for mode_name, info in variants.items():
+        if mode_name not in build_modes:
+            info["blender"] = {
+                "blend_path": None,
+                "blend_exists": False,
+                "blender_status": "skipped",
+                "blender_error": "not_in_supplier_build_modes",
+                "build_report": None,
+            }
+            continue
+        scene_v1 = (info.get("rebind") or {}).get("scene_v1")
+        if not scene_v1 or not Path(str(scene_v1)).expanduser().is_file():
+            info["blender"] = {
+                "blend_path": None,
+                "blend_exists": False,
+                "blender_status": "skipped",
+                "blender_error": "scene_json_missing",
+                "build_report": None,
+            }
+            continue
+        try:
+            result = run_blender_for_mode(
+                cfg_runtime=cfg_runtime,
+                args=args,
+                room_path=effective_room_path,
+                run_dir=run_dir,
+                layout_mode=layout_mode,
+                scene_json_path=Path(str(scene_v1)).expanduser().resolve(),
+                variant_suffix=f"supplier.{mode_name}",
+            )
+            blend_path = result.get("blend_path")
+            info["blender"] = {
+                "blend_path": blend_path,
+                "blend_exists": bool(blend_path and Path(str(blend_path)).is_file()),
+                "blender_status": "ok",
+                "blender_error": None,
+                "build_report": result.get("build_report"),
+                "render_path": result.get("render_path"),
+                "gif_path": result.get("gif_path"),
+                "blender_output": result.get("blender_output"),
+                "keep_blend": result.get("keep_blend"),
+            }
+        except Exception as exc:
+            info["blender"] = {
+                "blend_path": str(Path(blender_outputs_for_mode(args, run_dir, layout_mode, variant_suffix=f"supplier.{mode_name}")[0] or "").resolve()),
+                "blend_exists": False,
+                "blender_status": "failed",
+                "blender_error": f"{type(exc).__name__}: {exc}",
+                "build_report": None,
+            }
+
+
+def _refresh_supplier_reports_after_blender(
+    *,
+    run_dir: Path,
+    variants: dict[str, Any],
+) -> None:
+    for mode_name, info in variants.items():
+        blender = info.get("blender") or {}
+        build_report = blender.get("build_report")
+        if not build_report or not Path(str(build_report)).is_file():
+            continue
+        bindings_path = info.get("bindings")
+        if not bindings_path:
+            continue
+        reports = _write_supplier_replacement_reports_for_artifacts(
+            run_dir=run_dir,
+            bindings_json_path=Path(str(bindings_path)).expanduser().resolve(),
+            supplier_info=info.get("rebind") or {},
+            variant_suffix=mode_name,
+            blender_build_report_path=build_report,
+        )
+        info["reports"] = reports
+
+
+def _validate_supplier_variants_if_requested(
+    *,
+    args: argparse.Namespace,
+    run_dir: Path,
+    variants: dict[str, Any],
+) -> tuple[str | None, list[str]]:
+    if not bool(getattr(args, "validate_supplier_variants", False)):
+        return None, []
+    bindings_paths = [str((info.get("bindings") or "")) for info in variants.values() if str(info.get("bindings") or "").strip()]
+    if len(bindings_paths) <= 1:
+        return None, ["supplier variant validation skipped: less than two bindings files"]
+    out_path = run_dir / "supplier_variants.validation.json"
+    argv: list[str] = []
+    for path in bindings_paths:
+        argv.extend(["--bindings", path])
+    argv.extend(["--out", str(out_path.resolve())])
+    code = supplier_variant_validator_main(argv)
+    warnings: list[str] = []
+    if out_path.is_file():
+        data = json.loads(out_path.read_text(encoding="utf-8"))
+        warnings.extend(str(x) for x in (data.get("warnings") or []))
+        errors = [str(x) for x in (data.get("errors") or [])]
+        warnings.extend(f"validator_error:{x}" for x in errors)
+        if code != 0 and errors:
+            raise RuntimeError(f"supplier variant validation failed: {errors[:3]}")
+    return str(out_path.resolve()), warnings
+
+
+def _finalize_supplier_variant_artifacts(
+    *,
+    args: argparse.Namespace,
+    run_dir: Path,
+    manifest: dict[str, Any],
+    manifest_path: Path,
+    variants: dict[str, Any],
+) -> dict[str, Any]:
+    comparison_path = _write_supplier_variants_comparison(run_dir, variants)
+    validation_path: str | None = None
+    warnings: list[str] = []
+    if comparison_path:
+        comparison_data = json.loads(comparison_path.read_text(encoding="utf-8"))
+        warnings.extend(str(x) for x in (comparison_data.get("warnings") or []))
+    validation_path, validation_warnings = _validate_supplier_variants_if_requested(
+        args=args,
+        run_dir=run_dir,
+        variants=variants,
+    )
+    warnings.extend(validation_warnings)
+    supplier_manifest_path = _write_supplier_variants_manifest(
+        run_dir=run_dir,
+        modes=list(variants.keys()),
+        variants=variants,
+        room_design_spec_path=manifest.get("room_design_spec_json"),
+        comparison_json=str(comparison_path.resolve()) if comparison_path else None,
+        validation_json=validation_path,
+        warnings=warnings,
+    )
+    manifest["supplier_variants"] = variants
+    manifest["supplier_variants_comparison_json"] = str(comparison_path.resolve()) if comparison_path else None
+    manifest["supplier_variants_manifest_json"] = str(supplier_manifest_path.resolve())
+    if validation_path:
+        manifest["supplier_variants_validation_json"] = validation_path
+    write_json(manifest_path, manifest)
+    return manifest
 
 
 def _parse_elevations(raw: str) -> list[float]:
@@ -1041,6 +918,16 @@ def _parse_elevations(raw: str) -> list[float]:
         if chunk:
             out.append(float(chunk))
     return out or [0.0, 30.0, 45.0]
+
+
+def _parse_supplier_gif_layers(raw: str | None) -> list[str]:
+    allowed = {"interior", "kitchen", "surfaces", "windows", "curtains", "tables_chairs", "non_kitchen"}
+    out: list[str] = []
+    for chunk in str(raw or "interior").split(","):
+        layer = chunk.strip().lower()
+        if layer in allowed and layer not in out:
+            out.append(layer)
+    return out or ["interior"]
 
 
 def _render_gif_from_frames(frame_dir: Path, out_gif: Path, fps: int) -> None:
@@ -1095,62 +982,69 @@ def _render_supplier_room_gifs(
         return None
     if not supplier_scene_json_path.is_file():
         return None
-    if not supplier_blend_path.is_file():
-        return None
-    if supplier_blend_path.name != "scene_infinigen_clean_supplier.blend":
-        return None
+    use_reference_blend = supplier_blend_path.is_file()
 
     elevations = _parse_elevations(str(getattr(args, "supplier_gif_elevations", "0,30,45") or "0,30,45"))
+    layers = _parse_supplier_gif_layers(str(getattr(args, "supplier_gif_layers", "interior") or "interior"))
     frames = int(getattr(args, "supplier_gif_frames", 36) or 36)
     fps = int(getattr(args, "supplier_gif_fps", 8) or 8)
     keep_frames = bool(getattr(args, "keep_supplier_gif_frames", False))
     out: list[dict[str, Any]] = []
 
-    for elevation in elevations:
-        suffix = f"elev_{int(round(elevation)):02d}"
-        frame_dir = run_dir / f"_frames_supplier_interior_{suffix}"
-        gif_path = run_dir / f"room_supplier.interior.{suffix}.gif"
-        if frame_dir.exists():
-            shutil.rmtree(frame_dir, ignore_errors=True)
+    for layer in layers:
+        render_layer = "all" if layer == "interior" else layer
+        for elevation in elevations:
+            suffix = f"{layer}.elev_{int(round(elevation)):02d}"
+            frame_dir = run_dir / f"_frames_supplier_{suffix}"
+            gif_path = run_dir / f"room_supplier.{suffix}.gif"
+            if frame_dir.exists():
+                shutil.rmtree(frame_dir, ignore_errors=True)
 
-        cmd = [
-            sys.executable,
-            cfg_runtime["BLENDER_VIS_SCRIPT"],
-            "--json",
-            str(supplier_scene_json_path.resolve()),
-            "--reference-blend",
-            str(supplier_blend_path.resolve()),
-            "--background",
-            "--hide-room-shell",
-            "--no-bbox-fallback",
-            "--turntable-render-dir",
-            str(frame_dir.resolve()),
-            "--turntable-frames",
-            str(frames),
-            "--turntable-elevation-deg",
-            str(float(elevation)),
-            "--no-pack-assets",
-        ]
-        if args.blender:
-            cmd += ["--blender", args.blender]
+            cmd = [
+                sys.executable,
+                cfg_runtime["BLENDER_VIS_SCRIPT"],
+                "--json",
+                str(supplier_scene_json_path.resolve()),
+                "--background",
+                "--no-bbox-fallback",
+                "--turntable-render-dir",
+                str(frame_dir.resolve()),
+                "--turntable-frames",
+                str(frames),
+                "--turntable-elevation-deg",
+                str(float(elevation)),
+                "--no-pack-assets",
+            ]
+            if use_reference_blend:
+                cmd += ["--reference-blend", str(supplier_blend_path.resolve())]
+            if render_layer == "all":
+                cmd.append("--hide-room-shell")
+            else:
+                cmd += ["--render-layer", render_layer]
+            if args.blender:
+                cmd += ["--blender", args.blender]
 
-        print("▶ Supplier room GIF:\n ", " ".join(cmd))
-        subprocess.run(cmd, check=True)
-        _render_gif_from_frames(frame_dir, gif_path, fps)
-        if not keep_frames:
-            shutil.rmtree(frame_dir, ignore_errors=True)
-        out.append(
-            {
-                "elevation_deg": float(elevation),
-                "gif": str(gif_path.resolve()),
-                "frames_dir": str(frame_dir.resolve()) if keep_frames else None,
-            }
-        )
+            print("▶ Supplier room GIF:\n ", " ".join(cmd))
+            subprocess.run(cmd, check=True)
+            _render_gif_from_frames(frame_dir, gif_path, fps)
+            if not keep_frames:
+                shutil.rmtree(frame_dir, ignore_errors=True)
+            out.append(
+                {
+                    "layer": layer,
+                    "render_layer": render_layer,
+                    "elevation_deg": float(elevation),
+                    "gif": str(gif_path.resolve()),
+                    "frames_dir": str(frame_dir.resolve()) if keep_frames else None,
+                }
+            )
 
     return {
         "supplier_scene_json": str(supplier_scene_json_path.resolve()),
-        "supplier_blend": str(supplier_blend_path.resolve()),
+        "supplier_blend": str(supplier_blend_path.resolve()) if use_reference_blend else None,
+        "used_reference_blend": bool(use_reference_blend),
         "hide_room_shell": True,
+        "layers": layers,
         "bbox": False,
         "orbit_center": "room_geometric_center",
         "orbit_radius_policy": "max(room_width,room_depth)*1.5",
@@ -1195,6 +1089,9 @@ def _resolve_supplier_bindings_json(
     run_dir: Path,
     layout_targets_json_path: str,
     supplier_user_preferences_json: str | None = None,
+    room_design_spec: dict[str, Any] | None = None,
+    selection_mode: str | None = None,
+    out_suffix_override: str | None = None,
 ) -> Path | None:
     explicit = str(args.supplier_bindings_json or "").strip()
     if explicit:
@@ -1234,8 +1131,8 @@ def _resolve_supplier_bindings_json(
     }
 
     selection_strategy = str(getattr(args, "supplier_selection_strategy", "balanced") or "balanced").strip().lower()
-    out_suffix = "llm" if supplier_llm_provider != "none" else "heuristic"
-    if selection_strategy and selection_strategy != "balanced":
+    out_suffix = out_suffix_override or ("llm" if supplier_llm_provider != "none" else "heuristic")
+    if not out_suffix_override and selection_strategy and selection_strategy != "balanced":
         out_suffix = f"{out_suffix}.{selection_strategy}"
     out_path = run_dir / f"base_supplier_bindings.{out_suffix}.json"
     result = build_bindings_with_candidates(
@@ -1245,9 +1142,168 @@ def _resolve_supplier_bindings_json(
         selection_strategy=str(getattr(args, "supplier_selection_strategy", "balanced") or "balanced"),
         user_preferences=supplier_user_preferences,
         llm_settings=llm_settings,
+        room_design_spec=room_design_spec,
+        selection_mode=selection_mode,
     )
     write_json(out_path, result)
     return out_path
+
+
+def _parse_supplier_selection_modes(raw: str | None) -> list[str]:
+    text = str(raw or "").strip()
+    if not text:
+        return []
+    aliases = {
+        "balanced": "optimal",
+        "style": "best_match",
+        "cheap_style": "optimal",
+    }
+    out: list[str] = []
+    for part in re.split(r"[,;\\s]+", text):
+        mode = aliases.get(part.strip().lower(), part.strip().lower())
+        if mode not in {"cheapest", "optimal", "best_match"}:
+            continue
+        if mode not in out:
+            out.append(mode)
+    return out
+
+
+def _build_room_design_spec_for_targets(
+    *,
+    run_dir: Path,
+    prompt_text: str,
+    layout_targets_json_path: str,
+    style_profile: dict[str, Any],
+) -> tuple[Path, dict[str, Any]]:
+    targets_path = Path(layout_targets_json_path).expanduser().resolve()
+    targets_data = read_supplier_matcher_json(targets_path)
+    if not isinstance(targets_data, dict):
+        raise RuntimeError("layout targets JSON must be an object")
+    spec = build_room_design_spec(
+        user_prompt=prompt_text,
+        layout_targets=targets_data,
+        style_profile=style_profile,
+    )
+    out_path = run_dir / "room_design_spec.json"
+    write_json(out_path, spec)
+    return out_path, spec
+
+
+def _run_supplier_modes_for_artifacts(
+    *,
+    args: argparse.Namespace,
+    run_dir: Path,
+    artifacts: PlacementArtifacts,
+    layout_targets_json_path: str,
+    prompt_text: str,
+    style_profile: dict[str, Any],
+    style_supplier_preferences_path: Path | None,
+    manifest: dict[str, Any],
+    manifest_path: Path,
+    manifest_key: str = "supplier_variants",
+) -> tuple[Path | None, dict[str, Any] | None, dict[str, Any] | None, dict[str, Any] | None, dict[str, Any]]:
+    modes = _parse_supplier_selection_modes(getattr(args, "supplier_selection_modes", None))
+    if not modes:
+        modes = [str(getattr(args, "supplier_selection_mode", "") or "").strip() or None]  # type: ignore[list-item]
+
+    spec_path, room_design_spec = _build_room_design_spec_for_targets(
+        run_dir=run_dir,
+        prompt_text=prompt_text,
+        layout_targets_json_path=layout_targets_json_path,
+        style_profile=style_profile,
+    )
+    manifest["room_design_spec_json"] = str(spec_path.resolve())
+
+    variants: dict[str, Any] = {}
+    primary_scene: Path | None = None
+    primary_info: dict[str, Any] | None = None
+    primary_report: dict[str, Any] | None = None
+    primary_assets: dict[str, Any] | None = None
+    preferred_mode = "optimal" if "optimal" in [m for m in modes if m] else (modes[0] or "optimal")
+
+    for raw_mode in modes:
+        mode = raw_mode or str(getattr(args, "supplier_selection_strategy", "balanced") or "balanced")
+        mode_name = {"balanced": "optimal", "cheap_style": "optimal", "style": "best_match"}.get(str(mode), str(mode))
+        bindings_path = _resolve_supplier_bindings_json(
+            args=args,
+            run_dir=run_dir,
+            layout_targets_json_path=layout_targets_json_path,
+            supplier_user_preferences_json=(
+                str(style_supplier_preferences_path.resolve())
+                if style_supplier_preferences_path and not str(getattr(args, "supplier_user_preferences_json", "") or "").strip()
+                else None
+            ),
+            room_design_spec=room_design_spec,
+            selection_mode=mode_name,
+            out_suffix_override=f"{mode_name}",
+        )
+        if not bindings_path:
+            continue
+        initial_bindings_path = bindings_path
+        consistent_path: Path | None = None
+        bindings_data = json.loads(bindings_path.read_text(encoding="utf-8"))
+        consistent_bindings = apply_supplier_scene_consistency(bindings_data)
+        if consistent_bindings != bindings_data:
+            consistent_path = run_dir / f"{bindings_path.stem}.consistent.json"
+            write_json(consistent_path, consistent_bindings)
+            bindings_path = consistent_path
+        assets_bindings_path, assets_info = _acquire_supplier_assets_for_bindings(
+            args=args,
+            run_dir=run_dir,
+            bindings_json_path=bindings_path,
+        )
+        supplier_info = _apply_supplier_bindings_for_artifacts(
+            artifacts=artifacts,
+            run_dir=run_dir,
+            bindings_json_path=assets_bindings_path,
+            require_local_asset=bool(args.supplier_require_local_asset),
+            variant_suffix=mode_name,
+        )
+        report_info = _write_supplier_replacement_reports_for_artifacts(
+            run_dir=run_dir,
+            bindings_json_path=assets_bindings_path,
+            supplier_info=supplier_info,
+            variant_suffix=mode_name,
+        )
+        variants[mode_name] = {
+            "initial_bindings": str(initial_bindings_path.resolve()),
+            "consistent_bindings": str(consistent_path.resolve()) if consistent_path else str(initial_bindings_path.resolve()),
+            "bindings": str(assets_bindings_path.resolve()),
+            "assets": assets_info,
+            "rebind": supplier_info,
+            "reports": report_info,
+            "blender": {
+                "blend_path": None,
+                "blend_exists": False,
+                "blender_status": "skipped",
+                "blender_error": "not_run_yet",
+                "build_report": None,
+            },
+        }
+        if mode_name == preferred_mode or primary_scene is None:
+            primary_info = supplier_info
+            primary_assets = assets_info
+            primary_report = report_info
+            if supplier_info.get("scene_v1"):
+                primary_scene = Path(str(supplier_info["scene_v1"])).expanduser().resolve()
+        manifest[manifest_key] = variants
+        write_json(manifest_path, manifest)
+
+    comparison_path = _write_supplier_variants_comparison(run_dir, variants)
+    if comparison_path:
+        manifest["supplier_variants_comparison_json"] = str(comparison_path.resolve())
+        manifest[manifest_key] = variants
+        supplier_manifest_path = _write_supplier_variants_manifest(
+            run_dir=run_dir,
+            modes=list(variants.keys()),
+            variants=variants,
+            room_design_spec_path=str(spec_path.resolve()),
+            comparison_json=str(comparison_path.resolve()),
+        )
+        manifest["supplier_variants_manifest_json"] = str(supplier_manifest_path.resolve())
+        write_json(manifest_path, manifest)
+
+    return primary_scene, primary_info, primary_assets, primary_report, manifest
 
 
 def _flooring_style_label(style_profile: dict[str, Any]) -> str | None:
@@ -1437,6 +1493,200 @@ def _maybe_apply_wall_material_to_scene(
     }
 
 
+def _scene_windows(scene: dict[str, Any]) -> list[dict[str, Any]]:
+    room = scene.get("room")
+    if not isinstance(room, dict):
+        return []
+    windows = room.get("windows")
+    if not isinstance(windows, list):
+        return []
+    return [w for w in windows if isinstance(w, dict)]
+
+
+def _scene_has_curtain_items(scene: dict[str, Any]) -> bool:
+    items = scene.get("items") if isinstance(scene.get("items"), list) else scene.get("placements")
+    if not isinstance(items, list):
+        return False
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        text = " ".join(
+            str(item.get(key) or "")
+            for key in ("name", "category", "semantic_group", "id")
+        ).lower()
+        source = item.get("source")
+        if isinstance(source, dict):
+            text += " " + " ".join(str(v or "") for v in source.values()).lower()
+        asset = item.get("asset")
+        if isinstance(asset, dict):
+            text += " " + str(asset.get("kind") or "").lower()
+        if any(token in text for token in ("curtain", "shtor", "штор", "занавес", "window_covering")):
+            return True
+    return False
+
+
+def _curtains_needed_for_scene(
+    *,
+    scene: dict[str, Any],
+    prompt_text: str,
+    style_profile: dict[str, Any],
+    policy: str,
+) -> tuple[bool, str]:
+    if not _scene_windows(scene):
+        return False, "missing_windows"
+    if _scene_has_curtain_items(scene):
+        return False, "existing_curtains"
+    if policy == "always":
+        return True, "policy_always"
+
+    text_parts = [
+        prompt_text,
+        str(style_profile.get("expanded_prompt") or ""),
+        str(style_profile.get("style_hint") or ""),
+        str(style_profile.get("surface_design_brief") or ""),
+        str(style_profile.get("chooser_prompt") or ""),
+    ]
+    text = " ".join(part for part in text_parts if part).lower()
+    negative_tokens = (
+        "no curtain",
+        "no curtains",
+        "without curtain",
+        "without curtains",
+        "без штор",
+        "без занавес",
+        "не нужны шторы",
+        "шторы не нужны",
+        "без жалюзи",
+    )
+    if any(token in text for token in negative_tokens):
+        return False, "prompt_says_no_curtains"
+
+    for key in ("needs_curtains", "wants_curtains", "curtains", "window_coverings"):
+        if bool(style_profile.get(key)):
+            return True, f"profile_{key}"
+
+    explicit_tokens = (
+        "curtain",
+        "curtains",
+        "drape",
+        "drapes",
+        "window treatment",
+        "window covering",
+        "tulle",
+        "blind",
+        "blinds",
+        "штор",
+        "занавес",
+        "тюль",
+        "гардин",
+        "портьер",
+        "жалюзи",
+    )
+    if any(token in text for token in explicit_tokens):
+        return True, "prompt_mentions_curtains"
+
+    room_type = str(style_profile.get("room_type") or "").strip().lower().replace(" ", "_")
+    if room_type in {"bedroom", "livingroom", "living_room", "kids_room", "nursery", "детская", "спальня", "гостиная"}:
+        return True, f"default_for_room_type:{room_type}"
+
+    return False, "auto_not_requested"
+
+
+def _maybe_apply_curtains_to_scene(
+    *,
+    args: argparse.Namespace,
+    run_dir: Path,
+    scene_json_path: Path,
+    prompt_text: str,
+    style_profile: dict[str, Any],
+    suffix: str,
+) -> tuple[Path, dict[str, Any] | None]:
+    policy = str(getattr(args, "curtains", "auto") or "auto").strip().lower()
+    if bool(getattr(args, "no_curtains", False)):
+        policy = "never"
+    if policy in {"off", "false", "0", "no"}:
+        policy = "never"
+    if policy in {"on", "true", "1", "yes"}:
+        policy = "always"
+    if policy not in {"auto", "always", "never"}:
+        policy = "auto"
+
+    if policy == "never":
+        return scene_json_path, None
+
+    scene = json.loads(scene_json_path.read_text(encoding="utf-8"))
+    needed, needed_reason = _curtains_needed_for_scene(
+        scene=scene,
+        prompt_text=prompt_text,
+        style_profile=style_profile,
+        policy=policy,
+    )
+    if not needed:
+        print(f"⏭ curtains: пропуск ({needed_reason})")
+        return scene_json_path, {
+            "added_count": 0,
+            "skipped_reason": needed_reason,
+            "policy": policy,
+        }
+
+    materials_path = Path(str(getattr(args, "curtain_materials", "") or "")).expanduser()
+    if not materials_path.is_absolute():
+        materials_path = (Path.cwd() / materials_path).resolve()
+    if not (materials_path.is_file() or materials_path.is_dir()):
+        print(f"⏭ curtains: каталог не найден, пропуск: {materials_path}")
+        return scene_json_path, None
+
+    catalog, catalog_base_dir = load_curtain_catalog(materials_path)
+    if not catalog:
+        print(f"⏭ curtains: в каталоге нет пригодных товаров с локальными картинками: {materials_path}")
+        return scene_json_path, None
+    models_dir = Path(str(getattr(args, "curtain_models_dir", "") or "")).expanduser()
+    if not models_dir.is_absolute():
+        models_dir = (Path.cwd() / models_dir).resolve()
+    curtain_model_paths = discover_curtain_models(models_dir)
+    supplier_catalog_path = Path(str(getattr(args, "curtain_supplier_catalog", "") or "")).expanduser()
+    if not supplier_catalog_path.is_absolute():
+        supplier_catalog_path = (Path.cwd() / supplier_catalog_path).resolve()
+    supplier_curtain_models = discover_supplier_curtain_models(
+        supplier_catalog_path=supplier_catalog_path,
+        manual_assets_root="data/sourse/suppliers/manual_assets/3ddd",
+    )
+
+    scene_out_path = run_dir / f"{scene_json_path.stem}.curtains.v1.json"
+    seed = int(getattr(args, "curtain_seed", 0) or 0)
+    if seed == 0:
+        seed = int(getattr(args, "seed", 0) or 0)
+    scene_with_curtains, info = apply_curtains_to_scene(
+        scene,
+        catalog=catalog,
+        catalog_base_dir=catalog_base_dir,
+        curtain_model_paths=curtain_model_paths,
+        curtain_models=supplier_curtain_models,
+        style_profile=style_profile,
+        seed=seed,
+    )
+    if int(info.get("added_count", 0) or 0) <= 0:
+        print(f"⏭ curtains: шторы не добавлены ({info.get('skipped_reason') or 'no_window_fit'})")
+        return scene_json_path, info
+
+    write_curtain_json(scene_out_path, scene_with_curtains)
+    first = (info.get("selected") or [{}])[0]
+    print(
+        "🪟 curtains selected: "
+        f"added={info.get('added_count')} | first={first.get('sku')} {first.get('name')} | "
+        f"texture={first.get('texture_path')}"
+    )
+    return scene_out_path, {
+        "scene_v1": str(scene_out_path.resolve()),
+        "catalog_path": str(materials_path.resolve()),
+        "models_dir": str(models_dir.resolve()),
+        "supplier_catalog_path": str(supplier_catalog_path.resolve()),
+        "policy": policy,
+        "needed_reason": needed_reason,
+        **info,
+    }
+
+
 def _flooring_prompt_for_selector(prompt_text: str, style_profile: dict[str, Any], run_dir: Path) -> str:
     parts = [str(style_profile.get("expanded_prompt") or prompt_text or "").strip()]
     style_hint = str(style_profile.get("style_hint") or "").strip()
@@ -1478,10 +1728,11 @@ def _flooring_prompt_for_selector(prompt_text: str, style_profile: dict[str, Any
 
 def _maybe_apply_fast_infinigen_profile(args: argparse.Namespace, style_profile: dict[str, Any]) -> None:
     fast_small = bool(getattr(args, "infinigen_fast_small", False))
+    no_pose_cameras = bool(getattr(args, "infinigen_no_pose_cameras", False))
     solve_large = getattr(args, "infinigen_solve_steps_large", None)
     solve_medium = getattr(args, "infinigen_solve_steps_medium", None)
     solve_small = getattr(args, "infinigen_solve_steps_small", None)
-    if not fast_small and solve_large is None and solve_medium is None and solve_small is None:
+    if not fast_small and not no_pose_cameras and solve_large is None and solve_medium is None and solve_small is None:
         return
     infinigen = style_profile.setdefault("infinigen", {})
     if not isinstance(infinigen, dict):
@@ -1522,6 +1773,9 @@ def _maybe_apply_fast_infinigen_profile(args: argparse.Namespace, style_profile:
         small_steps = max(0, int(solve_small))
         override_map["compose_indoors.solve_small_enabled"] = "True" if small_steps > 0 else "False"
         override_map["compose_indoors.solve_steps_small"] = str(small_steps)
+    if no_pose_cameras:
+        override_map["compose_indoors.pose_cameras_enabled"] = "False"
+        override_map["compose_indoors.animate_cameras_enabled"] = "False"
 
     for key, value in override_map.items():
         overrides[:] = [item for item in overrides if not str(item).startswith(f"{key}=")]
@@ -1649,6 +1903,14 @@ def run_pipeline_for_mode(
             objects_v1_path=normalized_objects_path,
             run_dir=run_dir,
         )
+        lego_artifacts, kitchen_info = _maybe_apply_kitchen_stage(
+            args=args,
+            artifacts=lego_artifacts,
+            run_dir=run_dir,
+            room_path=effective_room_path,
+            prompt_text=effective_prompt_text,
+            suffix="lego_gen",
+        )
         lego_selection_stub = _build_layout_selection_stub_for_artifacts(
             artifacts=lego_artifacts,
             run_dir=run_dir,
@@ -1666,40 +1928,26 @@ def run_pipeline_for_mode(
             "supplier_bindings_stub_json": lego_selection_stub["supplier_bindings_stub_json"],
             "scene_pricing_stub_json": lego_selection_stub["scene_pricing_stub_json"],
         }
+        if kitchen_info is not None:
+            manifest["kitchen_stage"] = kitchen_info
 
         supplier_scene_for_render: Optional[Path] = None
-        supplier_bindings_path = _resolve_supplier_bindings_json(
+        supplier_scene_for_render, supplier_info, supplier_assets_info, supplier_report_info, manifest = _run_supplier_modes_for_artifacts(
             args=args,
             run_dir=run_dir,
+            artifacts=lego_artifacts,
             layout_targets_json_path=lego_selection_stub["layout_targets_json"],
-            supplier_user_preferences_json=(
-                str(style_supplier_preferences_path.resolve())
-                if style_supplier_preferences_path and not str(getattr(args, "supplier_user_preferences_json", "") or "").strip()
-                else None
-            ),
+            prompt_text=effective_prompt_text,
+            style_profile=style_profile,
+            style_supplier_preferences_path=style_supplier_preferences_path,
+            manifest=manifest,
+            manifest_path=manifest_path,
+            manifest_key="supplier_variants",
         )
-        if supplier_bindings_path:
-            supplier_bindings_path, supplier_assets_info = _acquire_supplier_assets_for_bindings(
-                args=args,
-                run_dir=run_dir,
-                bindings_json_path=supplier_bindings_path,
-            )
-            supplier_info = _apply_supplier_bindings_for_artifacts(
-                artifacts=lego_artifacts,
-                run_dir=run_dir,
-                bindings_json_path=supplier_bindings_path,
-                require_local_asset=bool(args.supplier_require_local_asset),
-            )
-            supplier_report_info = _write_supplier_replacement_reports_for_artifacts(
-                run_dir=run_dir,
-                bindings_json_path=supplier_bindings_path,
-                supplier_info=supplier_info,
-            )
+        if supplier_info is not None:
             manifest["supplier_rebind"] = supplier_info
             manifest["supplier_assets"] = supplier_assets_info
             manifest["supplier_replacement_reports"] = supplier_report_info
-            if supplier_info.get("scene_v1"):
-                supplier_scene_for_render = Path(str(supplier_info["scene_v1"])).expanduser().resolve()
         base_scene_for_render = choose_scene_for_render(lego_artifacts)
         base_scene_for_render, base_repair_info = maybe_repair_scene_json(
             args=args,
@@ -1743,6 +1991,18 @@ def run_pipeline_for_mode(
             manifest["wall_material_base"] = base_wall_info
             if isinstance(manifest.get("lego_gen"), dict):
                 manifest["lego_gen"]["scene_v1_wall_material"] = base_wall_info.get("scene_v1")
+        base_scene_for_render, base_curtain_info = _maybe_apply_curtains_to_scene(
+            args=args,
+            run_dir=run_dir,
+            scene_json_path=base_scene_for_render,
+            prompt_text=prompt_text,
+            style_profile=style_profile,
+            suffix=".lego_gen_base",
+        )
+        if base_curtain_info is not None:
+            manifest["curtains_base"] = base_curtain_info
+            if isinstance(manifest.get("lego_gen"), dict):
+                manifest["lego_gen"]["scene_v1_curtains"] = base_curtain_info.get("scene_v1")
         surface_pricing_info = _write_surface_material_pricing(
             run_dir=run_dir,
             room_path=Path(effective_room_path).expanduser().resolve(),
@@ -1796,6 +2056,18 @@ def run_pipeline_for_mode(
                 manifest["wall_material_supplier"] = supplier_wall_info
                 if isinstance(manifest.get("supplier_rebind"), dict):
                     manifest["supplier_rebind"]["scene_v1_wall_material"] = supplier_wall_info.get("scene_v1")
+            supplier_scene_for_render, supplier_curtain_info = _maybe_apply_curtains_to_scene(
+                args=args,
+                run_dir=run_dir,
+                scene_json_path=supplier_scene_for_render,
+                prompt_text=prompt_text,
+                style_profile=style_profile,
+                suffix=".lego_gen_supplier",
+            )
+            if supplier_curtain_info is not None:
+                manifest["curtains_supplier"] = supplier_curtain_info
+                if isinstance(manifest.get("supplier_rebind"), dict):
+                    manifest["supplier_rebind"]["scene_v1_curtains"] = supplier_curtain_info.get("scene_v1")
             surface_pricing_info = _write_surface_material_pricing(
                 run_dir=run_dir,
                 room_path=Path(effective_room_path).expanduser().resolve(),
@@ -1806,15 +2078,26 @@ def run_pipeline_for_mode(
             )
             if surface_pricing_info is not None:
                 manifest["surface_materials_pricing_supplier"] = surface_pricing_info
-            supplier_report_info = _write_supplier_replacement_reports_for_artifacts(
-                run_dir=run_dir,
-                bindings_json_path=supplier_bindings_path,
-                supplier_info=supplier_info,
-            )
-            manifest["supplier_replacement_reports"] = supplier_report_info
+            if supplier_assets_info and supplier_assets_info.get("bindings_json"):
+                supplier_report_info = _write_supplier_replacement_reports_for_artifacts(
+                    run_dir=run_dir,
+                    bindings_json_path=Path(str(supplier_assets_info["bindings_json"])).expanduser().resolve(),
+                    supplier_info=supplier_info or {},
+                    variant_suffix=str((supplier_report_info or {}).get("mode") or ""),
+                )
+                manifest["supplier_replacement_reports"] = supplier_report_info
         write_json(manifest_path, manifest)
+        variants = manifest.get("supplier_variants") if isinstance(manifest.get("supplier_variants"), dict) else {}
 
         if args.skip_blender:
+            _mark_supplier_blender_skipped(variants, reason="skip_blender")
+            manifest = _finalize_supplier_variant_artifacts(
+                args=args,
+                run_dir=run_dir,
+                manifest=manifest,
+                manifest_path=manifest_path,
+                variants=variants,
+            )
             print(f"⏭ Пропуск Blender для режима {layout_mode}")
             print(f"\n✅ УСПЕХ! РЕЖИМ {layout_mode}")
             return ModeOutputs(base_artifacts=lego_artifacts, lego_artifacts=None)
@@ -1829,7 +2112,34 @@ def run_pipeline_for_mode(
             variant_suffix="lego_gen",
         )
 
-        if supplier_scene_for_render and supplier_scene_for_render.is_file():
+        if variants and bool(getattr(args, "build_supplier_blend", False)):
+            _run_supplier_blender_variants(
+                cfg_runtime=cfg_runtime,
+                args=args,
+                run_dir=run_dir,
+                layout_mode=layout_mode,
+                effective_room_path=effective_room_path,
+                variants=variants,
+            )
+            _refresh_supplier_reports_after_blender(run_dir=run_dir, variants=variants)
+            manifest = _finalize_supplier_variant_artifacts(
+                args=args,
+                run_dir=run_dir,
+                manifest=manifest,
+                manifest_path=manifest_path,
+                variants=variants,
+            )
+        elif variants:
+            _mark_supplier_blender_skipped(variants, reason="build_supplier_blend_disabled")
+            manifest = _finalize_supplier_variant_artifacts(
+                args=args,
+                run_dir=run_dir,
+                manifest=manifest,
+                manifest_path=manifest_path,
+                variants=variants,
+            )
+
+        if supplier_scene_for_render and supplier_scene_for_render.is_file() and not variants:
             run_blender_for_mode(
                 cfg_runtime=cfg_runtime,
                 args=args,
@@ -1902,6 +2212,14 @@ def run_pipeline_for_mode(
                 placement_out=placement_out,
                 variant_suffix="",
             )
+            base_artifacts, kitchen_info = _maybe_apply_kitchen_stage(
+                args=args,
+                artifacts=base_artifacts,
+                run_dir=run_dir,
+                room_path=effective_room_path,
+                prompt_text=effective_prompt_text,
+                suffix="base",
+            )
             base_selection_stub = _build_layout_selection_stub_for_artifacts(
                 artifacts=base_artifacts,
                 run_dir=run_dir,
@@ -1918,6 +2236,8 @@ def run_pipeline_for_mode(
                 "supplier_bindings_stub_json": base_selection_stub["supplier_bindings_stub_json"],
                 "scene_pricing_stub_json": base_selection_stub["scene_pricing_stub_json"],
             }
+            if kitchen_info is not None:
+                manifest["kitchen_stage"] = kitchen_info
             write_json(manifest_path, manifest)
 
             print(f"✅ placement stage success: {layout_mode}")
@@ -1937,39 +2257,23 @@ def run_pipeline_for_mode(
         raise RuntimeError(f"Не удалось получить base placement для режима {layout_mode}")
 
     supplier_scene_for_render: Optional[Path] = None
-    supplier_bindings_path = _resolve_supplier_bindings_json(
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    supplier_scene_for_render, supplier_info, supplier_assets_info, supplier_report_info, manifest = _run_supplier_modes_for_artifacts(
         args=args,
         run_dir=run_dir,
+        artifacts=base_artifacts,
         layout_targets_json_path=base_selection_stub["layout_targets_json"],
-        supplier_user_preferences_json=(
-            str(style_supplier_preferences_path.resolve())
-            if style_supplier_preferences_path and not str(getattr(args, "supplier_user_preferences_json", "") or "").strip()
-            else None
-        ),
+        prompt_text=effective_prompt_text,
+        style_profile=style_profile,
+        style_supplier_preferences_path=style_supplier_preferences_path,
+        manifest=manifest,
+        manifest_path=manifest_path,
+        manifest_key="supplier_variants",
     )
-    if supplier_bindings_path:
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        supplier_bindings_path, supplier_assets_info = _acquire_supplier_assets_for_bindings(
-            args=args,
-            run_dir=run_dir,
-            bindings_json_path=supplier_bindings_path,
-        )
-        supplier_info = _apply_supplier_bindings_for_artifacts(
-            artifacts=base_artifacts,
-            run_dir=run_dir,
-            bindings_json_path=supplier_bindings_path,
-            require_local_asset=bool(args.supplier_require_local_asset),
-        )
-        supplier_report_info = _write_supplier_replacement_reports_for_artifacts(
-            run_dir=run_dir,
-            bindings_json_path=supplier_bindings_path,
-            supplier_info=supplier_info,
-        )
+    if supplier_info is not None:
         manifest["supplier_rebind"] = supplier_info
         manifest["supplier_assets"] = supplier_assets_info
         manifest["supplier_replacement_reports"] = supplier_report_info
-        if supplier_info.get("scene_v1"):
-            supplier_scene_for_render = Path(str(supplier_info["scene_v1"])).expanduser().resolve()
         write_json(manifest_path, manifest)
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     base_scene_for_render = choose_scene_for_render(base_artifacts)
@@ -2015,6 +2319,18 @@ def run_pipeline_for_mode(
         manifest["wall_material_base"] = base_wall_info
         if isinstance(manifest.get("base"), dict):
             manifest["base"]["scene_v1_wall_material"] = base_wall_info.get("scene_v1")
+    base_scene_for_render, base_curtain_info = _maybe_apply_curtains_to_scene(
+        args=args,
+        run_dir=run_dir,
+        scene_json_path=base_scene_for_render,
+        prompt_text=prompt_text,
+        style_profile=style_profile,
+        suffix=".base",
+    )
+    if base_curtain_info is not None:
+        manifest["curtains_base"] = base_curtain_info
+        if isinstance(manifest.get("base"), dict):
+            manifest["base"]["scene_v1_curtains"] = base_curtain_info.get("scene_v1")
     surface_pricing_info = _write_surface_material_pricing(
         run_dir=run_dir,
         room_path=Path(effective_room_path).expanduser().resolve(),
@@ -2068,6 +2384,18 @@ def run_pipeline_for_mode(
             manifest["wall_material_supplier"] = supplier_wall_info
             if isinstance(manifest.get("supplier_rebind"), dict):
                 manifest["supplier_rebind"]["scene_v1_wall_material"] = supplier_wall_info.get("scene_v1")
+        supplier_scene_for_render, supplier_curtain_info = _maybe_apply_curtains_to_scene(
+            args=args,
+            run_dir=run_dir,
+            scene_json_path=supplier_scene_for_render,
+            prompt_text=prompt_text,
+            style_profile=style_profile,
+            suffix=".supplier",
+        )
+        if supplier_curtain_info is not None:
+            manifest["curtains_supplier"] = supplier_curtain_info
+            if isinstance(manifest.get("supplier_rebind"), dict):
+                manifest["supplier_rebind"]["scene_v1_curtains"] = supplier_curtain_info.get("scene_v1")
         surface_pricing_info = _write_surface_material_pricing(
             run_dir=run_dir,
             room_path=Path(effective_room_path).expanduser().resolve(),
@@ -2078,15 +2406,25 @@ def run_pipeline_for_mode(
         )
         if surface_pricing_info is not None:
             manifest["surface_materials_pricing_supplier"] = surface_pricing_info
-        supplier_report_info = _write_supplier_replacement_reports_for_artifacts(
-            run_dir=run_dir,
-            bindings_json_path=supplier_bindings_path,
-            supplier_info=supplier_info,
-        )
-        manifest["supplier_replacement_reports"] = supplier_report_info
+        if supplier_assets_info and supplier_assets_info.get("bindings_json"):
+            supplier_report_info = _write_supplier_replacement_reports_for_artifacts(
+                run_dir=run_dir,
+                bindings_json_path=Path(str(supplier_assets_info["bindings_json"])).expanduser().resolve(),
+                supplier_info=supplier_info or {},
+            )
+            manifest["supplier_replacement_reports"] = supplier_report_info
     write_json(manifest_path, manifest)
+    variants = manifest.get("supplier_variants") if isinstance(manifest.get("supplier_variants"), dict) else {}
 
     if args.skip_blender:
+        _mark_supplier_blender_skipped(variants, reason="skip_blender")
+        manifest = _finalize_supplier_variant_artifacts(
+            args=args,
+            run_dir=run_dir,
+            manifest=manifest,
+            manifest_path=manifest_path,
+            variants=variants,
+        )
         print(f"⏭ Пропуск Blender для режима {layout_mode}")
         print(f"\n✅ УСПЕХ! РЕЖИМ {layout_mode}")
         return ModeOutputs(base_artifacts=base_artifacts, lego_artifacts=None)
@@ -2101,7 +2439,34 @@ def run_pipeline_for_mode(
         variant_suffix="",
     )
 
-    if supplier_scene_for_render and supplier_scene_for_render.is_file():
+    if variants and bool(getattr(args, "build_supplier_blend", False)):
+        _run_supplier_blender_variants(
+            cfg_runtime=cfg_runtime,
+            args=args,
+            run_dir=run_dir,
+            layout_mode=layout_mode,
+            effective_room_path=effective_room_path,
+            variants=variants,
+        )
+        _refresh_supplier_reports_after_blender(run_dir=run_dir, variants=variants)
+        manifest = _finalize_supplier_variant_artifacts(
+            args=args,
+            run_dir=run_dir,
+            manifest=manifest,
+            manifest_path=manifest_path,
+            variants=variants,
+        )
+    elif variants:
+        _mark_supplier_blender_skipped(variants, reason="build_supplier_blend_disabled")
+        manifest = _finalize_supplier_variant_artifacts(
+            args=args,
+            run_dir=run_dir,
+            manifest=manifest,
+            manifest_path=manifest_path,
+            variants=variants,
+        )
+
+    if supplier_scene_for_render and supplier_scene_for_render.is_file() and not variants:
         run_blender_for_mode(
             cfg_runtime=cfg_runtime,
             args=args,
@@ -2155,6 +2520,12 @@ def build_cli() -> argparse.ArgumentParser:
 
     p.add_argument("--save-blend", default=None)
     p.add_argument("--render", default=None)
+    p.add_argument("--blender-output", choices=["render", "gif", "both"], default="render", help="Visual output produced by Blender for every rendered scene")
+    p.add_argument("--keep-blend", action=argparse.BooleanOptionalAction, default=False, help="Keep generated .blend scenes; by default only PNG/GIF/report artifacts remain")
+    p.add_argument("--blender-gif-frames", type=int, default=36)
+    p.add_argument("--blender-gif-elevation", type=float, default=30.0)
+    p.add_argument("--blender-gif-fps", type=int, default=8)
+    p.add_argument("--keep-blender-gif-frames", action="store_true")
     p.add_argument("--blender", default=None)
     p.add_argument("--headless", action="store_true")
     p.add_argument("--skip-blender", action="store_true")
@@ -2180,6 +2551,7 @@ def build_cli() -> argparse.ArgumentParser:
     p.add_argument("--ollama-timeout", type=int, default=None)
     p.add_argument("--ollama-temperature", type=float, default=None)
     p.add_argument("--ollama-max-attempts", type=int, default=None)
+    p.add_argument("--chooser-llm-provider", choices=["none", "ollama"], default="ollama")
     p.add_argument("--style-llm-provider", choices=["none", "ollama"], default="ollama")
     p.add_argument("--style-ollama-url", default=None)
     p.add_argument("--style-ollama-model", default=None)
@@ -2218,6 +2590,11 @@ def build_cli() -> argparse.ArgumentParser:
         default="balanced",
         help="Automatic supplier ranking strategy: cheapest, cheap_style, style, or balanced.",
     )
+    p.add_argument("--supplier-selection-mode", choices=["cheapest", "optimal", "best_match"], default=None, help="Design-aware supplier selection mode for single bindings output")
+    p.add_argument("--supplier-selection-modes", default=None, help="Comma-separated design-aware modes to build, e.g. cheapest,optimal,best_match")
+    p.add_argument("--supplier-build-modes", default=None, help="Comma-separated supplier modes to build in Blender. Defaults to all selection modes.")
+    p.add_argument("--build-supplier-blend", action="store_true", help="Compat flag: supplier blends are built when Blender is not skipped.")
+    p.add_argument("--validate-supplier-variants", action="store_true", help="Validate multi-mode supplier bindings and write supplier_variants.validation.json")
     p.add_argument("--supplier-rich-only", action="store_true", help="Use only rich supplier cards during automatic binding search")
     p.add_argument("--supplier-user-preferences-json", default=None, help="Optional JSON with supplier matcher user preferences")
     p.add_argument("--supplier-llm-provider", choices=["none", "ollama"], default="none", help="Optional final LLM reranker after heuristic supplier top-K")
@@ -2230,6 +2607,27 @@ def build_cli() -> argparse.ArgumentParser:
     p.add_argument("--supplier-assets-dir", default=None, help="Directory for scene-specific downloaded supplier assets")
     p.add_argument("--supplier-assets-db", default=None, help="SQLite DB for scene-specific downloaded supplier assets")
     p.add_argument("--supplier-assets-blender", default=None, help="Optional Blender binary for supplier asset conversion")
+
+    p.add_argument("--kitchens", choices=["auto", "always", "never"], default="auto", help="Procedural kitchen set stage policy")
+    p.add_argument("--kitchen-material-catalog", default="data/floor_materials/basisrf/products.csv")
+    p.add_argument("--kitchen-appliance-catalog", default="data/sourse/suppliers/supplier_catalog_canonical.json")
+    p.add_argument("--kitchen-selection-mode", choices=["cheapest", "optimal", "best_match"], default="optimal")
+    p.add_argument("--kitchen-dining", choices=["auto", "always", "never"], default="auto", help="Add supplier-compatible dining table/chair targets for kitchens")
+    p.add_argument("--kitchen-accessories", choices=["auto", "always", "never"], default="auto", help="Add supplier-compatible countertop cooking-set/kitchenware targets")
+    p.add_argument("--kitchen-llm-provider", choices=["none", "ollama"], default="none", help="Use LLM for kitchen palette, material top-k, appliance top-k and dining placement decisions")
+    p.add_argument("--kitchen-ollama-url", default="http://127.0.0.1:11434")
+    p.add_argument("--kitchen-ollama-model", default="gpt-oss:20b")
+    p.add_argument("--kitchen-ollama-timeout", type=int, default=180)
+    p.add_argument("--kitchen-ollama-temperature", type=float, default=0.1)
+    p.add_argument("--kitchen-ollama-num-ctx", type=int, default=8192)
+    p.add_argument("--kitchen-ollama-think", default="low")
+    p.add_argument("--kitchen-accessory-llm-provider", choices=["none", "ollama"], default="none", help="Use LLM to choose varied kitchen accessories from the supplier inventory")
+    p.add_argument("--kitchen-accessory-ollama-url", default="http://127.0.0.1:11434")
+    p.add_argument("--kitchen-accessory-ollama-model", default="gpt-oss:20b")
+    p.add_argument("--kitchen-accessory-ollama-timeout", type=int, default=180)
+    p.add_argument("--kitchen-accessory-ollama-temperature", type=float, default=0.2)
+    p.add_argument("--kitchen-accessory-ollama-num-ctx", type=int, default=8192)
+    p.add_argument("--kitchen-accessory-ollama-think", default="low")
 
     p.add_argument("--no-flooring", action="store_true", help="Disable supplier floor covering selection and Blender floor texture application")
     p.add_argument("--flooring-materials", default="data/floor_materials")
@@ -2252,7 +2650,14 @@ def build_cli() -> argparse.ArgumentParser:
     p.add_argument("--wall-ollama-temperature", type=float, default=0.0)
     p.add_argument("--wall-ollama-num-ctx", type=int, default=8192)
     p.add_argument("--wall-llm-top-n", type=int, default=5)
+    p.add_argument("--curtains", choices=["auto", "always", "never"], default="auto", help="Shtorystore curtain postprocess policy")
+    p.add_argument("--no-curtains", action="store_true", help="Disable Shtorystore curtain postprocess for room windows")
+    p.add_argument("--curtain-materials", default="data/floor_materials/shtorystore_curtains")
+    p.add_argument("--curtain-models-dir", default="data/sourse/curtains_3d", help="Directory with curtain FBX/GLB/OBJ models; all files are cycled across windows")
+    p.add_argument("--curtain-supplier-catalog", default="data/sourse/suppliers/supplier_catalog_canonical.json")
+    p.add_argument("--curtain-seed", type=int, default=0, help="Seed for Shtorystore curtain product selection; 0 uses run seed")
     p.add_argument("--skip-supplier-gif", action="store_true", help="Disable supplier-only room GIF generation")
+    p.add_argument("--supplier-gif-layers", default="interior", help="Comma-separated GIF layers: interior,kitchen,surfaces,windows,curtains,tables_chairs,non_kitchen")
     p.add_argument("--supplier-gif-frames", type=int, default=36)
     p.add_argument("--supplier-gif-elevations", default="0,30,45")
     p.add_argument("--supplier-gif-fps", type=int, default=8)
@@ -2260,14 +2665,22 @@ def build_cli() -> argparse.ArgumentParser:
 
     p.add_argument("--lego-postprocess", action="store_true")
     p.add_argument("--infinigen-src", default=None)
+    p.add_argument("--infinigen-task", default=None)
+    p.add_argument("--infinigen-configs", nargs="+", default=None)
     p.add_argument(
         "--infinigen-fast-small",
         action="store_true",
         help="Disable Infinigen small-object solve stage and lower loose/surface object density",
     )
+    p.add_argument("--infinigen-no-pose-cameras", action="store_true", help="Disable Infinigen camera pose search; Blender renderer frames the room later.")
     p.add_argument("--infinigen-solve-steps-large", type=int, default=None)
     p.add_argument("--infinigen-solve-steps-medium", type=int, default=None)
     p.add_argument("--infinigen-solve-steps-small", type=int, default=None)
+    p.add_argument(
+        "--infinigen-rebind-selected-objects",
+        action="store_true",
+        help="Legacy mode: replace Infinigen generated items with chooser-selected assets after generation.",
+    )
     p.add_argument("--lego-modes", default=None)
     p.add_argument("--lego-repo", default=None)
     p.add_argument("--lego-python", default=None)

@@ -162,7 +162,7 @@ def backfill_floor_material_colors(path: Path, force: bool = False, dry_run: boo
                     if not local_paths:
                         out_lines.append(line)
                         continue
-                    colors = analyze_floor_material_colors(base_dir, local_paths)
+                    colors = analyze_floor_material_colors(base_dir, local_paths, k=0)
                     if colors.get("average_rgb"):
                         item["average_rgb"] = colors.get("average_rgb")
                         item["average_hex"] = colors.get("average_hex")
@@ -178,7 +178,7 @@ def backfill_floor_material_colors(path: Path, force: bool = False, dry_run: boo
                     if item.get("average_rgb") and not force:
                         out_lines.append(json.dumps(item, ensure_ascii=False) + "\n")
                         continue
-                    colors = analyze_floor_material_colors(base_dir, [str(item.get("local_path") or "")])
+                    colors = analyze_floor_material_colors(base_dir, [str(item.get("local_path") or "")], k=0)
                     if colors.get("average_rgb"):
                         item["average_rgb"] = colors.get("average_rgb")
                         item["average_hex"] = colors.get("average_hex")
@@ -247,7 +247,7 @@ def build_image_colors_table(root: Path, out_jsonl: Path | None = None, force: b
             stats["reused_existing"] += 1
             stats["images_with_color"] += 1
             continue
-        colors = analyze_floor_material_colors(image_path.parent, [image_path.name])
+        colors = analyze_floor_material_colors(image_path.parent, [image_path.name], k=0)
         row = {
             "version": "image_color.v1",
             "path": rel,

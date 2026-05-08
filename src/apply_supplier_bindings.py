@@ -17,7 +17,12 @@ except ImportError:
 
 
 LOW_QUALITY_ASSET_STATUSES = {"proxy_generated_with_blender", "needs_blender_rebuild"}
-SELECTED_BINDING_STATUSES = {"heuristic_top1_selected", "llm_reranked_top1_selected"}
+SELECTED_BINDING_STATUSES = {
+    "heuristic_top1_selected",
+    "heuristic_first_acceptable_selected",
+    "llm_reranked_top1_selected",
+    "llm_reranked_first_acceptable_selected",
+}
 
 
 def _infer_reference_scene_blend_path(input_json_path: str | Path, data: dict[str, Any]) -> str | None:
@@ -275,7 +280,18 @@ def _related_generated_item_actions(
 
             if anchor_group == "bed" and category in bed_soft_categories:
                 if _xy_inside_expanded(anchor_aabb, item_pos[:2], margin=0.18) and item_aabb["z_min"] <= anchor_top + 0.25:
-                    actions[item_id] = {"action": "suppress", "anchor_id": anchor_id}
+                    rel_x, rel_y = _normalized_anchor_xy(anchor_aabb, item_pos)
+                    actions[item_id] = {
+                        "action": "reanchor",
+                        "anchor_id": anchor_id,
+                        "anchor_group": anchor_group,
+                        "support_mode": "top",
+                        "anchor_aabb": deepcopy(anchor_aabb),
+                        "rel_x": rel_x,
+                        "rel_y": rel_y,
+                        "rel_z": _normalized_anchor_z(anchor_aabb, item_aabb),
+                        "preserve_bedding": True,
+                    }
                 continue
 
             if anchor_group in support_surface_groups and category in tabletop_categories:
@@ -570,6 +586,19 @@ def _semantic_group_for_item(item: dict[str, Any], binding: dict[str, Any] | Non
         or ""
     )
     if group:
+        if group == "tv_projector_screen":
+            tv_text = " ".join(
+                str(value or "").lower()
+                for value in (
+                    item.get("category"),
+                    item.get("name"),
+                    supplier_candidate.get("title"),
+                    supplier_candidate.get("category_raw"),
+                    supplier_candidate.get("category_norm"),
+                )
+            )
+            if any(token in tv_text for token in ("monitor", "монитор", "gaming", "игров")):
+                return "computer"
         return group
 
     category = str(item.get("category") or "").strip().lower()
@@ -626,7 +655,54 @@ def _semantic_group_for_item(item: dict[str, Any], binding: dict[str, Any] | Non
     return ""
 
 
-def _candidate_from_supplier_catalog_json(category_norms: set[str], target_size: list[float]) -> dict[str, Any] | None:
+def _computer_text_kind(text: str) -> str:
+    text = str(text or "").lower()
+    if any(word in text for word in ("keyboard", "mouse", "клавиат", "мышь")) and not any(
+        word in text for word in ("monitor", "display", "screen", "imac", "laptop", "macbook", "computer", "pc", "ноутбук")
+    ):
+        return "keyboard_mouse"
+    if "imac" in text or "all-in-one" in text or "all in one" in text or "моноблок" in text:
+        return "all_in_one"
+    if any(word in text for word in ("laptop", "macbook", "notebook", "ноутбук")):
+        return "laptop"
+    if any(word in text for word in ("monitor", "display", "screen", "gaming", "игров", "монитор")):
+        return "monitor"
+    if any(word in text for word in ("computer", "desktop", "pc", "компьютер")):
+        return "desktop"
+    return "computer"
+
+
+def _computer_item_kind(item: dict[str, Any]) -> str:
+    meta = item.get("meta") if isinstance(item.get("meta"), dict) else {}
+    candidate = meta.get("supplier_candidate") if isinstance(meta.get("supplier_candidate"), dict) else {}
+    text = " ".join(
+        str(value or "")
+        for value in (
+            item.get("category"),
+            item.get("name"),
+            item.get("semantic_group"),
+            candidate.get("title"),
+            candidate.get("category_norm"),
+            candidate.get("category_raw"),
+        )
+    )
+    return _computer_text_kind(text)
+
+
+def _looks_like_tv_text(text: str) -> bool:
+    text = str(text or "").lower()
+    reject = ("monitor", "монитор", "gaming", "игров", "keyboard", "mouse", "computer", "laptop", "macbook", "imac")
+    if any(word in text for word in reject):
+        return False
+    return any(word in text for word in ("tv", "television", "телевиз", "smart tv", "oled tv", "uhd tv"))
+
+
+def _candidate_from_supplier_catalog_json(
+    category_norms: set[str],
+    target_size: list[float],
+    *,
+    computer_kind: str | None = None,
+) -> dict[str, Any] | None:
     catalog_path = Path("data/sourse/suppliers/supplier_catalog_canonical.json")
     if not catalog_path.is_file():
         return None
@@ -638,9 +714,9 @@ def _candidate_from_supplier_catalog_json(category_norms: set[str], target_size:
     if not isinstance(items, list):
         return None
 
-    target_w, target_d, target_h = target_size
-    wants_tv = "tv_projector_screen" in category_norms
     wants_computer = bool(category_norms & {"computer", "laptop_computer_keyboard_mouse", "computer_monitor"})
+    target_w, target_d, target_h = target_size
+    wants_tv = "tv_projector_screen" in category_norms and not wants_computer
     best: tuple[float, dict[str, Any]] | None = None
     for row in items:
         if not isinstance(row, dict):
@@ -656,13 +732,13 @@ def _candidate_from_supplier_catalog_json(category_norms: set[str], target_size:
             for key in ("title", "category_raw", "description", "product_url")
         )
         if wants_tv:
-            tv_words = ("tv", "television", "телевиз", "smart tv", "oled", "uhd", "samsung", "lg")
-            reject_words = ("monitor", "монитор", "projector", "проектор")
-            if not any(word in text for word in tv_words) or any(word in text for word in reject_words):
+            if not _looks_like_tv_text(text):
                 continue
         if wants_computer:
-            computer_words = ("mac", "imac", "macbook", "computer", "laptop", "keyboard", "ноутбук", "компьютер")
-            reject_words = ("washing", "стираль", "router", "роутер", "coffee", "кофемаш")
+            computer_words = ("mac", "imac", "macbook", "computer", "laptop", "keyboard", "monitor", "display", "desktop", "pc", "ноутбук", "компьютер", "монитор")
+            reject_words = ("washing", "стираль", "router", "роутер", "coffee", "кофемаш", "tv", "television", "телевизор")
+            if category_norm == "tv_projector_screen" and not any(word in text for word in ("monitor", "display", "screen", "gaming", "монитор", "игров")):
+                continue
             if not any(word in text for word in computer_words) or any(word in text for word in reject_words):
                 continue
         try:
@@ -679,10 +755,33 @@ def _candidate_from_supplier_catalog_json(category_norms: set[str], target_size:
                 size_score += 0.45
         if wants_computer:
             title = str(candidate.get("title") or "").lower()
-            if "imac" in title:
-                size_score -= 0.35
-            elif "macbook" in title:
-                size_score -= 0.18
+            cand_kind = _computer_text_kind(" ".join((title, str(candidate.get("category_norm") or ""), str(candidate.get("category_raw") or ""))))
+            if computer_kind == "monitor":
+                if cand_kind == "monitor":
+                    size_score -= 0.75
+                elif cand_kind == "all_in_one":
+                    size_score -= 0.25
+                elif cand_kind == "laptop":
+                    size_score += 1.4
+            elif computer_kind == "laptop":
+                if cand_kind == "laptop":
+                    size_score -= 0.6
+                elif cand_kind in {"monitor", "all_in_one"}:
+                    size_score += 0.45
+            elif computer_kind == "all_in_one":
+                if cand_kind == "all_in_one":
+                    size_score -= 0.7
+                elif cand_kind == "monitor":
+                    size_score -= 0.15
+                elif cand_kind == "laptop":
+                    size_score += 0.9
+            else:
+                if cand_kind == "monitor":
+                    size_score -= 0.35
+                elif cand_kind == "all_in_one":
+                    size_score -= 0.2
+                elif cand_kind == "laptop":
+                    size_score += 0.25
         ready_bonus = -0.2 if str(candidate.get("asset_status") or "") == "local_dir_preferred" else 0.0
         source_bonus = -0.05 if str(candidate.get("source_site") or "") == "3ddd" else 0.0
         score = size_score + ready_bonus + source_bonus
@@ -780,6 +879,215 @@ def _set_item_center_xy(item: dict[str, Any], cx: float, cy: float) -> None:
         "z_min": aabb["z_min"],
         "z_max": aabb["z_max"],
     }
+
+
+def _set_item_center_xyz(item: dict[str, Any], cx: float, cy: float, cz: float) -> None:
+    aabb = _item_aabb(item)
+    if aabb is None:
+        return
+    cur = _aabb_center(aabb)
+    dx = float(cx) - cur[0]
+    dy = float(cy) - cur[1]
+    dz = float(cz) - cur[2]
+    item["position_m"] = [float(cx), float(cy), float(cz)]
+    item["aabb"] = {
+        "x_min": aabb["x_min"] + dx,
+        "x_max": aabb["x_max"] + dx,
+        "y_min": aabb["y_min"] + dy,
+        "y_max": aabb["y_max"] + dy,
+        "z_min": aabb["z_min"] + dz,
+        "z_max": aabb["z_max"] + dz,
+    }
+
+
+def _light_collides_xy(
+    candidate_aabb: dict[str, float],
+    items: list[dict[str, Any]],
+    *,
+    skip_id: str,
+    by_target_id: dict[str, dict[str, Any]],
+) -> int:
+    collisions = 0
+    for other in items:
+        if not isinstance(other, dict):
+            continue
+        other_id = str(other.get("id") or "").strip()
+        if other_id == skip_id:
+            continue
+        other_aabb = _item_aabb(other)
+        if other_aabb is None:
+            continue
+        other_group = _semantic_group_for_item(other, by_target_id.get(other_id))
+        z_overlaps = (
+            candidate_aabb["z_max"] > other_aabb["z_min"] + 0.03
+            and candidate_aabb["z_min"] < other_aabb["z_max"] - 0.03
+        )
+        if not z_overlaps or not _xy_aabb_overlap(candidate_aabb, other_aabb, margin=0.04):
+            continue
+        if other_group in {"computer", "chair", "armchair"}:
+            collisions += 4
+        else:
+            collisions += 1
+    return collisions
+
+
+def _normalize_supported_light_placements(
+    data: dict[str, Any],
+    items: list[dict[str, Any]],
+    by_target_id: dict[str, dict[str, Any]],
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    support_groups = {"desk", "side_table", "nightstand", "dresser", "coffee_table", "shelf", "tv_stand"}
+    floor_anchor_groups = {"sofa", "armchair", "bed", "desk", "side_table", "nightstand", "tv_stand"}
+    moved: list[dict[str, Any]] = []
+    room_bounds = _room_xy_bounds(data, items)
+
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        item_id = str(item.get("id") or "").strip()
+        group = _semantic_group_for_item(item, by_target_id.get(item_id))
+        item_aabb = _item_aabb(item)
+        if not item_id or item_aabb is None:
+            continue
+        sx = max(item_aabb["x_max"] - item_aabb["x_min"], 1e-6)
+        sy = max(item_aabb["y_max"] - item_aabb["y_min"], 1e-6)
+        sz = max(item_aabb["z_max"] - item_aabb["z_min"], 1e-6)
+        old_pos = _aabb_center(item_aabb)
+
+        if group == "lamp_table":
+            supports: list[tuple[float, dict[str, Any], dict[str, float], str]] = []
+            for anchor in items:
+                if not isinstance(anchor, dict) or anchor is item:
+                    continue
+                anchor_id = str(anchor.get("id") or "").strip()
+                anchor_group = _semantic_group_for_item(anchor, by_target_id.get(anchor_id))
+                if anchor_group not in support_groups:
+                    continue
+                anchor_aabb = _item_aabb(anchor)
+                if anchor_aabb is None:
+                    continue
+                anchor_c = _aabb_center(anchor_aabb)
+                dist = math.hypot(old_pos[0] - anchor_c[0], old_pos[1] - anchor_c[1])
+                overlaps = _xy_aabb_overlap(item_aabb, anchor_aabb, margin=0.35)
+                near_top = anchor_aabb["z_max"] - 0.15 <= item_aabb["z_min"] <= anchor_aabb["z_max"] + 0.55
+                if overlaps or dist <= 1.2 or (anchor_group in {"desk", "side_table", "nightstand"} and dist <= 1.8):
+                    bonus = -0.6 if overlaps and near_top else 0.0
+                    supports.append((dist + bonus, anchor, anchor_aabb, anchor_group))
+            if not supports:
+                continue
+
+            _score, anchor, anchor_aabb, anchor_group = min(supports, key=lambda row: row[0])
+            margin = 0.08
+            x_low = anchor_aabb["x_min"] + margin + 0.5 * sx
+            x_high = anchor_aabb["x_max"] - margin - 0.5 * sx
+            y_low = anchor_aabb["y_min"] + margin + 0.5 * sy
+            y_high = anchor_aabb["y_max"] - margin - 0.5 * sy
+            if x_low > x_high:
+                x_low = x_high = 0.5 * (anchor_aabb["x_min"] + anchor_aabb["x_max"])
+            if y_low > y_high:
+                y_low = y_high = 0.5 * (anchor_aabb["y_min"] + anchor_aabb["y_max"])
+            anchor_cx = 0.5 * (anchor_aabb["x_min"] + anchor_aabb["x_max"])
+            anchor_cy = 0.5 * (anchor_aabb["y_min"] + anchor_aabb["y_max"])
+            candidates = [
+                (x_low, y_low),
+                (x_low, y_high),
+                (x_high, y_low),
+                (x_high, y_high),
+                (anchor_cx, y_low),
+                (anchor_cx, y_high),
+                (x_low, anchor_cy),
+                (x_high, anchor_cy),
+            ]
+            z_min = anchor_aabb["z_max"] + 0.004
+            best: tuple[float, float, float] | None = None
+            for cx, cy in candidates:
+                cand = {
+                    "x_min": cx - 0.5 * sx,
+                    "x_max": cx + 0.5 * sx,
+                    "y_min": cy - 0.5 * sy,
+                    "y_max": cy + 0.5 * sy,
+                    "z_min": z_min,
+                    "z_max": z_min + sz,
+                }
+                collision_score = _light_collides_xy(cand, items, skip_id=item_id, by_target_id=by_target_id)
+                edge_preference = -0.15 if anchor_group == "desk" and (abs(cx - anchor_cx) > abs(cy - anchor_cy)) else 0.0
+                travel = math.hypot(cx - old_pos[0], cy - old_pos[1])
+                score = collision_score + travel * 0.05 + edge_preference
+                if best is None or score < best[0]:
+                    best = (score, cx, cy)
+            if best is None:
+                continue
+            _best_score, cx, cy = best
+            updated_cz = z_min + 0.5 * sz
+            _set_item_center_xyz(item, cx, cy, updated_cz)
+            meta = item.setdefault("meta", {})
+            if isinstance(meta, dict):
+                meta["supplier_light_position_normalized"] = True
+                meta["supplier_support_anchor_target_id"] = str(anchor.get("id") or "")
+                meta["supplier_support_anchor_group"] = anchor_group
+                meta["supplier_support_mode"] = "top"
+            moved.append({"id": item_id, "group": group, "old_xyz": [round(v, 4) for v in old_pos], "new_xyz": [round(cx, 4), round(cy, 4), round(updated_cz, 4)]})
+            continue
+
+        if group == "lamp_floor":
+            anchors: list[tuple[float, dict[str, Any], dict[str, float], str]] = []
+            for anchor in items:
+                if not isinstance(anchor, dict) or anchor is item:
+                    continue
+                anchor_id = str(anchor.get("id") or "").strip()
+                anchor_group = _semantic_group_for_item(anchor, by_target_id.get(anchor_id))
+                if anchor_group not in floor_anchor_groups:
+                    continue
+                anchor_aabb = _item_aabb(anchor)
+                if anchor_aabb is None:
+                    continue
+                anchor_c = _aabb_center(anchor_aabb)
+                anchors.append((math.hypot(old_pos[0] - anchor_c[0], old_pos[1] - anchor_c[1]), anchor, anchor_aabb, anchor_group))
+            if not anchors:
+                continue
+            _score, anchor, anchor_aabb, anchor_group = min(anchors, key=lambda row: row[0])
+            anchor_cx = 0.5 * (anchor_aabb["x_min"] + anchor_aabb["x_max"])
+            anchor_cy = 0.5 * (anchor_aabb["y_min"] + anchor_aabb["y_max"])
+            clearance = 0.08
+            candidates = [
+                (anchor_aabb["x_min"] - 0.5 * sx - clearance, anchor_cy),
+                (anchor_aabb["x_max"] + 0.5 * sx + clearance, anchor_cy),
+                (anchor_cx, anchor_aabb["y_min"] - 0.5 * sy - clearance),
+                (anchor_cx, anchor_aabb["y_max"] + 0.5 * sy + clearance),
+            ]
+            best: tuple[float, float, float] | None = None
+            for cx, cy in candidates:
+                if room_bounds:
+                    cx = min(max(cx, room_bounds["x_min"] + 0.5 * sx), room_bounds["x_max"] - 0.5 * sx)
+                    cy = min(max(cy, room_bounds["y_min"] + 0.5 * sy), room_bounds["y_max"] - 0.5 * sy)
+                corners = [(cx - 0.5 * sx, cy - 0.5 * sy), (cx - 0.5 * sx, cy + 0.5 * sy), (cx + 0.5 * sx, cy - 0.5 * sy), (cx + 0.5 * sx, cy + 0.5 * sy)]
+                inside_room = all(_point_in_room_xy(data, x, y) for x, y in corners)
+                cand = {
+                    "x_min": cx - 0.5 * sx,
+                    "x_max": cx + 0.5 * sx,
+                    "y_min": cy - 0.5 * sy,
+                    "y_max": cy + 0.5 * sy,
+                    "z_min": item_aabb["z_min"],
+                    "z_max": item_aabb["z_max"],
+                }
+                collision_score = _light_collides_xy(cand, items, skip_id=item_id, by_target_id=by_target_id)
+                edge_dist = _dist_to_room_edges(_room_polygon_points(data), cx, cy)
+                corner_penalty = 2.0 if edge_dist < 0.35 else 0.0
+                score = collision_score + corner_penalty + (0.0 if inside_room else 50.0) + math.hypot(cx - old_pos[0], cy - old_pos[1]) * 0.03
+                if best is None or score < best[0]:
+                    best = (score, cx, cy)
+            if best is None:
+                continue
+            _best_score, cx, cy = best
+            _set_item_center_xyz(item, cx, cy, old_pos[2])
+            meta = item.setdefault("meta", {})
+            if isinstance(meta, dict):
+                meta["supplier_light_position_normalized"] = True
+                meta["supplier_floor_anchor_target_id"] = str(anchor.get("id") or "")
+                meta["supplier_floor_anchor_group"] = anchor_group
+            moved.append({"id": item_id, "group": group, "old_xyz": [round(v, 4) for v in old_pos], "new_xyz": [round(cx, 4), round(cy, 4), round(old_pos[2], 4)]})
+
+    return items, {"moved_count": len(moved), "moved": moved}
 
 
 def _collapse_ceiling_lights(
@@ -1398,12 +1706,17 @@ def _scene_has_tv(items: list[dict[str, Any]], by_target_id: dict[str, dict[str,
         if not isinstance(item, dict):
             continue
         item_id = str(item.get("id") or "").strip()
+        text = " ".join(str(value or "") for value in (item.get("category"), item.get("name"), item.get("semantic_group")))
         group = _semantic_group_for_item(item, by_target_id.get(item_id))
-        if group == "tv_projector_screen":
+        if group == "tv_projector_screen" and _looks_like_tv_text(text):
             return True
         meta = item.get("meta") or {}
         candidate = meta.get("supplier_candidate") if isinstance(meta.get("supplier_candidate"), dict) else {}
-        if str(candidate.get("category_norm") or "") == "tv_projector_screen":
+        candidate_text = " ".join(
+            str(candidate.get(key) or "")
+            for key in ("title", "category_norm", "category_raw", "description")
+        )
+        if str(candidate.get("category_norm") or "") == "tv_projector_screen" and _looks_like_tv_text(candidate_text):
             return True
     return False
 
@@ -1501,13 +1814,44 @@ def _ensure_computer_replacements(
     by_target_id: dict[str, dict[str, Any]],
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     replaced: list[dict[str, Any]] = []
+    suppressed_ids: set[str] = set()
+    suppress_keyboard_near: list[dict[str, float]] = []
     out: list[dict[str, Any]] = []
+
+    def support_top_for_computer(item_id: str, source_aabb: dict[str, float]) -> float | None:
+        support_groups = {"desk", "side_table", "nightstand", "dresser", "tv_stand", "shelf"}
+        cx = 0.5 * (source_aabb["x_min"] + source_aabb["x_max"])
+        cy = 0.5 * (source_aabb["y_min"] + source_aabb["y_max"])
+        best: tuple[float, float] | None = None
+        for other in items:
+            if not isinstance(other, dict):
+                continue
+            other_id = str(other.get("id") or "").strip()
+            if other_id == item_id:
+                continue
+            other_group = _semantic_group_for_item(other, by_target_id.get(other_id))
+            if other_group not in support_groups:
+                continue
+            other_aabb = _item_aabb(other)
+            if other_aabb is None:
+                continue
+            if not _xy_inside_expanded(other_aabb, [cx, cy], margin=0.18):
+                continue
+            dz = abs(float(source_aabb["z_min"]) - float(other_aabb["z_max"]))
+            if best is None or dz < best[0]:
+                best = (dz, float(other_aabb["z_max"]))
+        return None if best is None else best[1]
+
     for item in items:
         if not isinstance(item, dict):
             out.append(item)
             continue
         item_id = str(item.get("id") or "").strip()
         if _semantic_group_for_item(item, by_target_id.get(item_id)) != "computer":
+            out.append(item)
+            continue
+        item_kind = _computer_item_kind(item)
+        if item_kind == "keyboard_mouse":
             out.append(item)
             continue
         meta = item.get("meta") if isinstance(item.get("meta"), dict) else {}
@@ -1525,8 +1869,9 @@ def _ensure_computer_replacements(
             aabb["z_max"] - aabb["z_min"],
         ]
         candidate = _candidate_from_supplier_catalog_json(
-            {"laptop_computer_keyboard_mouse", "computer", "computer_monitor"},
+            {"laptop_computer_keyboard_mouse", "computer", "computer_monitor", "tv_projector_screen"},
             target_size,
+            computer_kind=item_kind,
         )
         if not candidate:
             out.append(item)
@@ -1541,7 +1886,10 @@ def _ensure_computer_replacements(
             sx, sy = depth, width
         cx = 0.5 * (aabb["x_min"] + aabb["x_max"])
         cy = 0.5 * (aabb["y_min"] + aabb["y_max"])
+        support_top = support_top_for_computer(item_id, aabb)
         z_min = float(aabb["z_min"])
+        if support_top is not None:
+            z_min = float(support_top) + 0.004
         new_aabb = {
             "x_min": cx - 0.5 * sx,
             "x_max": cx + 0.5 * sx,
@@ -1569,12 +1917,33 @@ def _ensure_computer_replacements(
         updated_meta["supplier_binding_applied"] = True
         updated_meta["supplier_affordance_replaced"] = True
         updated_meta["affordance"] = "computer_replacement"
+        updated_meta["computer_target_kind"] = item_kind
+        updated_meta["computer_candidate_kind"] = _computer_text_kind(
+            " ".join(str(candidate.get(key) or "") for key in ("title", "category_norm", "category_raw"))
+        )
         updated_meta["placeholder_bbox"] = False
         updated_meta["supplier_candidate"] = _compact_candidate(candidate)
         updated["meta"] = updated_meta
         out.append(updated)
+        if updated_meta["computer_candidate_kind"] in {"laptop", "all_in_one"}:
+            suppress_keyboard_near.append(new_aabb)
         replaced.append({"id": item_id, "title": candidate.get("title"), "unique_key": candidate.get("unique_key")})
-    return out, {"replaced_count": len(replaced), "replaced": replaced}
+
+    if suppress_keyboard_near:
+        filtered: list[dict[str, Any]] = []
+        for item in out:
+            if not isinstance(item, dict):
+                filtered.append(item)
+                continue
+            item_id = str(item.get("id") or "").strip()
+            if _computer_item_kind(item) == "keyboard_mouse":
+                aabb = _item_aabb(item)
+                if aabb and any(_xy_aabb_overlap(aabb, repl_aabb, margin=0.12) for repl_aabb in suppress_keyboard_near):
+                    suppressed_ids.add(item_id)
+                    continue
+            filtered.append(item)
+        out = filtered
+    return out, {"replaced_count": len(replaced), "replaced": replaced, "suppressed_keyboard_ids": sorted(suppressed_ids)}
 
 
 def _tv_aabb_on_stand(stand_aabb: dict[str, float], tv_size: tuple[float, float, float]) -> tuple[dict[str, float], float]:
@@ -1680,11 +2049,30 @@ def _ensure_tv_affordance(
     by_target_id: dict[str, dict[str, Any]],
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     if _scene_has_tv(items, by_target_id):
-        return items, {"added_count": 0, "added_ids": [], "skipped_reason": "tv_already_present"}
+        return items, {"status": "skipped", "added_count": 0, "added_ids": [], "skipped_reason": "tv_already_present"}
+
+    room = data.get("room") if isinstance(data.get("room"), dict) else {}
+    room_type = str(room.get("room_type") or room.get("type") or "").strip().lower()
+    prompt_blob = " ".join(
+        str(x or "")
+        for x in (
+            room.get("style_hint"),
+            room.get("description"),
+            (data.get("meta") or {}).get("prompt") if isinstance(data.get("meta"), dict) else None,
+        )
+    ).lower()
+    tv_requested = any(word in prompt_blob for word in ("tv", "television", "smart tv", "home cinema", "кинотеатр", "телевиз"))
+    if room_type == "bedroom" and not tv_requested:
+        return items, {
+            "status": "skipped",
+            "added_count": 0,
+            "added_ids": [],
+            "skipped_reason": "bedroom_tv_not_requested",
+        }
 
     candidate = _candidate_from_supplier_catalog_json({"tv_projector_screen"}, [1.1, 0.06, 0.65])
     if not candidate:
-        return items, {"added_count": 0, "added_ids": [], "skipped_reason": "missing_supplier_tv_asset"}
+        return items, {"status": "skipped", "added_count": 0, "added_ids": [], "skipped_reason": "missing_supplier_tv_asset"}
 
     tv_size = _candidate_tv_size(candidate)
     existing_ids = {str(item.get("id") or "").strip() for item in items if isinstance(item, dict)}
@@ -1715,6 +2103,7 @@ def _ensure_tv_affordance(
             placement_status="valid",
         )
         return items + [tv_item], {
+            "status": "added",
             "added_count": 1,
             "added_ids": [tv_id],
             "anchor_id": item_id,
@@ -1754,6 +2143,7 @@ def _ensure_tv_affordance(
             placement_status="valid",
         )
         return items + [tv_item], {
+            "status": "added",
             "added_count": 1,
             "added_ids": [tv_id],
             "anchor_id": anchor_id,
@@ -1761,7 +2151,7 @@ def _ensure_tv_affordance(
             "attempts": attempts,
         }
 
-    return items, {"added_count": 0, "added_ids": [], "skipped_reason": "no_clear_tv_location", "attempts": attempts}
+    return items, {"status": "skipped", "added_count": 0, "added_ids": [], "skipped_reason": "no_clear_tv_location", "attempts": attempts}
 
 
 def apply_supplier_bindings_to_data(
@@ -1832,6 +2222,10 @@ def apply_supplier_bindings_to_data(
         updated = deepcopy(item)
         original_name = updated.get("name")
         original_category = updated.get("category")
+        original_source = deepcopy(updated.get("source") or {})
+        original_aabb = deepcopy(updated.get("aabb") or updated.get("bbox") or {})
+        original_position_m = deepcopy(updated.get("position_m"))
+        original_size_m = deepcopy(updated.get("size_m"))
 
         updated["name"] = str(chosen.get("title") or original_name or "supplier_object")
         updated["category"] = str(binding.get("category") or original_category or updated["name"])
@@ -1866,6 +2260,11 @@ def apply_supplier_bindings_to_data(
             "id": item_id,
             "name": original_name,
             "category": original_category,
+            "source": original_source,
+            "aabb": original_aabb,
+            "position_m": original_position_m,
+            "size_m": original_size_m,
+            "blend_object_name": original_source.get("blend_object_name") if isinstance(original_source, dict) else None,
         }
         updated["meta"] = meta
 
@@ -1899,6 +2298,7 @@ def apply_supplier_bindings_to_data(
             final_anchor_aabbs[item_id] = aabb
 
     adjusted_items: list[dict[str, Any]] = []
+    preserved_bedding_ids: list[str] = []
     for item in new_items:
         if not isinstance(item, dict):
             adjusted_items.append(item)
@@ -1959,12 +2359,16 @@ def apply_supplier_bindings_to_data(
         meta["supplier_support_mode"] = support_mode
         meta["supplier_support_anchor_group"] = anchor_group
         meta["supplier_support_reanchored"] = True
+        if related_action.get("preserve_bedding"):
+            meta["supplier_bedding_preserved"] = True
+            preserved_bedding_ids.append(item_id)
         updated["meta"] = meta
         reanchored_count += 1
         adjusted_items.append(updated)
 
     new_items = adjusted_items
     new_items, ceiling_light_postprocess = _collapse_ceiling_lights(out, new_items, by_target_id)
+    new_items, supported_light_postprocess = _normalize_supported_light_placements(out, new_items, by_target_id)
     new_items, computer_postprocess = _ensure_computer_replacements(new_items, by_target_id)
     new_items, table_chair_postprocess = _ensure_table_chair_affordances(out, new_items, by_target_id)
     new_items, tv_postprocess = _ensure_tv_affordance(out, new_items, by_target_id)
@@ -1982,6 +2386,7 @@ def apply_supplier_bindings_to_data(
         "suppressed_generated_related_count": suppressed_generated_count,
         "reanchored_generated_related_count": reanchored_count,
         "ceiling_light_deduplicated_count": int(ceiling_light_postprocess.get("removed_count", 0) or 0),
+        "supported_light_normalized_count": int(supported_light_postprocess.get("moved_count", 0) or 0),
         "missing_table_chair_added_count": int(table_chair_postprocess.get("added_count", 0) or 0),
         "table_chair_moved_count": int(table_chair_postprocess.get("moved_count", 0) or 0),
         "missing_tv_added_count": int(tv_postprocess.get("added_count", 0) or 0),
@@ -1989,8 +2394,14 @@ def apply_supplier_bindings_to_data(
         "unusable_table_suppressed_count": 0,
         "require_local_asset": bool(require_local_asset),
     }
+    meta["supplier_bed_postprocess"] = {
+        "preserved_bedding_count": len(preserved_bedding_ids),
+        "preserved_bedding_ids": preserved_bedding_ids,
+        "policy": "keep_generated_bedding_when_replacing_bed_frame",
+    }
     meta["supplier_postprocess"] = {
         "ceiling_lights": ceiling_light_postprocess,
+        "supported_lights": supported_light_postprocess,
         "computer_replacements": computer_postprocess,
         "table_chair_affordance": table_chair_postprocess,
         "tv_affordance": tv_postprocess,
