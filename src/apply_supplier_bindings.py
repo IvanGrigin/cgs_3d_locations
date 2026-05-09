@@ -450,14 +450,14 @@ def _replacement_mesh_fit_mode(binding: dict[str, Any], item: dict[str, Any]) ->
     if group == "lamp_ceiling" or mount_type == "ceiling":
         return "stretch"
     if group in support_groups:
-        return "stretch"
+        return "uniform"
     if category in {
         "simpledeskfactory",
         "singlecabinetfactory",
         "cellshelffactory",
         "simplebookcasefactory",
     }:
-        return "stretch"
+        return "uniform"
     return "uniform"
 
 

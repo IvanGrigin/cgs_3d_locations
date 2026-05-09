@@ -51,7 +51,14 @@ def _parse_argv(argv: List[str]) -> argparse.Namespace:
     ap.add_argument(
         "--no-bbox-fallback",
         action="store_true",
+        default=True,
         help="Disable default bbox fallback for items whose mesh could not be imported or resolved.",
+    )
+    ap.add_argument(
+        "--bbox-fallback",
+        dest="no_bbox_fallback",
+        action="store_false",
+        help="Enable visible bbox fallback for debugging missing meshes.",
     )
     ap.add_argument("--reference-blend", default=None)
     ap.add_argument("--overlay-bbox-only", action="store_true")
@@ -630,16 +637,24 @@ def _get_scene_source_object(blend_object_name: str) -> Optional[bpy.types.Objec
     return None
 
 
-def _hide_object_family(root: bpy.types.Object) -> None:
+def _hide_object_family(root: bpy.types.Object) -> int:
+    changed = 0
     for obj in _iter_object_with_descendants(root):
+        if not obj.hide_render or not obj.hide_viewport:
+            changed += 1
         try:
             obj.hide_set(True)
+        except Exception:
+            pass
+        try:
+            obj.hide_viewport = True
         except Exception:
             pass
         try:
             obj.hide_render = True
         except Exception:
             pass
+    return changed
 
 
 def _looks_like_reference_light_fixture(obj: bpy.types.Object) -> bool:
@@ -1312,6 +1327,9 @@ def _should_skip_placeholder_bbox(item: Dict) -> bool:
     if not meta.get("placeholder_bbox"):
         return False
 
+    if meta.get("procedural_requirement"):
+        return True
+
     collections = {str(x).strip().lower() for x in (meta.get("collections") or []) if str(x).strip()}
     if collections & {"door_base_elements", "scatters", "assets:fruit"}:
         return True
@@ -1754,7 +1772,71 @@ def _looks_like_overlay_helper_name(name: str) -> bool:
     low = str(name or "").strip().lower()
     if not low:
         return False
-    return low.endswith("_label") or ("_aabb" in low)
+    return low.endswith("_label") or ("_aabb" in low) or ("bbox_placeholder" in low) or ("spawn_placeholder" in low)
+
+
+def _looks_like_bbox_helper_name(name: str) -> bool:
+    low = str(name or "").strip().lower()
+    if not low:
+        return False
+    return (
+        "bbox_placeholder" in low
+        or "spawn_placeholder" in low
+        or low.endswith("_aabb")
+        or "_aabb." in low
+        or (low.startswith("invalid_") and "aabb" in low)
+    )
+
+
+def _looks_like_architectural_door_name(name: str) -> bool:
+    low = str(name or "").strip().lower()
+    if not low:
+        return False
+    if any(token in low for token in ("base_", "cabinet", "wardrobe", "cupboard")) and "_door_" in low:
+        return False
+    return (
+        low in {"door", "doors"}
+        or low.endswith("_door")
+        or low.endswith("__door")
+        or low.endswith("_doors")
+        or low.endswith("__doors")
+        or "__door." in low
+        or "__doors." in low
+        or "door_internal" in low
+        or "doorfactory" in low
+        or "paneldoorfactory" in low
+        or "louverdoorfactory" in low
+        or "glasspaneldoorfactory" in low
+    )
+
+
+def _hide_architectural_door_objects() -> int:
+    hidden = 0
+    for obj in list(bpy.data.objects):
+        if _looks_like_architectural_door_name(getattr(obj, "name", "")):
+            hidden += _hide_object_family(obj)
+    return hidden
+
+
+def _remove_bbox_helper_objects() -> int:
+    removed = 0
+    for obj in list(bpy.data.objects):
+        if not _looks_like_bbox_helper_name(getattr(obj, "name", "")):
+            continue
+        try:
+            bpy.data.objects.remove(obj, do_unlink=True)
+            removed += 1
+        except Exception:
+            try:
+                obj.hide_set(True)
+            except Exception:
+                pass
+            try:
+                obj.hide_render = True
+                removed += 1
+            except Exception:
+                pass
+    return removed
 
 
 def _set_overlay_helpers_render_visibility(show: bool) -> int:
@@ -1763,11 +1845,53 @@ def _set_overlay_helpers_render_visibility(show: bool) -> int:
         if not _looks_like_overlay_helper_name(getattr(obj, "name", "")):
             continue
         try:
+            obj.hide_viewport = not show
+            changed += 1
+        except Exception:
+            pass
+        try:
+            obj.hide_set(not show)
+        except Exception:
+            pass
+        try:
             obj.hide_render = not show
             changed += 1
         except Exception:
             pass
     return changed
+
+
+def _cleanup_final_visual_helpers() -> dict[str, int]:
+    removed_bbox = _remove_bbox_helper_objects()
+    removed_light_markers = 0
+    hidden_functional_lights = 0
+    for obj in list(bpy.data.objects):
+        low = str(getattr(obj, "name", "") or "").lower()
+        if low.startswith("cgs_functionallight_") and low.endswith("_emitter"):
+            try:
+                bpy.data.objects.remove(obj, do_unlink=True)
+                removed_light_markers += 1
+            except Exception:
+                hidden_functional_lights += _hide_object_family(obj)
+            continue
+        if bool(obj.get("cgs_functional_light")) or low.startswith("cgs_functionallight_"):
+            try:
+                obj.hide_select = True
+            except Exception:
+                pass
+            try:
+                obj.hide_viewport = True
+                obj.hide_set(True)
+                hidden_functional_lights += 1
+            except Exception:
+                pass
+    hidden_doors = _hide_architectural_door_objects()
+    return {
+        "removed_bbox_helpers": int(removed_bbox),
+        "removed_light_markers": int(removed_light_markers),
+        "hidden_functional_lights": int(hidden_functional_lights),
+        "hidden_architectural_doors": int(hidden_doors),
+    }
 
 
 def _add_basic_lights(bb_min: mathutils.Vector, bb_max: mathutils.Vector) -> None:
@@ -1827,6 +1951,7 @@ def _make_emissive_marker_material() -> bpy.types.Material:
 
 
 def _add_emissive_marker(location: Tuple[float, float, float], radius: float, name: str) -> None:
+    return
     try:
         bpy.ops.mesh.primitive_uv_sphere_add(segments=16, ring_count=8, radius=max(float(radius), 0.025), location=location)
         marker = bpy.context.object
@@ -1878,6 +2003,8 @@ def _add_functional_light_for_item(item: Dict, aabb: Dict[str, float], parent: O
         light_obj.location = loc
         light_obj["cgs_functional_light"] = True
         light_obj["cgs_light_semantic_group"] = semantic_group
+        light_obj.hide_select = True
+        light_obj.hide_viewport = True
         if parent is not None:
             light_obj["cgs_light_fixture_parent"] = parent.name
         _add_emissive_marker(loc, marker_radius, f"{base_name}_Emitter")
@@ -2193,6 +2320,177 @@ def _item_mesh_texture_dirs_raw(it: dict) -> List[str]:
 def _item_mesh_fit_mode(it: dict) -> str:
     asset = _item_asset_dict(it)
     return str(it.get("mesh_fit_mode") or asset.get("mesh_fit_mode") or "stretch")
+
+
+def _supplier_record_key(record: Optional[dict], fallback_item: Optional[dict] = None) -> str:
+    record = record if isinstance(record, dict) else {}
+    fallback_item = fallback_item if isinstance(fallback_item, dict) else {}
+    meta = fallback_item.get("meta") if isinstance(fallback_item.get("meta"), dict) else {}
+    meta_candidate = meta.get("supplier_candidate") if isinstance(meta.get("supplier_candidate"), dict) else {}
+    source = fallback_item.get("source") if isinstance(fallback_item.get("source"), dict) else {}
+    asset = fallback_item.get("asset") if isinstance(fallback_item.get("asset"), dict) else {}
+    return str(
+        record.get("unique_key")
+        or record.get("supplier_unique_key")
+        or meta_candidate.get("unique_key")
+        or source.get("supplier_unique_key")
+        or asset.get("supplier_unique_key")
+        or ""
+    ).strip()
+
+
+def _aabb_size_tuple(aabb: Dict[str, float]) -> Tuple[float, float, float]:
+    return (
+        max(0.0, float(aabb.get("x_max", 0.0)) - float(aabb.get("x_min", 0.0))),
+        max(0.0, float(aabb.get("y_max", 0.0)) - float(aabb.get("y_min", 0.0))),
+        max(0.0, float(aabb.get("z_max", 0.0)) - float(aabb.get("z_min", 0.0))),
+    )
+
+
+def _rigid_supplier_group(group: str) -> bool:
+    return str(group or "") in {
+        "wardrobe",
+        "dresser",
+        "shelf",
+        "tv_stand",
+        "nightstand",
+        "side_table",
+        "coffee_table",
+        "desk",
+        "dining_table",
+        "chair",
+        "armchair",
+        "sofa",
+        "bed",
+        "bathroom_sink",
+        "toilet",
+        "bathtub",
+        "shower",
+    }
+
+
+def _sizes_materially_different(a: Tuple[float, float, float], b: Tuple[float, float, float]) -> bool:
+    ratios = []
+    for av, bv in zip(a, b):
+        if av <= 1e-6 or bv <= 1e-6:
+            continue
+        ratios.append(max(av, bv) / max(min(av, bv), 1e-6))
+    return bool(ratios) and (max(ratios) > 1.28 or sum(abs(math.log(r)) for r in ratios) > 0.52)
+
+
+def _build_supplier_reuse_size_index(items: List[Dict]) -> Dict[str, List[Tuple[str, str, Tuple[float, float, float]]]]:
+    index: Dict[str, List[Tuple[str, str, Tuple[float, float, float]]]] = {}
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        key = _supplier_record_key(None, item)
+        if not key:
+            continue
+        aabb = item.get("aabb") or item.get("bbox") or {}
+        if not isinstance(aabb, dict):
+            continue
+        group = _item_semantic_group(item)
+        if not _rigid_supplier_group(group):
+            continue
+        index.setdefault(key, []).append((str(item.get("id") or ""), group, _aabb_size_tuple(aabb)))
+    return index
+
+
+def _supplier_candidate_reuse_reject_reason(
+    item: Dict,
+    candidate: dict,
+    reuse_index: Dict[str, List[Tuple[str, str, Tuple[float, float, float]]]],
+) -> Optional[str]:
+    key = _supplier_record_key(candidate, item)
+    if not key:
+        return None
+    group = _item_semantic_group(item)
+    if not _rigid_supplier_group(group):
+        return None
+    usages = reuse_index.get(key) or []
+    if len(usages) <= 1:
+        return None
+    aabb = item.get("aabb") or item.get("bbox") or {}
+    if not isinstance(aabb, dict):
+        return None
+    size = _aabb_size_tuple(aabb)
+    item_id = str(item.get("id") or "")
+    for other_id, other_group, other_size in usages:
+        if other_id == item_id:
+            continue
+        if other_group != group or _sizes_materially_different(size, other_size):
+            return f"reused_supplier_asset_for_different_target:{key}"
+    return None
+
+
+def _aabb_center_size_from_dict(aabb: Dict) -> Optional[Tuple[Tuple[float, float, float], Tuple[float, float, float]]]:
+    try:
+        return _aabb_to_center_size(
+            {
+                "x_min": float(aabb["x_min"]),
+                "x_max": float(aabb["x_max"]),
+                "y_min": float(aabb["y_min"]),
+                "y_max": float(aabb["y_max"]),
+                "z_min": float(aabb["z_min"]),
+                "z_max": float(aabb["z_max"]),
+            }
+        )
+    except Exception:
+        return None
+
+
+def _aabb_nearly_identical(a: Dict, b: Dict) -> bool:
+    acs = _aabb_center_size_from_dict(a)
+    bcs = _aabb_center_size_from_dict(b)
+    if acs is None or bcs is None:
+        return False
+    (ac, asz), (bc, bsz) = acs, bcs
+    center_delta = math.sqrt(sum((av - bv) ** 2 for av, bv in zip(ac, bc)))
+    max_extent = max(max(asz), max(bsz), 0.05)
+    if center_delta > max(0.025, max_extent * 0.025):
+        return False
+    for av, bv in zip(asz, bsz):
+        if max(av, bv) <= 1e-6:
+            continue
+        if abs(av - bv) / max(max(av, bv), 1e-6) > 0.06:
+            return False
+    return True
+
+
+def _duplicate_render_item_key(item: Dict) -> str:
+    group = _item_semantic_group(item)
+    supplier_key = _supplier_record_key(None, item)
+    if supplier_key:
+        return f"{group}|{supplier_key}"
+    category = str(item.get("category") or "").strip().lower()
+    name = str(_item_name(item) or "").strip().lower()
+    return f"{group}|{category}|{name}"
+
+
+def _find_duplicate_render_item_ids(items: List[Dict]) -> List[str]:
+    seen: List[Tuple[str, Dict, str]] = []
+    duplicates: List[str] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        item_id = str(item.get("id") or "").strip()
+        if not item_id:
+            continue
+        aabb = item.get("aabb") or item.get("bbox") or {}
+        if not isinstance(aabb, dict):
+            continue
+        key = _duplicate_render_item_key(item)
+        if not key.strip("|"):
+            continue
+        is_duplicate = False
+        for prev_key, prev_aabb, _prev_id in seen:
+            if prev_key == key and _aabb_nearly_identical(aabb, prev_aabb):
+                duplicates.append(item_id)
+                is_duplicate = True
+                break
+        if not is_duplicate:
+            seen.append((key, aabb, item_id))
+    return duplicates
 
 
 def _item_name(it: dict) -> str:
@@ -3809,6 +4107,147 @@ def _assign_material_to_object(obj: bpy.types.Object, mat: bpy.types.Material) -
             me.materials[i] = mat
 
 
+def _procedural_requirement_role(item: Dict) -> str:
+    meta = item.get("meta") if isinstance(item.get("meta"), dict) else {}
+    asset = item.get("asset") if isinstance(item.get("asset"), dict) else {}
+    text = " ".join(
+        str(x or "").lower()
+        for x in (
+            meta.get("required_role"),
+            asset.get("role"),
+            item.get("category"),
+            item.get("name"),
+        )
+    )
+    for role in ("toilet", "sink", "shower", "bath", "table", "bed"):
+        if role in text:
+            return role
+    if "унит" in text:
+        return "toilet"
+    if "раков" in text or "умыв" in text:
+        return "sink"
+    if "душ" in text:
+        return "shower"
+    if "ванн" in text:
+        return "bath"
+    if "стол" in text:
+        return "table"
+    return ""
+
+
+def _is_procedural_requirement_item(item: Dict) -> bool:
+    meta = item.get("meta") if isinstance(item.get("meta"), dict) else {}
+    asset = item.get("asset") if isinstance(item.get("asset"), dict) else {}
+    source = item.get("source") if isinstance(item.get("source"), dict) else {}
+    return bool(
+        meta.get("procedural_requirement")
+        or asset.get("kind") == "procedural_requirement_proxy"
+        or source.get("asset_source") == "procedural_requirement"
+    )
+
+
+def _make_local_box_mesh(
+    *,
+    name: str,
+    parent: bpy.types.Object,
+    collection: bpy.types.Collection,
+    local_center: Tuple[float, float, float],
+    size: Tuple[float, float, float],
+    material: bpy.types.Material,
+) -> bpy.types.Object:
+    cx, cy, cz = local_center
+    sx, sy, sz = (max(float(v), 0.001) for v in size)
+    verts = [
+        (cx - sx / 2.0, cy - sy / 2.0, cz - sz / 2.0),
+        (cx + sx / 2.0, cy - sy / 2.0, cz - sz / 2.0),
+        (cx + sx / 2.0, cy + sy / 2.0, cz - sz / 2.0),
+        (cx - sx / 2.0, cy + sy / 2.0, cz - sz / 2.0),
+        (cx - sx / 2.0, cy - sy / 2.0, cz + sz / 2.0),
+        (cx + sx / 2.0, cy - sy / 2.0, cz + sz / 2.0),
+        (cx + sx / 2.0, cy + sy / 2.0, cz + sz / 2.0),
+        (cx - sx / 2.0, cy + sy / 2.0, cz + sz / 2.0),
+    ]
+    faces = [(0, 1, 2, 3), (4, 7, 6, 5), (0, 4, 5, 1), (1, 5, 6, 2), (2, 6, 7, 3), (3, 7, 4, 0)]
+    mesh = bpy.data.meshes.new(f"{name}_Mesh")
+    mesh.from_pydata(verts, [], faces)
+    mesh.update()
+    obj = bpy.data.objects.new(name, mesh)
+    collection.objects.link(obj)
+    obj.parent = parent
+    _assign_material_to_object(obj, material)
+    return obj
+
+
+def _make_procedural_requirement_mesh(
+    *,
+    item: Dict,
+    aabb: Dict[str, float],
+    rotation_deg_engine: float,
+    collection: bpy.types.Collection,
+    name: str,
+) -> Optional[bpy.types.Object]:
+    role = _procedural_requirement_role(item)
+    if not role:
+        return None
+
+    x1, x2 = float(aabb["x_min"]), float(aabb["x_max"])
+    y1, y2 = float(aabb["y_min"]), float(aabb["y_max"])
+    z1, z2 = float(aabb["z_min"]), float(aabb["z_max"])
+    sx, sy, sz = max(x2 - x1, 0.1), max(y2 - y1, 0.1), max(z2 - z1, 0.1)
+    root = bpy.data.objects.new(f"{name}_procedural_root", None)
+    collection.objects.link(root)
+    root.location = ((x1 + x2) * 0.5, (y1 + y2) * 0.5, z1)
+    root.rotation_euler[2] = math.radians(float(rotation_deg_engine or 0.0))
+    root["cgs_procedural_requirement"] = role
+    root["cgs_item_id"] = str(item.get("id") or "")
+
+    ceramic = _make_pbr_material(f"Mat_{name}_ceramic", PBRMaps(), tint_rgb=(0.86, 0.88, 0.86), tex_scale=1.0)
+    metal = _make_pbr_material(f"Mat_{name}_metal", PBRMaps(), tint_rgb=(0.55, 0.58, 0.58), tex_scale=1.0)
+    glass = _make_pbr_material(f"Mat_{name}_glass", PBRMaps(), tint_rgb=(0.55, 0.72, 0.78), tex_scale=1.0)
+    wood = _make_pbr_material(f"Mat_{name}_wood", PBRMaps(), tint_rgb=(0.55, 0.42, 0.30), tex_scale=1.0)
+
+    def box(part: str, center: Tuple[float, float, float], size: Tuple[float, float, float], mat: bpy.types.Material) -> None:
+        obj = _make_local_box_mesh(name=f"{name}_{part}", parent=root, collection=collection, local_center=center, size=size, material=mat)
+        obj["cgs_procedural_requirement"] = role
+        obj["cgs_item_id"] = str(item.get("id") or "")
+
+    if role == "toilet":
+        box("base", (0.0, -sy * 0.06, sz * 0.18), (sx * 0.70, sy * 0.62, sz * 0.34), ceramic)
+        box("seat", (0.0, -sy * 0.06, sz * 0.46), (sx * 0.78, sy * 0.72, sz * 0.14), ceramic)
+        box("tank", (0.0, sy * 0.32, sz * 0.64), (sx * 0.88, sy * 0.24, sz * 0.56), ceramic)
+    elif role == "sink":
+        box("basin", (0.0, 0.0, sz * 0.82), (sx, sy, sz * 0.22), ceramic)
+        box("pedestal", (0.0, 0.0, sz * 0.38), (sx * 0.34, sy * 0.34, sz * 0.70), ceramic)
+        box("faucet_post", (0.0, sy * 0.18, sz * 1.03), (sx * 0.08, sy * 0.08, sz * 0.22), metal)
+        box("faucet_spout", (0.0, sy * 0.04, sz * 1.12), (sx * 0.10, sy * 0.22, sz * 0.06), metal)
+    elif role == "shower":
+        box("tray", (0.0, 0.0, sz * 0.035), (sx, sy, sz * 0.07), ceramic)
+        box("back_panel", (0.0, sy * 0.48, sz * 0.52), (sx, sy * 0.035, sz * 0.96), glass)
+        box("side_panel", (sx * 0.48, 0.0, sz * 0.52), (sx * 0.035, sy, sz * 0.96), glass)
+        box("column", (-sx * 0.34, sy * 0.44, sz * 0.55), (sx * 0.06, sy * 0.05, sz * 0.80), metal)
+        box("head", (-sx * 0.25, sy * 0.34, sz * 0.86), (sx * 0.22, sy * 0.08, sz * 0.05), metal)
+    elif role == "bath":
+        box("tub", (0.0, 0.0, sz * 0.33), (sx, sy, sz * 0.62), ceramic)
+        box("rim", (0.0, 0.0, sz * 0.67), (sx * 1.04, sy * 1.04, sz * 0.10), ceramic)
+        box("faucet", (-sx * 0.30, sy * 0.34, sz * 0.82), (sx * 0.22, sy * 0.10, sz * 0.08), metal)
+    elif role == "table":
+        top_z = min(sz * 0.92, 0.74)
+        box("top", (0.0, 0.0, top_z), (sx, sy, max(0.055, sz * 0.08)), wood)
+        leg_h = max(0.30, top_z - 0.04)
+        for ix, lx in enumerate((-sx * 0.40, sx * 0.40)):
+            for iy, ly in enumerate((-sy * 0.38, sy * 0.38)):
+                box(f"leg_{ix}_{iy}", (lx, ly, leg_h * 0.5), (sx * 0.07, sy * 0.08, leg_h), wood)
+    elif role == "bed":
+        box("mattress", (0.0, 0.0, sz * 0.62), (sx, sy, sz * 0.34), ceramic)
+        box("base", (0.0, 0.0, sz * 0.27), (sx, sy, sz * 0.24), wood)
+        box("headboard", (0.0, sy * 0.48, sz * 0.62), (sx, sy * 0.08, sz * 0.70), wood)
+    else:
+        return None
+
+    bpy.context.view_layer.update()
+    return root
+
+
 def _flip_mesh_objects_local_z(objs: List[bpy.types.Object]) -> None:
     for obj in objs:
         if obj.type != "MESH" or obj.data is None:
@@ -5105,6 +5544,22 @@ def place_in_aabb(
         fit_penalty = oversize_penalty + center_ratio * 2.5 + wall_penalty
         return True, "ok", fit_penalty
 
+    def _scale_guard_reason() -> Optional[str]:
+        fit_mode_l = (fit_mode or "stretch").lower()
+        if fit_mode_l in {"uniform", "curtain_soft_width", "curtain_window_soft_width"}:
+            return None
+        if not _rigid_supplier_group(semantic_group):
+            return None
+        vals = [abs(float(parent.scale.x)), abs(float(parent.scale.y)), abs(float(parent.scale.z))]
+        vals = [v for v in vals if v > 1e-9]
+        if len(vals) < 3:
+            return None
+        non_uniform = max(vals) / max(min(vals), 1e-9)
+        limit = 1.32 if semantic_group in {"wardrobe", "dresser", "shelf", "bathroom_sink", "toilet", "bathtub", "shower"} else 1.48
+        if non_uniform > limit:
+            return f"non_uniform_supplier_scale:{non_uniform:.3f}>{limit:.2f}"
+        return None
+
     parent = bpy.data.objects.new(parent_name, None)
     bpy.context.scene.collection.objects.link(parent)
 
@@ -5125,6 +5580,10 @@ def place_in_aabb(
         bpy.context.view_layer.update()
         _fit_parent_once()
         _fit_parent_once()
+        scale_reason = _scale_guard_reason()
+        if scale_reason:
+            last_failure_reason = scale_reason
+            continue
         placement_ok, placement_reason, placement_score = _placement_metrics(candidate_rotation)
         if not placement_ok:
             last_failure_reason = placement_reason
@@ -5221,6 +5680,12 @@ def build_scene(
     else:
         room_engine = data.get("room") or data.get("room_spec") or {}
         items = data.get("placements") or data.get("items") or []
+    items = [item for item in items if isinstance(item, dict)]
+    skipped_duplicate_item_ids = _find_duplicate_render_item_ids(items)
+    if skipped_duplicate_item_ids:
+        skipped_set = set(skipped_duplicate_item_ids)
+        items = [item for item in items if str(item.get("id") or "").strip() not in skipped_set]
+        print(f"[DBG] skipped duplicate render item(s): {', '.join(skipped_duplicate_item_ids)}")
     items_by_id: Dict[str, Dict] = {
         str(item.get("id") or "").strip(): item
         for item in items
@@ -5232,12 +5697,17 @@ def build_scene(
         source_name = _blend_source_name_from_item(item)
         if source_name:
             source_name_to_items.setdefault(source_name, []).append(item)
+    supplier_reuse_size_index = _build_supplier_reuse_size_index(items)
     hidden_reference_sources: set[str] = set()
     reference_light_fixture_roots = _collect_reference_light_fixture_roots() if use_reference_scene else []
     item_actual_aabbs: Dict[str, Dict[str, float]] = {}
     item_roots: Dict[str, bpy.types.Object] = {}
     item_issue_reasons: Dict[str, List[str]] = {}
+    rejected_supplier_candidates: List[Dict[str, str]] = []
     removed_non_mesh_import_objects: List[Dict[str, str]] = []
+    removed_bbox_helper_count = 0
+    if use_reference_scene and not (draw_aabb or overlay_bbox_only):
+        removed_bbox_helper_count += _remove_bbox_helper_objects()
     functional_light_count = 0
 
     room_data_for_build = data if _has_room_spec(data) else _room_spec_from_bounds(
@@ -5337,7 +5807,7 @@ def build_scene(
         name_l = name.lower()
         meta = it.get("meta") or {}
         supplier_reanchored_support = bool(meta.get("supplier_support_reanchored"))
-        force_placeholder_bbox = bool(meta.get("placeholder_bbox"))
+        force_placeholder_bbox = bool(meta.get("placeholder_bbox")) and bool(bbox_fallback_missing_mesh)
         preserve_raw_aabb = bool(overlay_bbox_only or force_placeholder_bbox)
         source = it.get("source") or {}
         source_blend_candidates = _blend_source_names_from_item(it)
@@ -5415,6 +5885,24 @@ def build_scene(
         using_reference_object = False
 
         if not overlay_bbox_only:
+            if _is_procedural_requirement_item(it):
+                parent = _make_procedural_requirement_mesh(
+                    item=it,
+                    aabb=aabb_eng,
+                    rotation_deg_engine=rot_deg,
+                    collection=coll_items,
+                    name=name,
+                )
+                if parent is not None:
+                    placed_ok = True
+                    if item_id:
+                        item_roots[item_id] = parent
+                        actual_aabb = _aabb_from_object_family_root(parent)
+                        if actual_aabb is not None:
+                            item_actual_aabbs[item_id] = actual_aabb
+                if placed_ok:
+                    continue
+
             if _is_procedural_kitchen_item(it):
                 try:
                     from src.suppliers.kitchen.kitchen_blender_builder import build_kitchen_assembly_in_blender
@@ -5511,8 +5999,22 @@ def build_scene(
                 best_candidate: Optional[dict] = None
                 best_total_score = float("inf")
                 last_error: Optional[str] = None
+                rejected_candidate_reasons: List[str] = []
 
                 for rank_idx, supplier_candidate, candidate_mesh_path in candidate_specs:
+                    reuse_reject = _supplier_candidate_reuse_reject_reason(it, supplier_candidate, supplier_reuse_size_index)
+                    if reuse_reject:
+                        rejected_candidate_reasons.append(reuse_reject)
+                        rejected_supplier_candidates.append(
+                            {
+                                "item_id": str(item_id or ""),
+                                "item_name": str(name or ""),
+                                "candidate_key": _supplier_record_key(supplier_candidate, it),
+                                "reason": reuse_reject,
+                            }
+                        )
+                        print(f"[DBG] rejecting supplier candidate for {name}: {reuse_reject}")
+                        continue
                     print(f"[DBG] trying candidate rank={rank_idx + 1 if rank_idx >= 0 else 1} mesh={candidate_mesh_path}")
                     mesh_candidates = _discover_mesh_import_candidates(candidate_mesh_path)
                     print(f"[DBG] mesh_candidates for {name}: {mesh_candidates[:8]}")
@@ -5670,6 +6172,8 @@ def build_scene(
                         actual_aabb = _aabb_from_object_family_root(source_scene_obj)
                         if actual_aabb is not None:
                             item_actual_aabbs[item_id] = actual_aabb
+                elif (not placed_ok) and rejected_candidate_reasons and item_id:
+                    item_issue_reasons.setdefault(item_id, []).extend(rejected_candidate_reasons)
             elif source_scene_obj is not None:
                 using_reference_object = True
                 placed_ok = True
@@ -5691,7 +6195,7 @@ def build_scene(
                 print(f"⚠️ {name}: mesh_path не найден в placement/asset или файл отсутствует: {mesh_path_raw}")
 
         force_bbox = overlay_bbox_only or force_placeholder_bbox
-        highlight_bbox = bool(item_id and item_id in (highlight_item_ids or set()))
+        highlight_bbox = bool(overlay_bbox_only and item_id and item_id in (highlight_item_ids or set()))
         want_bbox_fallback = bool(bbox_fallback_missing_mesh and (not placed_ok) and (not using_reference_object))
         skip_placeholder_bbox = _should_skip_placeholder_bbox(it)
         if highlight_bbox:
@@ -5801,6 +6305,26 @@ def build_scene(
             and float(a["z_min"]) < float(b["z_max"]) - margin
         )
 
+    def _expected_design_overlap(item_id_a: str, item_id_b: str) -> bool:
+        item_a = items_by_id.get(item_id_a) or {}
+        item_b = items_by_id.get(item_id_b) or {}
+        meta_a = item_a.get("meta") if isinstance(item_a.get("meta"), dict) else {}
+        meta_b = item_b.get("meta") if isinstance(item_b.get("meta"), dict) else {}
+
+        target_table_a = str(meta_a.get("target_table_id") or "").strip()
+        target_table_b = str(meta_b.get("target_table_id") or "").strip()
+        if str(meta_a.get("affordance") or "") == "table_chair" and target_table_a == item_id_b:
+            return True
+        if str(meta_b.get("affordance") or "") == "table_chair" and target_table_b == item_id_a:
+            return True
+
+        anchor_a = str(meta_a.get("supplier_support_anchor_target_id") or "").strip()
+        anchor_b = str(meta_b.get("supplier_support_anchor_target_id") or "").strip()
+        if anchor_a and anchor_a == anchor_b:
+            return True
+
+        return False
+
     diagnostic_ids: List[str] = []
     for item in items:
         if not isinstance(item, dict):
@@ -5844,6 +6368,8 @@ def build_scene(
                 continue
             if anchor_b and anchor_b == item_id_a:
                 continue
+            if _expected_design_overlap(item_id_a, item_id_b):
+                continue
             if _aabb_overlap_3d(aabb_a, aabb_b, margin=0.012):
                 item_issue_reasons.setdefault(item_id_a, []).append(f"collision:{item_id_b}")
                 item_issue_reasons.setdefault(item_id_b, []).append(f"collision:{item_id_a}")
@@ -5857,13 +6383,14 @@ def build_scene(
         aabb = item_actual_aabbs.get(item_id)
         if aabb is None:
             continue
-        _make_renderable_bbox_box(
-            aabb,
-            f"INVALID_{item_id}",
-            coll_items,
-            rgba=(0.85, 0.05, 0.05, 1.0),
-            thickness=0.03,
-        )
+        if overlay_bbox_only:
+            _make_renderable_bbox_box(
+                aabb,
+                f"INVALID_{item_id}",
+                coll_items,
+                rgba=(0.85, 0.05, 0.05, 1.0),
+                thickness=0.03,
+            )
         print(f"[DBG] invalid placement {item_id}: {diagnostic_reasons}")
 
     _log(verbose, f"[Room] final room mode = {room_mode}")
@@ -5883,7 +6410,10 @@ def build_scene(
         "json_path": str(json_file),
         "reference_blend": str(reference_blend or ""),
         "item_issues": item_issues,
+        "skipped_duplicate_item_ids": skipped_duplicate_item_ids,
         "removed_non_mesh_import_objects": removed_non_mesh_import_objects,
+        "rejected_supplier_candidates": rejected_supplier_candidates,
+        "removed_bbox_helper_count": int(removed_bbox_helper_count),
         "functional_light_count": int(functional_light_count),
         "used_alternative_candidate_count": sum(
             1
@@ -5930,15 +6460,17 @@ def main() -> None:
         highlight_item_ids=_parse_id_set(args.highlight_item_ids),
     )
 
-    if args.build_report:
-        report_path = Path(args.build_report).expanduser().resolve()
-        report_path.parent.mkdir(parents=True, exist_ok=True)
-        report_path.write_text(json.dumps(build_report, ensure_ascii=False, indent=2), encoding="utf-8")
-
     if args.hide_room_shell:
         _hide_room_shell_objects()
     if str(args.render_layer or "all") != "all":
         _apply_render_layer_visibility(str(args.render_layer or "all"))
+
+    build_report["final_visual_cleanup"] = _cleanup_final_visual_helpers()
+
+    if args.build_report:
+        report_path = Path(args.build_report).expanduser().resolve()
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        report_path.write_text(json.dumps(build_report, ensure_ascii=False, indent=2), encoding="utf-8")
 
     if not args.no_pack_assets:
         _pack_assets_best_effort()

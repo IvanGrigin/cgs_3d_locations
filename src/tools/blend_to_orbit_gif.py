@@ -70,6 +70,67 @@ def collect_scene_bounds():
     }
 
 
+def matches_room_shell_name(name):
+    low = str(name or "").lower()
+    return (
+        "room_wall" in low
+        or "room_ceiling" in low
+        or "room_exterior" in low
+        or "wallpaper" in low
+        or low.endswith(".exterior")
+        or low.endswith("/0")
+        or ".wall" in low
+        or "/wall" in low
+        or "ceiling" in low
+        or "exterior" in low
+    )
+
+
+def hide_object_family(root):
+    stack = [root]
+    while stack:
+        obj = stack.pop()
+        obj.hide_render = True
+        obj.hide_viewport = True
+        stack.extend(list(obj.children))
+
+
+def hide_room_shell_objects():
+    hidden = 0
+    for obj in list(bpy.data.objects):
+        if matches_room_shell_name(obj.name):
+            hide_object_family(obj)
+            hidden += 1
+    print(f"[orbit_gif] hidden_room_shell_objects={hidden}")
+
+
+def object_world_bounds(obj):
+    if obj.type != "MESH" or obj.hide_render:
+        return None
+    pts = world_bbox_points(obj)
+    if not pts:
+        return None
+    bmin = Vector((min(p.x for p in pts), min(p.y for p in pts), min(p.z for p in pts)))
+    bmax = Vector((max(p.x for p in pts), max(p.y for p in pts), max(p.z for p in pts)))
+    return bmin, bmax
+
+
+def hide_outlier_objects(max_abs=100.0, max_size=30.0):
+    hidden = 0
+    for obj in list(bpy.data.objects):
+        bounds = object_world_bounds(obj)
+        if bounds is None:
+            continue
+        bmin, bmax = bounds
+        size = bmax - bmin
+        max_dim = max(abs(size.x), abs(size.y), abs(size.z))
+        max_coord = max(abs(v) for v in [bmin.x, bmax.x, bmin.y, bmax.y, bmin.z, bmax.z])
+        if max_coord > max_abs or max_dim > max_size:
+            hide_object_family(obj)
+            hidden += 1
+    print(f"[orbit_gif] hidden_outlier_objects={hidden}")
+
+
 def ensure_camera(scene):
     if scene.camera and scene.camera.type == "CAMERA":
         return scene.camera
@@ -165,6 +226,10 @@ def render_orbit():
     elevations_deg = [float(x) for x in args["elevations_deg"]]
     frame_indices = args.get("frame_indices")
     frame_indices = set(int(x) for x in frame_indices) if frame_indices is not None else None
+    if bool(args.get("hide_room_shell")):
+        hide_room_shell_objects()
+    if bool(args.get("hide_outliers")):
+        hide_outlier_objects()
 
     os.makedirs(frames_dir, exist_ok=True)
 
@@ -242,6 +307,16 @@ def build_cli() -> argparse.ArgumentParser:
         action="store_true",
         help="Не удалять промежуточные PNG-кадры",
     )
+    p.add_argument(
+        "--hide-room-shell",
+        action="store_true",
+        help="Перед GIF скрыть стены, потолок, wallpaper/shell и exterior-объекты.",
+    )
+    p.add_argument(
+        "--hide-outliers",
+        action="store_true",
+        help="Скрыть меши с явно сломанными bbox/transform, чтобы они не ломали камеру GIF.",
+    )
     return p
 
 
@@ -285,6 +360,8 @@ def run_blender_render(
     elevations_deg: list[float],
     margin: float,
     frame_indices: list[int] | None = None,
+    hide_room_shell: bool = False,
+    hide_outliers: bool = False,
 ) -> None:
     with tempfile.TemporaryDirectory(prefix="blend_orbit_") as tmpdir:
         tmpdir_path = Path(tmpdir)
@@ -303,6 +380,8 @@ def run_blender_render(
                     "elevations_deg": elevations_deg,
                     "margin": margin,
                     "frame_indices": frame_indices,
+                    "hide_room_shell": bool(hide_room_shell),
+                    "hide_outliers": bool(hide_outliers),
                 },
                 ensure_ascii=False,
                 indent=2,
@@ -327,8 +406,8 @@ exec(Path(r"{helper_script}").read_text(encoding="utf-8"), {{}})
 
         cmd = [
             blender_bin,
-            "-b",
             str(blend_path.resolve()),
+            "-b",
             "--python",
             str(bootstrap.resolve()),
         ]
@@ -347,6 +426,8 @@ def render_frames_isolated(
     yaw_step: float,
     elevations_deg: list[float],
     margin: float,
+    hide_room_shell: bool,
+    hide_outliers: bool,
     frame_count: int,
 ) -> None:
     for frame_idx in range(frame_count):
@@ -361,6 +442,8 @@ def render_frames_isolated(
             elevations_deg=elevations_deg,
             margin=margin,
             frame_indices=[frame_idx],
+            hide_room_shell=hide_room_shell,
+            hide_outliers=hide_outliers,
         )
 
 
@@ -464,6 +547,8 @@ def main() -> None:
             yaw_step=float(args.yaw_step),
             elevations_deg=elevations_deg,
             margin=float(args.margin),
+            hide_room_shell=bool(args.hide_room_shell),
+            hide_outliers=bool(args.hide_outliers),
             frame_count=frames_expected,
         )
     else:
@@ -477,6 +562,8 @@ def main() -> None:
             yaw_step=float(args.yaw_step),
             elevations_deg=elevations_deg,
             margin=float(args.margin),
+            hide_room_shell=bool(args.hide_room_shell),
+            hide_outliers=bool(args.hide_outliers),
         )
 
     build_gif_from_frames(
