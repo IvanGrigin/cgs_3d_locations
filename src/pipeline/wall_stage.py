@@ -82,7 +82,47 @@ def _wall_material_scene_payload(selection: dict[str, Any], materials_path: Path
             "axis": "wall_uv",
             "tile_size_m": 1.0,
         },
+        "price": material.get("price"),
+        "price_currency": material.get("price_currency") or "RUB",
+        "price_unit": material.get("price_unit") or material.get("unit") or _raw_property(material, ("Единица измерения", "Цена указана")),
+        "roll_area_m2": _wall_roll_area_m2(material),
     }
+
+
+def _as_float(value: Any) -> float | None:
+    try:
+        if value is None or value == "":
+            return None
+        text = str(value).replace(",", ".")
+        return float("".join(ch for ch in text if ch.isdigit() or ch in ".-"))
+    except Exception:
+        return None
+
+
+def _raw_property(material: dict[str, Any], keys: tuple[str, ...]) -> Any:
+    raw = material.get("raw_properties")
+    if not isinstance(raw, dict):
+        raw = material.get("properties")
+    if not isinstance(raw, dict):
+        return None
+    for key in keys:
+        if key in raw:
+            return raw[key]
+    return None
+
+
+def _wall_roll_area_m2(material: dict[str, Any]) -> float | None:
+    direct = _as_float(material.get("roll_area_m2")) or _as_float(material.get("package_area_m2"))
+    if direct and direct > 0:
+        return round(direct, 4)
+    raw_area = _as_float(_raw_property(material, ("Площадь рулона", "Площадь упаковки", "Площадь")))
+    if raw_area and raw_area > 0:
+        return round(raw_area, 4)
+    width = _as_float(material.get("width_m")) or _as_float(_raw_property(material, ("Ширина рулона", "Ширина, м")))
+    length = _as_float(material.get("length_m")) or _as_float(_raw_property(material, ("Длина рулона", "Длина, м")))
+    if width and length and width > 0 and length > 0:
+        return round(width * length, 4)
+    return None
 
 
 def apply_wall_material_to_scene(scene: dict[str, Any], wall_selection: dict[str, Any]) -> dict[str, Any]:

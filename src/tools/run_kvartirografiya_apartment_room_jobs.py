@@ -15,6 +15,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_ADAPTER_ROOT = REPO_ROOT / "data/output/kvartirografiya_all_projects_with_response_windows"
 DEFAULT_OUT_ROOT = REPO_ROOT / "data/output/kvartirografiya_apartment_room_jobs"
 DEFAULT_PROMPTS_DIR = REPO_ROOT / "data/input/example/prompts"
+DEFAULT_BLENDER = "/Applications/Blender.app/Contents/MacOS/Blender"
 
 ROOM_TYPE_ALIASES = {
     "bedroom": "bedroom",
@@ -53,6 +54,19 @@ def normalize_apartment_id(value: str | int) -> str:
     if text.isdigit():
         return f"apt_{int(text):04d}"
     return str(value).strip()
+
+
+def normalize_floor_id(value: str | int | None) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    if text.startswith("floor_"):
+        return text
+    if text.isdigit():
+        return f"floor_{int(text)}"
+    return text
 
 
 def normalize_room_type(value: str | None) -> str:
@@ -97,18 +111,28 @@ def choose_prompt(room_type: str, area_m2: float | None, prompts_dir: Path) -> t
     return path.read_text(encoding="utf-8").strip(), str(path.resolve())
 
 
-def find_apartment_bundle(adapter_root: Path, project_id: str, apartment_id: str) -> Path:
+def find_apartment_bundle(adapter_root: Path, project_id: str, apartment_id: str, floor_id: str | None = None) -> Path:
     adapter_root = adapter_root.expanduser().resolve()
     apt_id = normalize_apartment_id(apartment_id)
-    candidates = sorted(adapter_root.glob(f"{project_id}/floor_*/apartment_bundles/{apt_id}/manifest.json"))
+    floor_glob = normalize_floor_id(floor_id) or "floor_*"
+    candidates = sorted(adapter_root.glob(f"{project_id}/{floor_glob}/apartment_bundles/{apt_id}/manifest.json"))
     if not candidates:
-        candidates = sorted(adapter_root.glob(f"**/{project_id}/floor_*/apartment_bundles/{apt_id}/manifest.json"))
+        candidates = sorted(adapter_root.glob(f"**/{project_id}/{floor_glob}/apartment_bundles/{apt_id}/manifest.json"))
     if not candidates:
-        raise FileNotFoundError(f"Apartment {apt_id} for project {project_id} not found under {adapter_root}")
+        floor_part = f" on {floor_glob}" if floor_id else ""
+        raise FileNotFoundError(f"Apartment {apt_id} for project {project_id}{floor_part} not found under {adapter_root}")
     if len(candidates) > 1:
         # Prefer the lowest visible floor unless the caller passed a root scoped to one floor.
         candidates = sorted(candidates, key=lambda p: str(p))
     return candidates[0].parent.resolve()
+
+
+def floor_id_from_bundle(bundle_dir: Path) -> str | None:
+    try:
+        floor_dir = bundle_dir.parent.parent
+    except Exception:
+        return None
+    return floor_dir.name if floor_dir.name.startswith("floor_") else None
 
 
 def polygon_points(room: dict[str, Any]) -> list[tuple[float, float]]:
@@ -163,6 +187,7 @@ def build_kitchen_command(args: argparse.Namespace, summary: dict[str, Any], roo
     run_dir = room_dir / "kitchen"
     prompt = args.kitchen_prompt or f"Functional straight kitchen for room {summary['id']}"
     width_m = max(float(summary.get("longest_wall_m") or summary.get("width_m") or 2.4), 1.2)
+    room_json = Path(str(summary.get("room_json") or "")).expanduser()
     cmd = [
         sys.executable,
         "-m",
@@ -182,6 +207,8 @@ def build_kitchen_command(args: argparse.Namespace, summary: dict[str, Any], roo
         "--kitchen-llm-provider",
         args.kitchen_llm_provider,
     ]
+    if room_json.is_file():
+        cmd.extend(["--room-json", str(room_json.resolve())])
     if args.kitchen_no_render:
         cmd.append("--no-render")
     if args.blender:
@@ -335,11 +362,82 @@ def collect_pipeline_result(run: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def build_finalizer_run(args: argparse.Namespace, out_dir: Path) -> dict[str, Any]:
+    mode = args.variant_mode
+    final_dir = out_dir / "apartment_pipeline" / mode
+    blender = args.blender or DEFAULT_BLENDER
+    cmd = [
+        blender,
+        "--factory-startup",
+        "-b",
+        "--python",
+        str((REPO_ROOT / "src/tools/finalize_apartment_requirements_blender.py").resolve()),
+        "--",
+        str(out_dir.resolve()),
+        "--mode",
+        mode,
+        "--corner-width",
+        str(int(args.finalize_corner_width)),
+        "--corner-height",
+        str(int(args.finalize_corner_height)),
+        "--corner-samples",
+        str(int(args.finalize_corner_samples)),
+        "--overview-width",
+        str(int(args.finalize_overview_width)),
+        "--overview-height",
+        str(int(args.finalize_overview_height)),
+        "--overview-samples",
+        str(int(args.finalize_overview_samples)),
+    ]
+    if args.finalize_rebuild_rooms:
+        cmd.append("--rebuild-rooms")
+    return {
+        "kind": "finalize_apartment_requirements",
+        "run_dir": str(final_dir.resolve()),
+        "command_args": cmd,
+        "command": shell_command(cmd),
+        "expected_scene_json": str((final_dir / "scene_apartment.requirements.v1.json").resolve()),
+        "expected_blend": str((final_dir / "scene_apartment.requirements.blend").resolve()),
+        "expected_render": str((final_dir / "render_apartment.requirements.png").resolve()),
+        "expected_report_json": str((final_dir / "finalize_requirements.report.json").resolve()),
+        "expected_report_md": str((final_dir / "report_requirements.md").resolve()),
+        "expected_cost_report_md": str((final_dir / "renovation_cost_report.md").resolve()),
+        "expected_corner_report_md": str((final_dir / "room_corner_renders.report.md").resolve()),
+        "expected_corner_dir": str((final_dir / "room_corner_renders").resolve()),
+    }
+
+
+def collect_finalizer_result(run: dict[str, Any]) -> dict[str, Any]:
+    corner_dir = Path(str(run.get("expected_corner_dir") or ""))
+    outputs = {
+        "scene_json": run.get("expected_scene_json"),
+        "blend": run.get("expected_blend"),
+        "render": run.get("expected_render"),
+        "report_json": run.get("expected_report_json"),
+        "report_md": run.get("expected_report_md"),
+        "cost_report_md": run.get("expected_cost_report_md"),
+        "corner_report_md": run.get("expected_corner_report_md"),
+        "corner_dir": str(corner_dir) if str(corner_dir) else None,
+    }
+    existing = {key: value for key, value in outputs.items() if value and Path(str(value)).exists()}
+    missing = {key: value for key, value in outputs.items() if value and not Path(str(value)).exists()}
+    corner_png_count = len(list(corner_dir.glob("*.png"))) if corner_dir.is_dir() else 0
+    status = "ok" if Path(str(run.get("expected_blend") or "")).is_file() and corner_png_count > 0 else "missing_outputs"
+    return {
+        "status": status,
+        "outputs": outputs,
+        "existing_outputs": existing,
+        "missing_outputs": missing,
+        "corner_png_count": corner_png_count,
+    }
+
+
 def write_report(out_dir: Path, manifest: dict[str, Any]) -> None:
     lines = [
         f"# Apartment Room Jobs {manifest['project_id']} / {manifest['apartment_id']}",
         "",
         f"- Bundle: `{manifest['source_bundle']}`",
+        f"- Floor: `{manifest.get('floor_id') or 'auto'}`",
         f"- Rooms: {len(manifest['rooms'])}",
         f"- Executed: {'yes' if manifest.get('executed') else 'no'}",
         "",
@@ -361,12 +459,31 @@ def write_report(out_dir: Path, manifest: dict[str, Any]) -> None:
             if not manifest.get("executed"):
                 lines.append(f"  - Command: `{run['command']}`")
         lines.append("")
+    finalizer = manifest.get("finalize")
+    if finalizer:
+        lines.append("## Final Apartment")
+        lines.append(f"- Run dir: `{finalizer.get('run_dir')}`")
+        lines.append(f"- Blend: `{finalizer.get('expected_blend')}`")
+        lines.append(f"- Scene JSON: `{finalizer.get('expected_scene_json')}`")
+        lines.append(f"- Overview render: `{finalizer.get('expected_render')}`")
+        lines.append(f"- Corner renders report: `{finalizer.get('expected_corner_report_md')}`")
+        lines.append(f"- Cost report: `{finalizer.get('expected_cost_report_md')}`")
+        if finalizer.get("status"):
+            lines.append(f"- Status: `{finalizer.get('status')}`")
+        if finalizer.get("returncode") is not None:
+            lines.append(f"- Return code: `{finalizer.get('returncode')}`")
+        result = finalizer.get("result") or {}
+        if result:
+            lines.append(f"- Corner PNGs: `{result.get('corner_png_count')}`")
+        if not manifest.get("executed"):
+            lines.append(f"- Command: `{finalizer['command']}`")
+        lines.append("")
     (out_dir / "report.md").write_text("\n".join(lines), encoding="utf-8")
 
 
 def build_manifest(args: argparse.Namespace) -> tuple[Path, dict[str, Any]]:
     apt_id = normalize_apartment_id(args.apartment)
-    bundle_dir = find_apartment_bundle(Path(args.adapter_root), str(args.project_id), apt_id)
+    bundle_dir = find_apartment_bundle(Path(args.adapter_root), str(args.project_id), apt_id, args.floor)
     bundle_manifest = read_json(bundle_dir / "manifest.json")
     out_dir = Path(args.out_dir).expanduser().resolve() / str(args.project_id) / apt_id
     rooms_root = out_dir / "rooms"
@@ -377,10 +494,12 @@ def build_manifest(args: argparse.Namespace) -> tuple[Path, dict[str, Any]]:
 
     manifest: dict[str, Any] = {
         "project_id": str(args.project_id),
+        "floor_id": floor_id_from_bundle(bundle_dir),
         "apartment_id": apt_id,
         "source_bundle": str(bundle_dir.resolve()),
         "out_dir": str(out_dir),
         "rooms": [],
+        "finalize": build_finalizer_run(args, out_dir) if args.finalize_apartment else None,
         "executed": False,
     }
     prompts_dir = Path(args.prompts_dir).expanduser().resolve()
@@ -430,6 +549,18 @@ def execute_manifest(manifest: dict[str, Any]) -> int:
                 run["result"] = collect_pipeline_result(run)
             if completed.returncode != 0:
                 failures += 1
+    finalizer = manifest.get("finalize")
+    if finalizer:
+        if failures:
+            finalizer["status"] = "skipped_due_room_failures"
+        else:
+            print("[run] final apartment -> requirements/blend/reports", flush=True)
+            completed = subprocess.run(finalizer["command_args"], cwd=REPO_ROOT)
+            finalizer["returncode"] = completed.returncode
+            finalizer["result"] = collect_finalizer_result(finalizer)
+            finalizer["status"] = "ok" if completed.returncode == 0 and finalizer["result"].get("status") == "ok" else "failed"
+            if completed.returncode != 0:
+                failures += 1
     manifest["executed"] = True
     return failures
 
@@ -437,6 +568,7 @@ def execute_manifest(manifest: dict[str, Any]) -> int:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Prepare and run per-room jobs for one Kvartirografiya apartment.")
     parser.add_argument("--project-id", required=True)
+    parser.add_argument("--floor", default=None, help="Floor number or id, for example 2 or floor_2. If omitted, the first matching floor is used.")
     parser.add_argument("--apartment", required=True)
     parser.add_argument("--adapter-root", default=str(DEFAULT_ADAPTER_ROOT))
     parser.add_argument("--out-dir", default=str(DEFAULT_OUT_ROOT))
@@ -468,7 +600,18 @@ def main() -> int:
     parser.add_argument("--kitchen-llm-provider", choices=("none", "ollama"), default="none")
     parser.add_argument("--kitchen-fridge-min-width-m", type=float, default=2.4)
     parser.add_argument("--kitchen-dishwasher-min-width-m", type=float, default=3.0)
+    parser.add_argument("--finalize-apartment", action=argparse.BooleanOptionalAction, default=True, help="After room jobs, run apartment requirements postprocess, assemble final blend, render reports and corner views.")
+    parser.add_argument("--finalize-rebuild-rooms", action=argparse.BooleanOptionalAction, default=False, help="Force rebuild of requirements room blends during finalization. Missing requirements blends are rebuilt anyway.")
+    parser.add_argument("--finalize-corner-width", type=int, default=960)
+    parser.add_argument("--finalize-corner-height", type=int, default=720)
+    parser.add_argument("--finalize-corner-samples", type=int, default=16)
+    parser.add_argument("--finalize-overview-width", type=int, default=1400)
+    parser.add_argument("--finalize-overview-height", type=int, default=1000)
+    parser.add_argument("--finalize-overview-samples", type=int, default=16)
     args = parser.parse_args()
+
+    if args.finalize_apartment and args.skip_blender:
+        parser.error("--finalize-apartment requires Blender room outputs; use --no-finalize-apartment with --skip-blender")
 
     out_dir, manifest = build_manifest(args)
     failures = execute_manifest(manifest) if args.execute else 0
@@ -484,6 +627,8 @@ def main() -> int:
                 kitchen_commands.append(run["command"])
             else:
                 pipeline_commands.append(run["command"])
+    if manifest.get("finalize"):
+        commands.append(manifest["finalize"]["command"])
     for name, content in {
         "commands.sh": commands,
         "run_kitchens.sh": kitchen_commands,

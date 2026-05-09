@@ -657,6 +657,26 @@ def _hide_object_family(root: bpy.types.Object) -> int:
     return changed
 
 
+def _show_object_family(root: bpy.types.Object) -> int:
+    changed = 0
+    for obj in _iter_object_with_descendants(root):
+        if obj.hide_render or obj.hide_viewport:
+            changed += 1
+        try:
+            obj.hide_set(False)
+        except Exception:
+            pass
+        try:
+            obj.hide_viewport = False
+        except Exception:
+            pass
+        try:
+            obj.hide_render = False
+        except Exception:
+            pass
+    return changed
+
+
 def _looks_like_reference_light_fixture(obj: bpy.types.Object) -> bool:
     text = " ".join(
         str(part or "").lower()
@@ -744,25 +764,44 @@ def _collect_reference_light_fixture_roots() -> List[bpy.types.Object]:
 def _object_or_parent_hidden(obj: bpy.types.Object) -> bool:
     cur: Optional[bpy.types.Object] = obj
     while cur is not None:
-        if bool(getattr(cur, "hide_render", False)):
-            return True
+        try:
+            if bool(getattr(cur, "hide_render", False)):
+                return True
+        except ReferenceError:
+            return False
         try:
             if bool(cur.hide_get()):
                 return True
+        except ReferenceError:
+            return False
         except Exception:
             pass
-        cur = cur.parent
+        try:
+            cur = cur.parent
+        except ReferenceError:
+            return False
     return False
 
 
 def _restore_hidden_reference_light_fixtures(reference_roots: List[bpy.types.Object]) -> int:
     restored = 0
     for root in reference_roots:
-        if root.name not in bpy.data.objects:
+        try:
+            root_name = root.name
+        except ReferenceError:
             continue
-        if not _object_or_parent_hidden(root):
+        if root_name not in bpy.data.objects:
             continue
-        restored += _duplicate_light_objects_from_family(root)
+        try:
+            is_hidden = _object_or_parent_hidden(root)
+        except ReferenceError:
+            continue
+        if not is_hidden:
+            continue
+        try:
+            restored += _duplicate_light_objects_from_family(root)
+        except ReferenceError:
+            continue
     return restored
 
 
@@ -1710,6 +1749,60 @@ def _hide_room_shell_objects() -> int:
     return hidden
 
 
+def _looks_like_room_wrapper_name(name: str) -> bool:
+    low = str(name or "").strip().lower()
+    if not low:
+        return False
+    if any(token in low for token in ("ceilinglight", "ceiling_light", "lamp_ceiling", "flat_ceiling_light")):
+        return False
+    if any(token in low for token in ("room_floor_supplier", "room_wall_", "room_window_", "room_door_")):
+        return False
+    patterns = (
+        r"(^|[./_])ceiling($|[./_0-9])",
+        r"(^|[./_])exterior($|[./_0-9])",
+        r"(^|[./_])meshed($|[./_0-9])",
+        r"(^|[./_])room_shell($|[./_0-9])",
+        r"(^|[./_])shell($|[./_0-9])",
+    )
+    return any(re.search(pattern, low) for pattern in patterns)
+
+
+def _looks_like_kitchen_wallpaper_overlay_name(name: str) -> bool:
+    low = str(name or "").strip().lower()
+    return "kitchen" in low and "room_wallpaper_supplieroverlay" in low
+
+
+def _hide_single_object(obj: bpy.types.Object) -> int:
+    changed = 0
+    if obj.hide_render or obj.hide_viewport:
+        changed += 1
+    try:
+        obj.hide_set(True)
+    except Exception:
+        pass
+    try:
+        obj.hide_viewport = True
+    except Exception:
+        pass
+    try:
+        obj.hide_render = True
+    except Exception:
+        pass
+    return max(1, changed)
+
+
+def _hide_room_wrapper_objects() -> int:
+    hidden = 0
+    for obj in list(bpy.data.objects):
+        if obj.type in {"CAMERA", "LIGHT"}:
+            continue
+        obj_name = getattr(obj, "name", "")
+        if not (_looks_like_room_wrapper_name(obj_name) or _looks_like_kitchen_wallpaper_overlay_name(obj_name)):
+            continue
+        hidden += _hide_single_object(obj)
+    return hidden
+
+
 def _object_family_text(obj: bpy.types.Object) -> str:
     values: list[str] = []
     cur = obj
@@ -1792,17 +1885,50 @@ def _looks_like_architectural_door_name(name: str) -> bool:
     low = str(name or "").strip().lower()
     if not low:
         return False
-    if any(token in low for token in ("base_", "cabinet", "wardrobe", "cupboard")) and "_door_" in low:
+    if any(
+        token in low
+        for token in (
+            "base_",
+            "upper_",
+            "cabinet",
+            "wardrobe",
+            "cupboard",
+            "drawer",
+            "fridge",
+            "dishwasher",
+            "washing",
+            "appliance",
+        )
+    ) and any(token in low for token in ("_door_", "door_line", "door_recess")):
         return False
     return (
         low in {"door", "doors"}
         or low.endswith("_door")
         or low.endswith("__door")
+        or low.endswith(".door")
+        or low.endswith("/door")
         or low.endswith("_doors")
         or low.endswith("__doors")
+        or low.endswith(".doors")
+        or low.endswith("/doors")
+        or low.startswith("door_")
+        or low.startswith("doors_")
+        or "_door_" in low
+        or "_doors_" in low
         or "__door." in low
         or "__doors." in low
+        or ".door." in low
+        or ".doors." in low
         or "door_internal" in low
+        or "interior_door" in low
+        or "entry_door" in low
+        or "door_frame" in low
+        or "doorframe" in low
+        or "door_leaf" in low
+        or "doorleaf" in low
+        or "door_panel" in low
+        or "slidingdoor" in low
+        or "sliding_door" in low
         or "doorfactory" in low
         or "paneldoorfactory" in low
         or "louverdoorfactory" in low
@@ -1810,10 +1936,66 @@ def _looks_like_architectural_door_name(name: str) -> bool:
     )
 
 
+def _generic_object_basename(name: str) -> str:
+    low = str(name or "").strip().lower()
+    low = re.split(r"[\\/]", low)[-1]
+    if "__" in low:
+        low = low.rsplit("__", 1)[-1]
+    return _strip_blender_numeric_suffix(low)
+
+
+def _looks_like_orphan_architectural_door_panel(obj: bpy.types.Object) -> bool:
+    if getattr(obj, "type", None) != "MESH":
+        return False
+    text = " ".join(
+        str(part or "").lower()
+        for part in (
+            getattr(obj, "name", ""),
+            getattr(getattr(obj, "data", None), "name", ""),
+            getattr(getattr(obj, "parent", None), "name", ""),
+        )
+    )
+    if any(
+        token in text
+        for token in (
+            "room_wall",
+            "room_floor",
+            "room_window",
+            "supplieroverlay",
+            "skirting",
+            "base_",
+            "upper_",
+            "cabinet",
+            "wardrobe",
+            "cupboard",
+            "drawer",
+            "shelf",
+            "bookstack",
+            "fridge",
+            "dishwasher",
+            "appliance",
+            "countertop",
+        )
+    ):
+        return False
+    base = _generic_object_basename(getattr(obj, "name", ""))
+    data_base = _generic_object_basename(getattr(getattr(obj, "data", None), "name", ""))
+    if base not in {"cube", "plane"} and data_base not in {"cube", "plane"}:
+        return False
+    try:
+        dims = obj.dimensions
+        width = max(float(dims.x), float(dims.y))
+        thickness = min(float(dims.x), float(dims.y))
+        height = float(dims.z)
+    except Exception:
+        return False
+    return 1.65 <= height <= 3.15 and 0.55 <= width <= 1.35 and thickness <= 0.22
+
+
 def _hide_architectural_door_objects() -> int:
     hidden = 0
     for obj in list(bpy.data.objects):
-        if _looks_like_architectural_door_name(getattr(obj, "name", "")):
+        if _looks_like_architectural_door_name(getattr(obj, "name", "")) or _looks_like_orphan_architectural_door_panel(obj):
             hidden += _hide_object_family(obj)
     return hidden
 
@@ -1863,6 +2045,8 @@ def _set_overlay_helpers_render_visibility(show: bool) -> int:
 
 def _cleanup_final_visual_helpers() -> dict[str, int]:
     removed_bbox = _remove_bbox_helper_objects()
+    hidden_room_wrappers = _hide_room_wrapper_objects()
+    replaced_missing_texture_materials = _replace_missing_texture_materials()
     removed_light_markers = 0
     hidden_functional_lights = 0
     for obj in list(bpy.data.objects):
@@ -1888,6 +2072,8 @@ def _cleanup_final_visual_helpers() -> dict[str, int]:
     hidden_doors = _hide_architectural_door_objects()
     return {
         "removed_bbox_helpers": int(removed_bbox),
+        "hidden_room_wrapper_objects": int(hidden_room_wrappers),
+        "replaced_missing_texture_materials": int(replaced_missing_texture_materials),
         "removed_light_markers": int(removed_light_markers),
         "hidden_functional_lights": int(hidden_functional_lights),
         "hidden_architectural_doors": int(hidden_doors),
@@ -2467,30 +2653,203 @@ def _duplicate_render_item_key(item: Dict) -> str:
     return f"{group}|{category}|{name}"
 
 
+def _is_replacement_render_item(item: Dict) -> bool:
+    meta = item.get("meta") if isinstance(item.get("meta"), dict) else {}
+    source = item.get("source") if isinstance(item.get("source"), dict) else {}
+    asset = item.get("asset") if isinstance(item.get("asset"), dict) else {}
+    return bool(
+        meta.get("supplier_binding_applied")
+        or meta.get("supplier_requirement_added")
+        or meta.get("procedural_lighting")
+        or source.get("supplier_replaced")
+        or source.get("asset_source") in {"supplier_catalog_local_asset", "procedural_lighting"}
+        or asset.get("kind") == "procedural_flat_ceiling_light"
+    )
+
+
+def _duplicate_item_text(item: Dict) -> str:
+    meta = item.get("meta") if isinstance(item.get("meta"), dict) else {}
+    candidate = meta.get("supplier_candidate") if isinstance(meta.get("supplier_candidate"), dict) else {}
+    source = item.get("source") if isinstance(item.get("source"), dict) else {}
+    parts = [
+        item.get("id"),
+        item.get("name"),
+        item.get("category"),
+        item.get("semantic_group"),
+        candidate.get("title"),
+        candidate.get("category_norm"),
+        candidate.get("semantic_group"),
+        source.get("blend_object_name"),
+        source.get("original_blend_object_name"),
+    ]
+    return " ".join(str(part or "").lower() for part in parts)
+
+
+def _is_replacement_bed_item(item: Dict) -> bool:
+    if not _is_replacement_render_item(item):
+        return False
+    text = _duplicate_item_text(item)
+    return (
+        _item_semantic_group(item) == "bed"
+        or "bedfactory" in text
+        or "mattressfactory" in text
+        or "кровать" in text
+        or re.search(r"(^|[^a-z])bed([^a-z]|$)", text) is not None
+    )
+
+
+def _is_bed_companion_item(item: Dict) -> bool:
+    if _is_replacement_render_item(item):
+        return False
+    text = _duplicate_item_text(item)
+    return any(
+        token in text
+        for token in (
+            "mattressfactory",
+            "blanketfactory",
+            "boxcomforterfactory",
+            "pillowfactory",
+            "towelfactory",
+            "comforter",
+            "mattress",
+            "blanket",
+            "pillow",
+            "towel",
+            "матрас",
+            "одеяло",
+            "подуш",
+            "полотен",
+        )
+    )
+
+
+def _source_family_tokens_from_item(item: Dict) -> set[str]:
+    tokens: set[str] = set()
+    for source_name in _blend_source_names_from_item(item):
+        for match in re.finditer(r"\((\d+)\)\.spawn_asset\((\d+)\)", source_name):
+            tokens.add(f"{match.group(1)}:{match.group(2)}")
+        stripped = re.sub(r"^[A-Za-z_]+Factory", "Factory", source_name)
+        stripped = _strip_blender_numeric_suffix(stripped)
+        if stripped:
+            tokens.add(stripped)
+    return tokens
+
+
+def _aabb_xy_intersection_ratio(a: Dict, b: Dict) -> float:
+    try:
+        ix = max(0.0, min(float(a["x_max"]), float(b["x_max"])) - max(float(a["x_min"]), float(b["x_min"])))
+        iy = max(0.0, min(float(a["y_max"]), float(b["y_max"])) - max(float(a["y_min"]), float(b["y_min"])))
+        intersection = ix * iy
+        va = max(1e-9, (float(a["x_max"]) - float(a["x_min"])) * (float(a["y_max"]) - float(a["y_min"])))
+        vb = max(1e-9, (float(b["x_max"]) - float(b["x_min"])) * (float(b["y_max"]) - float(b["y_min"])))
+    except Exception:
+        return 0.0
+    return intersection / max(min(va, vb), 1e-9)
+
+
+def _aabb_intersection_ratio(a: Dict, b: Dict) -> float:
+    try:
+        ix = max(0.0, min(float(a["x_max"]), float(b["x_max"])) - max(float(a["x_min"]), float(b["x_min"])))
+        iy = max(0.0, min(float(a["y_max"]), float(b["y_max"])) - max(float(a["y_min"]), float(b["y_min"])))
+        iz = max(0.0, min(float(a["z_max"]), float(b["z_max"])) - max(float(a["z_min"]), float(b["z_min"])))
+        intersection = ix * iy * iz
+        va = max(
+            1e-9,
+            (float(a["x_max"]) - float(a["x_min"]))
+            * (float(a["y_max"]) - float(a["y_min"]))
+            * (float(a["z_max"]) - float(a["z_min"])),
+        )
+        vb = max(
+            1e-9,
+            (float(b["x_max"]) - float(b["x_min"]))
+            * (float(b["y_max"]) - float(b["y_min"]))
+            * (float(b["z_max"]) - float(b["z_min"])),
+        )
+    except Exception:
+        return 0.0
+    return intersection / max(min(va, vb), 1e-9)
+
+
+def _duplicate_semantics_compatible(a: Dict, b: Dict) -> bool:
+    ga = _item_semantic_group(a)
+    gb = _item_semantic_group(b)
+    if not ga or not gb:
+        return True
+    if ga == gb:
+        return True
+    light_groups = {"lamp_ceiling", "lamp_table", "lamp_floor", "lamp_wall"}
+    return ga in light_groups and gb in light_groups
+
+
 def _find_duplicate_render_item_ids(items: List[Dict]) -> List[str]:
+    duplicate_set: set[str] = set()
+    replacement_sources: Dict[str, str] = {}
+    replacement_items: List[Tuple[str, Dict, Dict]] = []
+    replacement_beds: List[Tuple[str, Dict, Dict, set[str]]] = []
+
+    for item in items:
+        if not isinstance(item, dict) or not _is_replacement_render_item(item):
+            continue
+        item_id = str(item.get("id") or "").strip()
+        if not item_id:
+            continue
+        aabb = item.get("aabb") or item.get("bbox") or {}
+        if isinstance(aabb, dict):
+            replacement_items.append((item_id, item, aabb))
+            if _is_replacement_bed_item(item):
+                replacement_beds.append((item_id, item, aabb, _source_family_tokens_from_item(item)))
+        for source_name in _blend_source_names_from_item(item):
+            replacement_sources[source_name] = item_id
+
     seen: List[Tuple[str, Dict, str]] = []
-    duplicates: List[str] = []
     for item in items:
         if not isinstance(item, dict):
             continue
         item_id = str(item.get("id") or "").strip()
         if not item_id:
             continue
+        is_replacement = _is_replacement_render_item(item)
+        if not is_replacement:
+            source_names = _blend_source_names_from_item(item)
+            if any(replacement_sources.get(source_name) for source_name in source_names):
+                duplicate_set.add(item_id)
+                continue
         aabb = item.get("aabb") or item.get("bbox") or {}
         if not isinstance(aabb, dict):
             continue
+        if not is_replacement:
+            if _is_bed_companion_item(item):
+                family_tokens = _source_family_tokens_from_item(item)
+                for _bed_id, _bed_item, bed_aabb, bed_tokens in replacement_beds:
+                    same_source_family = bool(family_tokens and bed_tokens and family_tokens.intersection(bed_tokens))
+                    same_footprint = _aabb_xy_intersection_ratio(aabb, bed_aabb) >= 0.55
+                    if same_source_family or same_footprint:
+                        duplicate_set.add(item_id)
+                        break
+                if item_id in duplicate_set:
+                    continue
+            superseded = False
+            for _replacement_id, replacement_item, replacement_aabb in replacement_items:
+                if not _duplicate_semantics_compatible(item, replacement_item):
+                    continue
+                if _aabb_nearly_identical(aabb, replacement_aabb) or _aabb_intersection_ratio(aabb, replacement_aabb) >= 0.72:
+                    duplicate_set.add(item_id)
+                    superseded = True
+                    break
+            if superseded:
+                continue
         key = _duplicate_render_item_key(item)
         if not key.strip("|"):
             continue
         is_duplicate = False
         for prev_key, prev_aabb, _prev_id in seen:
             if prev_key == key and _aabb_nearly_identical(aabb, prev_aabb):
-                duplicates.append(item_id)
+                duplicate_set.add(item_id)
                 is_duplicate = True
                 break
         if not is_duplicate:
             seen.append((key, aabb, item_id))
-    return duplicates
+    return sorted(duplicate_set)
 
 
 def _item_name(it: dict) -> str:
@@ -3087,6 +3446,74 @@ def _is_placeholder_image(img: Optional[bpy.types.Image]) -> bool:
     return False
 
 
+def _image_has_real_pixels(img: Optional[bpy.types.Image]) -> bool:
+    if img is None or _is_placeholder_image(img):
+        return False
+    try:
+        if getattr(img, "packed_file", None) is not None:
+            return True
+    except Exception:
+        pass
+    try:
+        if str(getattr(img, "source", "") or "").upper() in {"GENERATED", "VIEWER"} and getattr(img, "size", (0, 0))[0] > 0:
+            return True
+    except Exception:
+        pass
+    fp = str(getattr(img, "filepath", "") or getattr(img, "filepath_raw", "") or "").strip()
+    if fp:
+        try:
+            return os.path.isfile(bpy.path.abspath(fp))
+        except Exception:
+            return os.path.isfile(fp)
+    try:
+        return bool(getattr(img, "has_data", False)) and getattr(img, "size", (0, 0))[0] > 0
+    except Exception:
+        return False
+
+
+def _image_is_missing_file(img: Optional[bpy.types.Image]) -> bool:
+    if img is None:
+        return False
+    if _is_placeholder_image(img):
+        return True
+    return not _image_has_real_pixels(img)
+
+
+def _image_looks_non_color_texture(img: Optional[bpy.types.Image]) -> bool:
+    if img is None:
+        return False
+    text = " ".join(
+        str(part or "").lower()
+        for part in (
+            getattr(img, "name", ""),
+            getattr(img, "filepath", ""),
+            getattr(img, "filepath_raw", ""),
+        )
+    )
+    if any(
+        token in text
+        for token in (
+            "normal",
+            "roughness",
+            "metallic",
+            "metalness",
+            "ambientocclusion",
+            "ambient_occlusion",
+            "occlusion",
+            "displacement",
+            "height",
+            "bump",
+            "opacity",
+            "alpha",
+            "specular",
+            "gloss",
+        )
+    ):
+        return True
+    stem = Path(str(getattr(img, "filepath", "") or getattr(img, "name", "") or "")).stem.lower()
+    return bool(re.search(r"(^|[_\-.])(n|nor|norm|normal|r|rough|roughness|m|metal|metallic|ao|h|height|bump|disp|opacity|alpha)([_\-.]|$)", stem))
+
+
 def _socket_chain_has_real_image(socket) -> bool:
     if socket is None or not getattr(socket, "is_linked", False):
         return False
@@ -3105,15 +3532,36 @@ def _socket_chain_has_real_image(socket) -> bool:
 
         if node.type == "TEX_IMAGE":
             img = getattr(node, "image", None)
-            if img is None or _is_placeholder_image(img):
-                continue
-            try:
-                if getattr(img, "size", (0, 0))[0] > 0:
-                    return True
-            except Exception:
-                pass
-            fp = getattr(img, "filepath", "") or getattr(img, "filepath_raw", "") or ""
-            if fp:
+            if _image_has_real_pixels(img):
+                return True
+
+        for inp in getattr(node, "inputs", []):
+            if inp.is_linked:
+                for link in inp.links:
+                    stack.append(link.from_node)
+
+    return False
+
+
+def _socket_chain_has_real_color_image(socket) -> bool:
+    if socket is None or not getattr(socket, "is_linked", False):
+        return False
+
+    visited = set()
+    stack = [link.from_node for link in socket.links]
+
+    while stack:
+        node = stack.pop()
+        if node is None:
+            continue
+        ptr = node.as_pointer()
+        if ptr in visited:
+            continue
+        visited.add(ptr)
+
+        if node.type == "TEX_IMAGE":
+            img = getattr(node, "image", None)
+            if _image_has_real_pixels(img) and not _image_looks_non_color_texture(img):
                 return True
 
         for inp in getattr(node, "inputs", []):
@@ -3450,7 +3898,99 @@ def _material_has_effective_basecolor_texture(mat: bpy.types.Material) -> bool:
     if base_input is None or not base_input.is_linked:
         return False
 
-    return _socket_chain_has_real_image(base_input)
+    return _socket_chain_has_real_color_image(base_input)
+
+
+def _socket_chain_has_missing_image(socket) -> bool:
+    if socket is None or not getattr(socket, "is_linked", False):
+        return False
+    visited = set()
+    stack = [link.from_node for link in socket.links]
+    while stack:
+        node = stack.pop()
+        if node is None:
+            continue
+        ptr = node.as_pointer()
+        if ptr in visited:
+            continue
+        visited.add(ptr)
+        if node.type == "TEX_IMAGE" and _image_is_missing_file(getattr(node, "image", None)):
+            return True
+        for inp in getattr(node, "inputs", []):
+            if inp.is_linked:
+                for link in inp.links:
+                    stack.append(link.from_node)
+    return False
+
+
+def _material_has_missing_basecolor_texture(mat: bpy.types.Material) -> bool:
+    if not mat or not getattr(mat, "use_nodes", False) or not mat.node_tree:
+        return False
+    bsdf = next((n for n in mat.node_tree.nodes if n.type == "BSDF_PRINCIPLED"), None)
+    if bsdf is None:
+        return False
+    base_input = bsdf.inputs.get("Base Color")
+    return bool(base_input and base_input.is_linked and _socket_chain_has_missing_image(base_input))
+
+
+def _material_looks_magenta_missing(mat: bpy.types.Material) -> bool:
+    try:
+        r, g, b, _a = [float(x) for x in mat.diffuse_color[:4]]
+    except Exception:
+        return False
+    return r > 0.62 and b > 0.62 and g < 0.38
+
+
+def _make_neutral_missing_texture_material() -> bpy.types.Material:
+    mat = bpy.data.materials.get("MAT_CGS_MISSING_TEXTURE_NEUTRAL_GRAY")
+    if mat is None:
+        mat = bpy.data.materials.new("MAT_CGS_MISSING_TEXTURE_NEUTRAL_GRAY")
+    mat.diffuse_color = (0.62, 0.64, 0.65, 1.0)
+    mat.use_nodes = True
+    if mat.node_tree:
+        nodes = mat.node_tree.nodes
+        links = mat.node_tree.links
+        nodes.clear()
+        out = nodes.new("ShaderNodeOutputMaterial")
+        bsdf = nodes.new("ShaderNodeBsdfPrincipled")
+        try:
+            bsdf.inputs["Base Color"].default_value = (0.62, 0.64, 0.65, 1.0)
+            bsdf.inputs["Metallic"].default_value = 0.12
+            bsdf.inputs["Roughness"].default_value = 0.48
+        except Exception:
+            pass
+        try:
+            links.new(bsdf.outputs["BSDF"], out.inputs["Surface"])
+        except Exception:
+            pass
+    return mat
+
+
+def _replace_missing_texture_materials(objects: Optional[List[bpy.types.Object]] = None) -> int:
+    neutral = _make_neutral_missing_texture_material()
+    changed = 0
+    roots = objects if objects is not None else list(bpy.data.objects)
+    seen: set[int] = set()
+    for root in roots:
+        for obj in _iter_mesh_children(root):
+            ptr = obj.as_pointer()
+            if ptr in seen:
+                continue
+            seen.add(ptr)
+            me = getattr(obj, "data", None)
+            mats = getattr(me, "materials", None) if me else None
+            if not mats:
+                continue
+            for idx, mat in enumerate(list(mats)):
+                if mat is None:
+                    continue
+                if _material_has_effective_basecolor_texture(mat):
+                    continue
+                if not (_material_has_missing_basecolor_texture(mat) or _material_looks_magenta_missing(mat)):
+                    continue
+                mats[idx] = neutral
+                changed += 1
+    return changed
 
 
 def _has_loaded_textures(parent: bpy.types.Object) -> bool:
@@ -4133,6 +4673,106 @@ def _procedural_requirement_role(item: Dict) -> str:
     if "стол" in text:
         return "table"
     return ""
+
+
+def _is_procedural_flat_ceiling_light_item(item: Dict) -> bool:
+    meta = item.get("meta") if isinstance(item.get("meta"), dict) else {}
+    asset = item.get("asset") if isinstance(item.get("asset"), dict) else {}
+    return bool(
+        asset.get("kind") == "procedural_flat_ceiling_light"
+        or meta.get("procedural_lighting")
+        or meta.get("sanitary_flat_light")
+    )
+
+
+def _make_emission_material(name: str, rgba: Tuple[float, float, float, float], strength: float = 1.0) -> bpy.types.Material:
+    mat = bpy.data.materials.get(name)
+    if mat is None:
+        mat = bpy.data.materials.new(name)
+    mat.diffuse_color = rgba
+    mat.use_nodes = True
+    nt = mat.node_tree
+    nodes = nt.nodes
+    links = nt.links
+    nodes.clear()
+    out = nodes.new("ShaderNodeOutputMaterial")
+    emission = nodes.new("ShaderNodeEmission")
+    try:
+        emission.inputs["Color"].default_value = rgba
+        emission.inputs["Strength"].default_value = float(strength)
+    except Exception:
+        pass
+    links.new(emission.outputs["Emission"], out.inputs["Surface"])
+    return mat
+
+
+def _make_procedural_flat_ceiling_light_mesh(
+    *,
+    item: Dict,
+    aabb: Dict[str, float],
+    collection: bpy.types.Collection,
+    name: str,
+) -> Optional[bpy.types.Object]:
+    try:
+        (cx, cy, cz), (sx, sy, sz) = _aabb_to_center_size(aabb)
+    except Exception:
+        return None
+    radius = max(0.08, min(max(sx, sy) * 0.5, 0.28))
+    depth = max(0.018, min(float(sz or 0.045), 0.08))
+    root = bpy.data.objects.new(f"{name}_procedural_root", None)
+    root.empty_display_type = "SPHERE"
+    root.empty_display_size = radius
+    root.location = (cx, cy, cz)
+    collection.objects.link(root)
+    root["cgs_item_id"] = str(item.get("id") or "")
+    root["cgs_procedural_lighting"] = "flat_ceiling"
+
+    body_mat = _make_pbr_material(f"Mat_{name}_flat_light_body", PBRMaps(), tint_rgb=(0.88, 0.88, 0.84), tex_scale=1.0)
+    glow_mat = _make_emission_material(f"Mat_{name}_flat_light_emitter", (1.0, 0.88, 0.62, 1.0), strength=1.8)
+
+    try:
+        bpy.ops.mesh.primitive_cylinder_add(vertices=48, radius=radius, depth=depth, location=(cx, cy, cz))
+        body = bpy.context.object
+        if body is not None:
+            body.name = f"{name}_flat_plafond"
+            _unlink_from_all_collections(body)
+            collection.objects.link(body)
+            body.parent = root
+            body.matrix_parent_inverse = root.matrix_world.inverted()
+            _assign_material_to_object(body, body_mat)
+            body["cgs_item_id"] = str(item.get("id") or "")
+        bpy.ops.mesh.primitive_cylinder_add(vertices=48, radius=radius * 0.84, depth=max(depth * 0.28, 0.006), location=(cx, cy, cz - depth * 0.52))
+        emitter = bpy.context.object
+        if emitter is not None:
+            emitter.name = f"{name}_flat_emitter"
+            _unlink_from_all_collections(emitter)
+            collection.objects.link(emitter)
+            emitter.parent = root
+            emitter.matrix_parent_inverse = root.matrix_world.inverted()
+            _assign_material_to_object(emitter, glow_mat)
+            emitter["cgs_item_id"] = str(item.get("id") or "")
+    except Exception as exc:
+        _log(True, f"⚠️ flat ceiling light mesh failed for {name}: {exc}")
+
+    try:
+        light_data = bpy.data.lights.new(f"{name}_flat_area_light", "AREA")
+        light_data.energy = 220.0
+        light_data.size = max(radius * 2.8, 0.45)
+        light = bpy.data.objects.new(f"{name}_flat_area_light", light_data)
+        collection.objects.link(light)
+        light.location = (cx, cy, cz - depth * 0.8)
+        light.parent = root
+        light.matrix_parent_inverse = root.matrix_world.inverted()
+        light.hide_select = True
+        light.hide_viewport = True
+        light["cgs_item_id"] = str(item.get("id") or "")
+        light["cgs_procedural_lighting"] = "flat_ceiling_source"
+    except Exception:
+        pass
+
+    root["cgs_placement_score"] = 0.0
+    root["cgs_placement_confidence"] = "high"
+    return root
 
 
 def _is_procedural_requirement_item(item: Dict) -> bool:
@@ -5363,6 +6003,7 @@ def place_in_aabb(
     semantic_group: str = "",
     snap_to_ceiling: bool = False,
     ceiling_offset: float = 0.0,
+    lock_rotation: bool = False,
 ) -> Optional[bpy.types.Object]:
     objs, dropped_material_previews = _drop_material_preview_meshes(objs)
     if dropped_material_previews:
@@ -5573,7 +6214,8 @@ def place_in_aabb(
     best_state: Optional[Tuple[float, mathutils.Vector, mathutils.Euler, float]] = None
     best_score = float("inf")
     last_failure_reason = "no_rotation_candidates"
-    for candidate_rotation in _rotation_candidates_for_semantic_group(rotation_deg_engine, semantic_group):
+    rotation_candidates = [float(rotation_deg_engine or 0.0) % 360.0] if lock_rotation else _rotation_candidates_for_semantic_group(rotation_deg_engine, semantic_group)
+    for candidate_rotation in rotation_candidates:
         parent.location = (0.0, 0.0, 0.0)
         parent.scale = (1.0, 1.0, 1.0)
         parent.rotation_euler = (0.0, 0.0, math.radians(float(candidate_rotation or 0.0)))
@@ -5682,8 +6324,14 @@ def build_scene(
         items = data.get("placements") or data.get("items") or []
     items = [item for item in items if isinstance(item, dict)]
     skipped_duplicate_item_ids = _find_duplicate_render_item_ids(items)
+    skipped_duplicate_items: List[Dict] = []
     if skipped_duplicate_item_ids:
         skipped_set = set(skipped_duplicate_item_ids)
+        skipped_duplicate_items = [
+            item
+            for item in items
+            if str(item.get("id") or "").strip() in skipped_set
+        ]
         items = [item for item in items if str(item.get("id") or "").strip() not in skipped_set]
         print(f"[DBG] skipped duplicate render item(s): {', '.join(skipped_duplicate_item_ids)}")
     items_by_id: Dict[str, Dict] = {
@@ -5700,6 +6348,15 @@ def build_scene(
     supplier_reuse_size_index = _build_supplier_reuse_size_index(items)
     hidden_reference_sources: set[str] = set()
     reference_light_fixture_roots = _collect_reference_light_fixture_roots() if use_reference_scene else []
+    has_declared_ceiling_light_items = any(
+        isinstance(item, dict)
+        and (_item_semantic_group(item) == "lamp_ceiling" or _is_procedural_flat_ceiling_light_item(item))
+        for item in items
+    )
+    hidden_reference_light_fixture_count = 0
+    if use_reference_scene and reference_light_fixture_roots and has_declared_ceiling_light_items and not overlay_bbox_only:
+        for root in reference_light_fixture_roots:
+            hidden_reference_light_fixture_count += _hide_object_family(root)
     item_actual_aabbs: Dict[str, Dict[str, float]] = {}
     item_roots: Dict[str, bpy.types.Object] = {}
     item_issue_reasons: Dict[str, List[str]] = {}
@@ -5708,6 +6365,15 @@ def build_scene(
     removed_bbox_helper_count = 0
     if use_reference_scene and not (draw_aabb or overlay_bbox_only):
         removed_bbox_helper_count += _remove_bbox_helper_objects()
+    hidden_skipped_duplicate_reference_count = 0
+    if use_reference_scene and skipped_duplicate_items and not overlay_bbox_only:
+        for skipped_item in skipped_duplicate_items:
+            for source_name in _blend_source_names_from_item(skipped_item):
+                source_obj = _get_scene_source_object(source_name)
+                if source_obj is None:
+                    continue
+                hidden_skipped_duplicate_reference_count += _hide_object_family(source_obj)
+                break
     functional_light_count = 0
 
     room_data_for_build = data if _has_room_spec(data) else _room_spec_from_bounds(
@@ -5823,6 +6489,9 @@ def build_scene(
             use_reference_scene
             and meta.get("supplier_binding_applied")
             and source_blend_name
+            and not meta.get("ceiling_light_position_repaired")
+            and not meta.get("supplier_light_position_normalized")
+            and not meta.get("ceiling_supplier_coverage_normalized")
         )
         semantic_group = _item_semantic_group(it)
         mount_mode = _item_mount_mode(it)
@@ -5880,11 +6549,39 @@ def build_scene(
         tint_rgb = _supplier_candidate_tint_rgb(it, fallback_name=str(name))
         asset = _item_asset_dict(it)
         asset_kind = str((asset.get("kind") or "")).strip()
+        move_reference_source_to_item_aabb = bool(
+            supplier_reanchored_support
+            or (
+                is_ceiling_item
+                and (
+                    meta.get("ceiling_light_position_repaired")
+                    or meta.get("supplier_light_position_normalized")
+                    or meta.get("ceiling_supplier_coverage_normalized")
+                )
+            )
+        )
 
         placed_ok = False
         using_reference_object = False
 
         if not overlay_bbox_only:
+            if _is_procedural_flat_ceiling_light_item(it):
+                parent = _make_procedural_flat_ceiling_light_mesh(
+                    item=it,
+                    aabb=aabb_eng,
+                    collection=coll_items,
+                    name=name,
+                )
+                if parent is not None:
+                    placed_ok = True
+                    if item_id:
+                        item_roots[item_id] = parent
+                        actual_aabb = _aabb_from_object_family_root(parent)
+                        if actual_aabb is not None:
+                            item_actual_aabbs[item_id] = actual_aabb
+                if placed_ok:
+                    continue
+
             if _is_procedural_requirement_item(it):
                 parent = _make_procedural_requirement_mesh(
                     item=it,
@@ -6063,6 +6760,10 @@ def build_scene(
                         semantic_group=semantic_group,
                         snap_to_ceiling=is_ceiling_item,
                         ceiling_offset=0.0,
+                        lock_rotation=bool(
+                            (semantic_group in {"chair", "armchair"} and str(meta.get("affordance") or "").strip().lower() == "table_chair")
+                            or (semantic_group == "bed" and bool(meta.get("bed_headboard_repaired")))
+                        ),
                     )
                     if parent is None:
                         continue
@@ -6097,7 +6798,7 @@ def build_scene(
 
                     if source_scene_obj is not None and source_blend_name not in hidden_reference_sources:
                         shared_items = source_name_to_items.get(source_blend_name) or []
-                        can_hide_source = len(shared_items) <= 1 or all(
+                        can_hide_source = bool(meta.get("supplier_binding_applied")) or len(shared_items) <= 1 or all(
                             _item_has_existing_mesh_file(shared_it, json_dir)
                             for shared_it in shared_items
                         )
@@ -6167,6 +6868,15 @@ def build_scene(
                     using_reference_object = True
                     placed_ok = True
                     print(f"[DBG] supplier mesh fallback to reference scene object for {name}: {source_blend_name}")
+                    _show_object_family(source_scene_obj)
+                    if move_reference_source_to_item_aabb:
+                        moved = _move_object_family_to_target_aabb(
+                            source_scene_obj,
+                            aabb_eng,
+                            align_bottom=not is_ceiling_item,
+                        )
+                        if not moved:
+                            placed_ok = False
                     if item_id:
                         item_roots[item_id] = source_scene_obj
                         actual_aabb = _aabb_from_object_family_root(source_scene_obj)
@@ -6177,11 +6887,12 @@ def build_scene(
             elif source_scene_obj is not None:
                 using_reference_object = True
                 placed_ok = True
-                if supplier_reanchored_support:
+                _show_object_family(source_scene_obj)
+                if move_reference_source_to_item_aabb:
                     moved = _move_object_family_to_target_aabb(
                         source_scene_obj,
                         aabb_eng,
-                        align_bottom=True,
+                        align_bottom=not is_ceiling_item,
                     )
                     if not moved:
                         placed_ok = False
@@ -6206,7 +6917,7 @@ def build_scene(
                 _add_aabb_label(aabb_eng, name, coll_items)
 
     has_supplier_ceiling_light_replacements = any(
-        isinstance(item, dict) and _is_supplier_light_replacement_item(item)
+        isinstance(item, dict) and (_is_supplier_light_replacement_item(item) or _is_procedural_flat_ceiling_light_item(item))
         for item in items
     )
     if use_reference_scene and reference_light_fixture_roots and not has_supplier_ceiling_light_replacements:
@@ -6414,6 +7125,8 @@ def build_scene(
         "removed_non_mesh_import_objects": removed_non_mesh_import_objects,
         "rejected_supplier_candidates": rejected_supplier_candidates,
         "removed_bbox_helper_count": int(removed_bbox_helper_count),
+        "hidden_reference_light_fixture_count": int(hidden_reference_light_fixture_count),
+        "hidden_skipped_duplicate_reference_count": int(hidden_skipped_duplicate_reference_count),
         "functional_light_count": int(functional_light_count),
         "used_alternative_candidate_count": sum(
             1

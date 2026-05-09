@@ -90,6 +90,85 @@ def _get_or_create_material(
     return mat
 
 
+def _get_or_create_emission_material(
+    name: str,
+    color: tuple[float, float, float, float],
+    strength: float,
+):
+    bpy = _require_bpy()
+    if name in bpy.data.materials:
+        return bpy.data.materials[name]
+    mat = bpy.data.materials.new(name)
+    mat.diffuse_color = color
+    mat.use_nodes = True
+    nodes = mat.node_tree.nodes
+    links = mat.node_tree.links
+    nodes.clear()
+    out = nodes.new(type="ShaderNodeOutputMaterial")
+    emission = nodes.new(type="ShaderNodeEmission")
+    emission.inputs["Color"].default_value = color
+    emission.inputs["Strength"].default_value = float(strength)
+    links.new(emission.outputs["Emission"], out.inputs["Surface"])
+    return mat
+
+
+def _material_looks_magenta_missing(mat: Any) -> bool:
+    try:
+        r, g, b, _a = [float(x) for x in mat.diffuse_color[:4]]
+    except Exception:
+        return False
+    return r >= 0.72 and b >= 0.72 and g <= 0.38
+
+
+def _image_path_missing(image: Any) -> bool:
+    if image is None:
+        return False
+    try:
+        if getattr(image, "packed_file", None) is not None:
+            return False
+        raw = str(getattr(image, "filepath", "") or getattr(image, "filepath_raw", "") or "").strip()
+        if not raw:
+            return False
+        bpy = _require_bpy()
+        path = Path(bpy.path.abspath(raw)).expanduser()
+        return not path.exists()
+    except Exception:
+        return False
+
+
+def _material_has_missing_texture(mat: Any) -> bool:
+    try:
+        node_tree = getattr(mat, "node_tree", None)
+        if node_tree is None:
+            return False
+        return any(
+            getattr(node, "type", None) == "TEX_IMAGE" and _image_path_missing(getattr(node, "image", None))
+            for node in node_tree.nodes
+        )
+    except Exception:
+        return False
+
+
+def _replace_missing_texture_materials(objects: list[Any]) -> int:
+    bpy = _require_bpy()
+    neutral = _get_or_create_material("kitchen_missing_texture_neutral_silver", (0.62, 0.64, 0.65, 1.0))
+    changed = 0
+    for obj in objects:
+        if getattr(obj, "type", None) != "MESH" or getattr(obj, "data", None) is None:
+            continue
+        for slot in obj.material_slots:
+            mat = getattr(slot, "material", None)
+            if mat is None:
+                continue
+            if not (_material_has_missing_texture(mat) or _material_looks_magenta_missing(mat)):
+                continue
+            slot.material = neutral
+            changed += 1
+    if changed:
+        bpy.context.view_layer.update()
+    return changed
+
+
 def _create_box(name: str, center: tuple[float, float, float], size: tuple[float, float, float], material=None, collection=None):
     bpy = _require_bpy()
     bpy.ops.mesh.primitive_cube_add(size=1.0, location=center)
@@ -765,7 +844,7 @@ def _filter_imported_appliance_objects(
 def _bbox_world(objects: list[Any]) -> tuple[tuple[float, float, float], tuple[float, float, float]] | None:
     corners: list[tuple[float, float, float]] = []
     for obj in objects:
-        if not hasattr(obj, "bound_box"):
+        if getattr(obj, "type", None) != "MESH" or getattr(obj, "data", None) is None:
             continue
         for corner in obj.bound_box:
             world = obj.matrix_world @ __import__("mathutils").Vector(corner)
@@ -967,6 +1046,8 @@ def _fit_objects_to_box(
     scaled_center = tuple((mins[i] + maxs[i]) / 2.0 for i in range(3))
     wrapper.location += vector_cls((center[0] - scaled_center[0], center[1] - scaled_center[1], center[2] - scaled_center[2]))
     wrapper.name = "kitchen_appliance_asset_root"
+    if wrapper not in objects:
+        objects.append(wrapper)
 
     return True
 
@@ -1094,6 +1175,8 @@ def _fit_objects_to_footprint(
         )
     )
     wrapper.name = "kitchen_appliance_asset_root"
+    if wrapper not in objects:
+        objects.append(wrapper)
     return True
 
 
@@ -1143,6 +1226,8 @@ def _fit_objects_to_footprint_top(
         )
     )
     wrapper.name = "kitchen_appliance_asset_root"
+    if wrapper not in objects:
+        objects.append(wrapper)
     return True
 
 
@@ -1537,6 +1622,7 @@ def _create_or_import_appliance(
             if not orientation_applied:
                 _apply_asset_import_orientation(asset, objects, layout_orientation)
             _sanitize_imported_appliance_materials(role, objects)
+            _replace_missing_texture_materials(objects)
             for obj in objects:
                 obj.name = f"{name}_{obj.name}"
                 obj["kitchen_appliance_role"] = role
@@ -1571,6 +1657,7 @@ def _create_or_import_countertop_decor_asset(
             _apply_asset_import_orientation(asset, objects, layout_orientation)
             if _fit_mesh_objects_to_box_baked(objects, center, size, margin=0.90, compact_disconnected=True):
                 _snap_baked_mesh_objects_bottom_to_z(objects, bottom_z)
+                _replace_missing_texture_materials(objects)
                 for obj in objects:
                     obj.name = f"{name}_{obj.name}"
                     obj["kitchen_appliance_role"] = role
@@ -1926,6 +2013,61 @@ def _find_cooktop_cutout_center(
     return None
 
 
+def _create_under_cabinet_lighting(
+    module: dict[str, Any],
+    px: float,
+    py: float,
+    pz: float,
+    strip_mat,
+    collection,
+) -> list[Any]:
+    bpy = _require_bpy()
+    x = float(module.get("x_m", 0.0))
+    y = float(module.get("y_m", 0.0))
+    w = max(0.24, float(module.get("width_m", 0.6)))
+    d = max(0.16, float(module.get("depth_m", 0.32)))
+    z = float(module.get("z_m", 1.458))
+    orientation = module.get("orientation") or "x"
+    module_id = str(module.get("id") or "upper")
+    z_center = pz + z - 0.012
+    light_z = pz + z - 0.045
+    objects: list[Any] = []
+
+    if orientation == "y":
+        strip_center = (px + x + d - 0.045, py + y + w / 2.0, z_center)
+        strip_size = (0.032, max(0.18, w * 0.78), 0.012)
+        light_center = (px + x + d - 0.11, py + y + w / 2.0, light_z)
+        light_size = max(0.35, w * 0.82)
+        light_size_y = 0.46
+    else:
+        strip_center = (px + x + w / 2.0, py + y + d - 0.045, z_center)
+        strip_size = (max(0.18, w * 0.78), 0.032, 0.012)
+        light_center = (px + x + w / 2.0, py + y + d - 0.11, light_z)
+        light_size = max(0.35, w * 0.82)
+        light_size_y = 0.46
+
+    strip = _create_box(f"{module_id}_under_cabinet_led_strip", strip_center, strip_size, strip_mat, collection)
+    strip["kitchen_under_cabinet_lighting"] = True
+    objects.append(strip)
+
+    light_data = bpy.data.lights.new(f"{module_id}_under_cabinet_area_light_data", "AREA")
+    light_data.energy = 140.0
+    try:
+        light_data.shape = "RECTANGLE"
+        light_data.size = light_size
+        light_data.size_y = light_size_y
+    except Exception:
+        light_data.size = max(light_size, light_size_y)
+    light = bpy.data.objects.new(f"{module_id}_under_cabinet_area_light", light_data)
+    collection.objects.link(light)
+    light.location = light_center
+    light.hide_select = True
+    light.hide_viewport = True
+    light["kitchen_under_cabinet_lighting"] = True
+    objects.append(light)
+    return objects
+
+
 def _create_kitchen_decor_item(
     assembly: dict[str, Any],
     item: dict[str, Any],
@@ -2049,6 +2191,7 @@ def build_kitchen_assembly_in_blender(
     dishwasher_mat = _get_or_create_material("kitchen_dishwasher_white", (0.86, 0.86, 0.84, 1.0))
     faucet_mat = _get_or_create_material("kitchen_faucet_chrome", (0.58, 0.60, 0.60, 1.0))
     decor_mat = _get_or_create_material("kitchen_decor_warm_neutral", (0.72, 0.62, 0.48, 1.0))
+    under_cabinet_light_mat = _get_or_create_emission_material("kitchen_under_cabinet_warm_led", (1.0, 0.82, 0.52, 1.0), 1.7)
     px, py, pz = assembly.get("position") or [0.0, 0.0, 0.0]
 
     def world(x: float, y: float, z: float) -> tuple[float, float, float]:
@@ -2531,6 +2674,8 @@ def build_kitchen_assembly_in_blender(
                 created.append(_create_box(f"{module.get('id')}_facade", world(x + d + 0.010, y + w / 2, z + h / 2), (0.020, w * 0.96, h * 0.96), facade_mat, collection))
             else:
                 created.append(_create_box(f"{module.get('id')}_facade", world(x + w / 2, y + d + 0.010, z + h / 2), (w * 0.96, 0.020, h * 0.96), facade_mat, collection))
+        if not module.get("disable_under_cabinet_lighting"):
+            created.extend(_create_under_cabinet_lighting(module, px, py, pz, under_cabinet_light_mat, collection))
     for item in assembly.get("decor_items") or []:
         created.extend(_create_kitchen_decor_item(assembly, item, px, py, pz, decor_mat, faucet_mat, collection))
     _apply_assembly_rotation(created, assembly, (px, py, pz))

@@ -71,7 +71,33 @@ def _floor_material_scene_payload(selection: dict[str, Any]) -> dict[str, Any]:
         "plank_width_mm": material.get("plank_width_mm"),
         "thickness_mm": material.get("thickness_mm"),
         "class": material.get("class"),
+        "price": material.get("price"),
+        "price_currency": material.get("price_currency") or "RUB",
+        "price_unit": material.get("price_unit") or material.get("unit") or _raw_property(material, ("Единица измерения", "Цена указана")),
+        "package_area_m2": _floor_package_area_m2(material),
     }
+
+
+def _raw_property(material: dict[str, Any], keys: tuple[str, ...]) -> Any:
+    raw = material.get("raw_properties")
+    if not isinstance(raw, dict):
+        raw = material.get("properties")
+    if not isinstance(raw, dict):
+        return None
+    for key in keys:
+        if key in raw:
+            return raw[key]
+    return None
+
+
+def _floor_package_area_m2(material: dict[str, Any]) -> float | None:
+    direct = _as_float(material.get("package_area_m2")) or _as_float(material.get("pack_area_m2"))
+    if direct and direct > 0:
+        return round(direct, 4)
+    raw = _as_float(_raw_property(material, ("Площадь упаковки", "Площадь в упаковке", "Площадь")))
+    if raw and raw > 0:
+        return round(raw, 4)
+    return None
 
 
 def _infer_floor_tile_size_m(material: dict[str, Any]) -> float:
@@ -88,7 +114,8 @@ def _as_float(value: Any) -> float | None:
     try:
         if value is None or value == "":
             return None
-        return float(value)
+        text = str(value).replace(",", ".")
+        return float("".join(ch for ch in text if ch.isdigit() or ch in ".-"))
     except Exception:
         return None
 
