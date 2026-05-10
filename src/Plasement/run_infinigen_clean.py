@@ -371,6 +371,11 @@ def infer_room_semantic(room_data: Dict[str, Any]) -> str:
     room = room_data.get("room", room_data)
     explicit_map = {
         "bedroom": "bedroom",
+        # Treat a studio as a room that must have a sleeping zone. The
+        # requirements pass can add living/dining furniture later, but if the
+        # base placement starts as a living room it can omit the bed entirely.
+        "studio": "bedroom",
+        "studio apartment": "bedroom",
         "living room": "living-room",
         "livingroom": "living-room",
         "dining room": "dining-room",

@@ -21,7 +21,7 @@ ROOM_TYPE_ALIASES = {
     "bedroom": "bedroom",
     "living": "living_room",
     "living_room": "living_room",
-    "studio": "living_room",
+    "studio": "studio",
     "kitchen": "kitchen",
     "bathroom": "bathroom",
     "toilet": "toilet",
@@ -35,6 +35,7 @@ ROOM_TYPE_ALIASES = {
 
 FALLBACK_PROMPTS = {
     "hallway": "Design a compact modern hallway. Keep the route from the entrance to all room doors clear. Required items: wardrobe, shoe cabinet, mirror.",
+    "studio": "Design a compact modern studio apartment room. Required items: a real bed or sleeping zone, a desk or dining table with chair, storage, and functional lighting. Keep circulation clear and use a sofa only if it does not replace the bed.",
 }
 
 
@@ -92,6 +93,8 @@ def prompt_room_type(summary: dict[str, Any]) -> str:
     source = normalize_room_type(str(summary.get("source_room_type") or ""))
     if source in {"toilet", "wc", "restroom"}:
         return "toilet"
+    if source == "studio":
+        return "studio"
     return normalize_room_type(str(summary.get("room_type") or ""))
 
 

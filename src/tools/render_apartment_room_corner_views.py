@@ -116,6 +116,21 @@ def camera_local_corners(poly: list[tuple[float, float]]) -> list[tuple[str, tup
     center = polygon_centroid(poly)
     width = max(box["x_max"] - box["x_min"], 0.1)
     depth = max(box["y_max"] - box["y_min"], 0.1)
+    if min(width, depth) < 1.80 or width * depth < 4.5:
+        radius_x = max(0.18, width * 0.28)
+        radius_y = max(0.18, depth * 0.28)
+        raw = [
+            ("corner_00_sw", (center[0] - radius_x, center[1] - radius_y)),
+            ("corner_01_se", (center[0] + radius_x, center[1] - radius_y)),
+            ("corner_02_ne", (center[0] + radius_x, center[1] + radius_y)),
+            ("corner_03_nw", (center[0] - radius_x, center[1] + radius_y)),
+        ]
+        out: list[tuple[str, tuple[float, float]]] = []
+        for name, candidate in raw:
+            if not point_in_polygon(candidate, poly, eps=0.03):
+                candidate = move_toward(candidate, center, math.hypot(candidate[0] - center[0], candidate[1] - center[1]) * 0.65)
+            out.append((name, candidate))
+        return out
     inset = min(0.48, max(0.18, min(width, depth) * 0.16))
     raw = [
         ("corner_00_sw", (box["x_min"], box["y_min"])),
@@ -351,9 +366,16 @@ def main() -> None:
             continue
 
         ceiling = float(summary.get("ceiling_height_m") or 2.8)
+        box = polygon_bbox(poly)
+        room_width = max(box["x_max"] - box["x_min"], 0.1)
+        room_depth = max(box["y_max"] - box["y_min"], 0.1)
+        narrow_room = min(room_width, room_depth) < 1.80 or room_width * room_depth < 4.5
         centroid_local = polygon_centroid(poly)
         camera_z = max(1.85, ceiling - 0.18)
         target_z = min(max(1.05, ceiling * 0.42), 1.35)
+        if narrow_room:
+            camera_z = max(ceiling + 0.95, 3.35)
+            target_z = min(max(0.80, ceiling * 0.32), 1.05)
         target_world = transform_local_point(centroid_local, target_z, frame, apt_min)
         target.location = target_world
         ensure_fill_light(scene, target_world, ceiling)

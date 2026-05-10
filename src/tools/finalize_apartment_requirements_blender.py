@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -94,6 +95,19 @@ def room_output_blend(apt_dir: Path, room_id: str, room_type: str, mode: str) ->
     return pipe / "scene_infinigen_clean_supplier.requirements.blend"
 
 
+def room_blend_needs_rebuild(scene_json: Path, blend_path: Path) -> tuple[bool, str]:
+    if not blend_path.is_file():
+        return True, "missing_room_blend"
+    if not scene_json.is_file():
+        return False, "missing_scene_requirements"
+    try:
+        if scene_json.stat().st_mtime > blend_path.stat().st_mtime + 0.5:
+            return True, "scene_requirements_newer_than_room_blend"
+    except OSError:
+        return False, "stat_failed"
+    return False, "up_to_date"
+
+
 def purge_orphans() -> None:
     for _ in range(3):
         try:
@@ -111,6 +125,20 @@ def run_with_argv(fn, argv: list[str]) -> None:
         fn()
     finally:
         sys.argv = old
+
+
+def run_blender_script_subprocess(script: Path, argv: list[str]) -> None:
+    blender = Path(str(getattr(bpy.app, "binary_path", "") or "/Applications/Blender.app/Contents/MacOS/Blender"))
+    cmd = [
+        str(blender),
+        "--factory-startup",
+        "-b",
+        "--python",
+        str(script),
+        "--",
+        *argv,
+    ]
+    subprocess.run(cmd, check=True)
 
 
 def run_step(name: str, steps: list[dict[str, Any]], fn) -> Any:
@@ -238,8 +266,12 @@ def process_apartment(
         room_id = str(entry.get("room_id") or "")
         room_type = str(entry.get("room_type") or entry.get("prompt_room_type") or "")
         existing_blend = room_output_blend(apt_dir, room_id, room_type, mode)
-        if args.rebuild_rooms or not existing_blend.is_file():
-            room_reports.append(run_step(f"rebuild room {room_id}", steps, lambda entry=entry: rebuild_room(modules["builder"], project_root, apt_dir, mode, entry)))
+        scene_json = room_scene_path(apt_dir, room_id, mode)
+        needs_rebuild, rebuild_reason = room_blend_needs_rebuild(scene_json, existing_blend)
+        if args.rebuild_rooms or needs_rebuild:
+            report = run_step(f"rebuild room {room_id}", steps, lambda entry=entry: rebuild_room(modules["builder"], project_root, apt_dir, mode, entry))
+            report["rebuild_reason"] = "forced_rebuild_rooms" if args.rebuild_rooms else rebuild_reason
+            room_reports.append(report)
         else:
             room_reports.append(
                 {
@@ -247,7 +279,8 @@ def process_apartment(
                     "room_type": room_type,
                     "status": "reused_existing_room_blend",
                     "save_blend": str(existing_blend),
-                    "scene_json": str(room_scene_path(apt_dir, room_id, mode)),
+                    "scene_json": str(scene_json),
+                    "rebuild_reason": rebuild_reason,
                 }
             )
 
@@ -258,8 +291,8 @@ def process_apartment(
     run_step(
         "assemble apartment blend",
         steps,
-        lambda: run_with_argv(
-            modules["assemble"].main,
+        lambda: run_blender_script_subprocess(
+            project_root / "src" / "tools" / "assemble_apartment_blend.py",
             [
                 "--apt-dir",
                 str(apt_dir),
@@ -300,8 +333,8 @@ def process_apartment(
     run_step(
         "render room corner views",
         steps,
-        lambda: run_with_argv(
-            modules["corner"].main,
+        lambda: run_blender_script_subprocess(
+            project_root / "src" / "tools" / "render_apartment_room_corner_views.py",
             [
                 "--apt-dir",
                 str(apt_dir),

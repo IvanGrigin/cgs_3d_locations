@@ -2166,7 +2166,7 @@ def _add_functional_light_for_item(item: Dict, aabb: Dict[str, float], parent: O
 
     if semantic_group == "lamp_ceiling":
         light_type = "POINT"
-        energy = max(420.0, min(1100.0, 700.0 * footprint))
+        energy = max(900.0, min(1800.0, 900.0 + 420.0 * footprint))
         soft_size = max(0.35, min(1.25, footprint * 0.75))
         marker_radius = max(0.035, min(0.07, footprint * 0.05))
     elif semantic_group == "lamp_floor":
@@ -2191,6 +2191,7 @@ def _add_functional_light_for_item(item: Dict, aabb: Dict[str, float], parent: O
         light_obj["cgs_light_semantic_group"] = semantic_group
         light_obj.hide_select = True
         light_obj.hide_viewport = True
+        light_obj.hide_render = False
         if parent is not None:
             light_obj["cgs_light_fixture_parent"] = parent.name
         _add_emissive_marker(loc, marker_radius, f"{base_name}_Emitter")

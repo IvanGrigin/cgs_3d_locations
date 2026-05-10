@@ -38,6 +38,11 @@ try:
         run_blender_for_mode,
     )
     from .pipeline_scene_repair import add_scene_repair_arguments, maybe_repair_scene_json
+    from .topview_vlm_orientation_repair import (
+        collect_scene_objects as collect_topview_vlm_scene_objects,
+        filter_target_objects as filter_topview_vlm_target_objects,
+        run_topview_vlm_orientation_repair,
+    )
     from .pipeline.curtain_stage import (
         discover_supplier_curtain_models,
         discover_curtain_models,
@@ -50,6 +55,10 @@ try:
         repair_furniture_intersections_in_scene,
     )
     from .pipeline.kitchen_stage import apply_kitchen_stage_to_artifacts
+    from .pipeline.procedural_room_stage import (
+        add_procedural_room_arguments,
+        maybe_apply_procedural_room_stage,
+    )
     from .pipeline.flooring_stage import apply_flooring_to_scene, run_flooring_selection, write_json as write_flooring_json
     from .pipeline.wall_stage import apply_wall_material_to_scene_with_catalog, run_wall_selection, write_json as write_wall_json
     from .supplier_replacement_report import write_supplier_replacement_reports
@@ -96,6 +105,11 @@ except ImportError:
         run_blender_for_mode,
     )
     from pipeline_scene_repair import add_scene_repair_arguments, maybe_repair_scene_json
+    from topview_vlm_orientation_repair import (
+        collect_scene_objects as collect_topview_vlm_scene_objects,
+        filter_target_objects as filter_topview_vlm_target_objects,
+        run_topview_vlm_orientation_repair,
+    )
     from pipeline.curtain_stage import (
         discover_supplier_curtain_models,
         discover_curtain_models,
@@ -108,6 +122,10 @@ except ImportError:
         repair_furniture_intersections_in_scene,
     )
     from pipeline.kitchen_stage import apply_kitchen_stage_to_artifacts
+    from pipeline.procedural_room_stage import (
+        add_procedural_room_arguments,
+        maybe_apply_procedural_room_stage,
+    )
     from pipeline.flooring_stage import apply_flooring_to_scene, run_flooring_selection, write_json as write_flooring_json
     from pipeline.wall_stage import apply_wall_material_to_scene_with_catalog, run_wall_selection, write_json as write_wall_json
     from supplier_replacement_report import write_supplier_replacement_reports
@@ -760,6 +778,190 @@ def _mark_supplier_blender_skipped(variants: dict[str, Any], reason: str = "skip
         }
 
 
+def _topview_vlm_orientation_enabled(args: argparse.Namespace) -> bool:
+    provider = str(getattr(args, "topview_vlm_orientation_provider", "none") or "none").strip().lower()
+    review_json = str(getattr(args, "topview_vlm_orientation_review_json", "") or "").strip()
+    return bool(getattr(args, "topview_vlm_orientation_repair", False) or provider != "none" or review_json)
+
+
+def _resolve_blender_binary_for_topview(args: argparse.Namespace) -> str:
+    candidates = [
+        str(getattr(args, "blender", "") or "").strip(),
+        os.environ.get("BLENDER_PATH", ""),
+        "/Applications/Blender.app/Contents/MacOS/Blender",
+        "blender",
+    ]
+    for candidate in candidates:
+        if not candidate:
+            continue
+        path = Path(candidate).expanduser()
+        if path.is_file() and os.access(path, os.X_OK):
+            return str(path.resolve())
+        resolved = shutil.which(candidate)
+        if resolved:
+            return resolved
+    raise FileNotFoundError("Blender binary not found for top-view VLM render")
+
+
+def _topview_vlm_target_ids(scene_json_path: Path, args: argparse.Namespace) -> list[str]:
+    scene = json.loads(scene_json_path.read_text(encoding="utf-8"))
+    if not isinstance(scene, dict):
+        return []
+    refs = collect_topview_vlm_scene_objects(scene, max_objects=int(getattr(args, "topview_vlm_orientation_max_objects", 10000) or 10000))
+    targets = filter_topview_vlm_target_objects(
+        refs,
+        scope=str(getattr(args, "topview_vlm_orientation_scope", "chairs") or "chairs"),
+        include_armchairs=bool(getattr(args, "topview_vlm_include_armchairs", False)),
+    )
+    return [ref.object_id for ref in targets]
+
+
+def _render_topview_vlm_image(
+    *,
+    cfg_runtime: dict[str, Any],
+    args: argparse.Namespace,
+    run_dir: Path,
+    scene_json_path: Path,
+    tag: str,
+    highlight_item_ids: list[str],
+) -> dict[str, Any]:
+    inspection_blend = (run_dir / f"topview_vlm.{tag}.blend").resolve()
+    build_report = (run_dir / f"topview_vlm.{tag}.build_report.json").resolve()
+    topview_image = (run_dir / f"topview_vlm.{tag}.png").resolve()
+
+    build_cmd = [
+        sys.executable,
+        cfg_runtime["BLENDER_VIS_SCRIPT"],
+        "--json",
+        str(scene_json_path.resolve()),
+        "--background",
+        "--save-blend",
+        str(inspection_blend),
+        "--build-report",
+        str(build_report),
+        "--no-pack-assets",
+    ]
+    if getattr(args, "blender", None):
+        build_cmd += ["--blender", str(args.blender)]
+    if bool(getattr(args, "no_bbox_fallback", False)):
+        build_cmd.append("--no-bbox-fallback")
+    if highlight_item_ids:
+        build_cmd += ["--highlight-item-ids", ",".join(highlight_item_ids)]
+
+    print("👁️ topview VLM: build inspection blend")
+    subprocess.run(build_cmd, check=True)
+
+    blender_bin = _resolve_blender_binary_for_topview(args)
+    topview_script = (Path(__file__).resolve().parent / "tools" / "render_saved_blend_top_view.py").resolve()
+    render_cmd = [
+        blender_bin,
+        str(inspection_blend),
+        "-b",
+        "--python",
+        str(topview_script),
+        "--",
+        "--out",
+        str(topview_image),
+        "--azimuth-deg",
+        "-90.0",
+        "--elevation-deg",
+        str(float(getattr(args, "topview_vlm_elevation_deg", 80.0) or 80.0)),
+        "--radius-mult",
+        str(float(getattr(args, "topview_vlm_radius_mult", 0.55) or 0.55)),
+        "--lens",
+        str(float(getattr(args, "topview_vlm_lens", 32.0) or 32.0)),
+        "--resolution-x",
+        str(int(getattr(args, "topview_vlm_resolution_x", 1400) or 1400)),
+        "--resolution-y",
+        str(int(getattr(args, "topview_vlm_resolution_y", 1050) or 1050)),
+    ]
+    print("👁️ topview VLM: render top view")
+    subprocess.run(render_cmd, check=True)
+
+    if not bool(getattr(args, "topview_vlm_keep_inspection_blend", False)):
+        try:
+            inspection_blend.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+    return {
+        "topview_image": str(topview_image),
+        "inspection_blend": str(inspection_blend) if inspection_blend.is_file() else None,
+        "build_report": str(build_report) if build_report.is_file() else None,
+        "highlight_item_ids": highlight_item_ids,
+    }
+
+
+def _maybe_apply_topview_vlm_orientation_repair(
+    *,
+    cfg_runtime: dict[str, Any],
+    args: argparse.Namespace,
+    run_dir: Path,
+    scene_json_path: Path,
+    tag: str,
+) -> tuple[Path, dict[str, Any] | None]:
+    scene_json_path = scene_json_path.expanduser().resolve()
+    if not _topview_vlm_orientation_enabled(args):
+        return scene_json_path, None
+    if not scene_json_path.is_file():
+        return scene_json_path, {"skipped_reason": "scene_json_missing", "input_scene_json": str(scene_json_path)}
+
+    target_ids = _topview_vlm_target_ids(scene_json_path, args)
+    if not target_ids:
+        return scene_json_path, {
+            "skipped_reason": "no_target_objects",
+            "input_scene_json": str(scene_json_path),
+            "target_scope": str(getattr(args, "topview_vlm_orientation_scope", "chairs") or "chairs"),
+        }
+
+    topview_info = _render_topview_vlm_image(
+        cfg_runtime=cfg_runtime,
+        args=args,
+        run_dir=run_dir,
+        scene_json_path=scene_json_path,
+        tag=tag,
+        highlight_item_ids=target_ids,
+    )
+
+    out_scene = (run_dir / f"{scene_json_path.stem}.topview_vlm_{tag}.v1.json").resolve()
+    out_review = (run_dir / f"topview_vlm_orientation.{tag}.review.json").resolve()
+    out_report = (run_dir / f"topview_vlm_orientation.{tag}.report.json").resolve()
+    review_json = str(getattr(args, "topview_vlm_orientation_review_json", "") or "").strip()
+    provider = str(getattr(args, "topview_vlm_orientation_provider", "none") or "none").strip().lower()
+
+    print(f"👁️ topview VLM orientation repair [{tag}]: scope={getattr(args, 'topview_vlm_orientation_scope', 'chairs')}")
+    report = run_topview_vlm_orientation_repair(
+        scene_path=scene_json_path,
+        image_path=Path(str(topview_info["topview_image"])).expanduser().resolve(),
+        out_scene_path=out_scene,
+        out_review_path=out_review,
+        out_report_path=out_report,
+        provider=provider,
+        model=str(getattr(args, "topview_vlm_orientation_model", "") or "").strip() or None,
+        max_objects=int(getattr(args, "topview_vlm_orientation_max_objects", 10000) or 10000),
+        target_scope=str(getattr(args, "topview_vlm_orientation_scope", "chairs") or "chairs"),
+        include_armchairs=bool(getattr(args, "topview_vlm_include_armchairs", False)),
+        min_confidence=float(getattr(args, "topview_vlm_orientation_min_confidence", 0.70) or 0.70),
+        max_delta_deg=float(getattr(args, "topview_vlm_orientation_max_delta_deg", 180.0) or 180.0),
+        snap_step_deg=float(getattr(args, "topview_vlm_orientation_snap_step_deg", 90.0) or 90.0),
+        review_json_path=Path(review_json).expanduser().resolve() if review_json else None,
+        apply=not bool(getattr(args, "topview_vlm_orientation_no_apply", False)),
+    )
+    info = {
+        "tag": tag,
+        "input_scene_json": str(scene_json_path),
+        "output_scene_json": str(out_scene),
+        "review_json": str(out_review),
+        "report_json": str(out_report),
+        **topview_info,
+        "summary": report.get("summary"),
+        "counts": report.get("counts"),
+        "provider": provider,
+        "model": str(getattr(args, "topview_vlm_orientation_model", "") or "").strip() or None,
+    }
+    return out_scene, info
+
+
 def _run_supplier_blender_variants(
     *,
     cfg_runtime: dict[str, Any],
@@ -791,13 +993,27 @@ def _run_supplier_blender_variants(
             }
             continue
         try:
+            scene_path = Path(str(scene_v1)).expanduser().resolve()
+            repaired_scene_path, topview_repair_info = _maybe_apply_topview_vlm_orientation_repair(
+                cfg_runtime=cfg_runtime,
+                args=args,
+                run_dir=run_dir,
+                scene_json_path=scene_path,
+                tag=f"supplier.{mode_name}",
+            )
+            if topview_repair_info is not None:
+                info["topview_vlm_orientation_repair"] = topview_repair_info
+                rebind = info.setdefault("rebind", {})
+                if isinstance(rebind, dict) and topview_repair_info.get("output_scene_json"):
+                    rebind["scene_v1_before_topview_vlm_orientation"] = str(scene_path)
+                    rebind["scene_v1"] = str(repaired_scene_path)
             result = run_blender_for_mode(
                 cfg_runtime=cfg_runtime,
                 args=args,
                 room_path=effective_room_path,
                 run_dir=run_dir,
                 layout_mode=layout_mode,
-                scene_json_path=Path(str(scene_v1)).expanduser().resolve(),
+                scene_json_path=repaired_scene_path,
                 variant_suffix=f"supplier.{mode_name}",
             )
             blend_path = result.get("blend_path")
@@ -1911,6 +2127,14 @@ def run_pipeline_for_mode(
             prompt_text=effective_prompt_text,
             suffix="lego_gen",
         )
+        lego_artifacts = maybe_apply_procedural_room_stage(
+            args=args,
+            artifacts=lego_artifacts,
+            run_dir=run_dir,
+            prompt_text=effective_prompt_text,
+            manifest_path=manifest_path,
+            tag="lego_gen",
+        )
         lego_selection_stub = _build_layout_selection_stub_for_artifacts(
             artifacts=lego_artifacts,
             run_dir=run_dir,
@@ -2140,6 +2364,17 @@ def run_pipeline_for_mode(
             )
 
         if supplier_scene_for_render and supplier_scene_for_render.is_file() and not variants:
+            supplier_scene_for_render, topview_repair_info = _maybe_apply_topview_vlm_orientation_repair(
+                cfg_runtime=cfg_runtime,
+                args=args,
+                run_dir=run_dir,
+                scene_json_path=supplier_scene_for_render,
+                tag="lego_gen_supplier",
+            )
+            if topview_repair_info is not None:
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                manifest["topview_vlm_orientation_repair_supplier"] = topview_repair_info
+                write_json(manifest_path, manifest)
             run_blender_for_mode(
                 cfg_runtime=cfg_runtime,
                 args=args,
@@ -2219,6 +2454,14 @@ def run_pipeline_for_mode(
                 room_path=effective_room_path,
                 prompt_text=effective_prompt_text,
                 suffix="base",
+            )
+            base_artifacts = maybe_apply_procedural_room_stage(
+                args=args,
+                artifacts=base_artifacts,
+                run_dir=run_dir,
+                prompt_text=effective_prompt_text,
+                manifest_path=manifest_path,
+                tag="base",
             )
             base_selection_stub = _build_layout_selection_stub_for_artifacts(
                 artifacts=base_artifacts,
@@ -2467,6 +2710,17 @@ def run_pipeline_for_mode(
         )
 
     if supplier_scene_for_render and supplier_scene_for_render.is_file() and not variants:
+        supplier_scene_for_render, topview_repair_info = _maybe_apply_topview_vlm_orientation_repair(
+            cfg_runtime=cfg_runtime,
+            args=args,
+            run_dir=run_dir,
+            scene_json_path=supplier_scene_for_render,
+            tag="supplier",
+        )
+        if topview_repair_info is not None:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["topview_vlm_orientation_repair_supplier"] = topview_repair_info
+            write_json(manifest_path, manifest)
         run_blender_for_mode(
             cfg_runtime=cfg_runtime,
             args=args,
@@ -2629,6 +2883,8 @@ def build_cli() -> argparse.ArgumentParser:
     p.add_argument("--kitchen-accessory-ollama-num-ctx", type=int, default=8192)
     p.add_argument("--kitchen-accessory-ollama-think", default="low")
 
+    add_procedural_room_arguments(p)
+
     p.add_argument("--no-flooring", action="store_true", help="Disable supplier floor covering selection and Blender floor texture application")
     p.add_argument("--flooring-materials", default="data/floor_materials")
     p.add_argument("--flooring-style-rules", default="config/flooring_style_rules.json")
@@ -2662,6 +2918,24 @@ def build_cli() -> argparse.ArgumentParser:
     p.add_argument("--supplier-gif-elevations", default="0,30,45")
     p.add_argument("--supplier-gif-fps", type=int, default=8)
     p.add_argument("--keep-supplier-gif-frames", action="store_true")
+
+    p.add_argument("--topview-vlm-orientation-repair", action="store_true", help="Run top-view VLM orientation review/repair before final supplier Blender build")
+    p.add_argument("--topview-vlm-orientation-provider", choices=["none", "openai", "openrouter"], default="none", help="VLM provider for top-view orientation repair")
+    p.add_argument("--topview-vlm-orientation-model", default=None, help="VLM model for top-view orientation repair")
+    p.add_argument("--topview-vlm-orientation-scope", choices=["chairs", "all"], default="chairs", help="Object scope for top-view orientation repair; first production pass should use chairs")
+    p.add_argument("--topview-vlm-include-armchairs", action="store_true", help="Include armchairs in the chairs orientation scope")
+    p.add_argument("--topview-vlm-orientation-review-json", default=None, help="Use an existing VLM review JSON instead of calling a provider")
+    p.add_argument("--topview-vlm-orientation-no-apply", action="store_true", help="Write VLM review/report but keep the scene unchanged")
+    p.add_argument("--topview-vlm-orientation-max-objects", type=int, default=10000)
+    p.add_argument("--topview-vlm-orientation-min-confidence", type=float, default=0.70)
+    p.add_argument("--topview-vlm-orientation-max-delta-deg", type=float, default=180.0)
+    p.add_argument("--topview-vlm-orientation-snap-step-deg", type=float, default=90.0)
+    p.add_argument("--topview-vlm-resolution-x", type=int, default=1400)
+    p.add_argument("--topview-vlm-resolution-y", type=int, default=1050)
+    p.add_argument("--topview-vlm-elevation-deg", type=float, default=80.0)
+    p.add_argument("--topview-vlm-radius-mult", type=float, default=0.55)
+    p.add_argument("--topview-vlm-lens", type=float, default=32.0)
+    p.add_argument("--topview-vlm-keep-inspection-blend", action="store_true")
 
     p.add_argument("--lego-postprocess", action="store_true")
     p.add_argument("--infinigen-src", default=None)

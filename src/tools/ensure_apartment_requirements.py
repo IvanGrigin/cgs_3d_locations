@@ -93,6 +93,20 @@ def write_json(path: str | Path, data: Any) -> Path:
     return out
 
 
+def write_json_if_changed(path: str | Path, data: Any) -> Path:
+    out = Path(path)
+    text = json.dumps(data, ensure_ascii=False, indent=2)
+    if out.is_file():
+        try:
+            if out.read_text(encoding="utf-8") == text:
+                return out
+        except Exception:
+            pass
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(text, encoding="utf-8")
+    return out
+
+
 def norm(value: Any) -> str:
     return str(value or "").replace("ё", "е").lower()
 
@@ -821,6 +835,56 @@ def _local_chair_candidates() -> list[dict[str, Any]]:
     return rows
 
 
+def _local_bed_candidates() -> list[dict[str, Any]]:
+    root = LOCAL_TABLE_ASSET_ROOT
+    if not root.exists():
+        return []
+    rows: list[dict[str, Any]] = []
+    for folder in root.iterdir():
+        if not folder.is_dir():
+            continue
+        text = norm(folder.name)
+        if "кровать" not in text and "bed" not in text:
+            continue
+        # Sofa-beds and armchair-beds are useful furniture, but they should not
+        # satisfy the apartment-level requirement for a real sleeping zone.
+        if "диван" in text or "sofa" in text or "кресло" in text:
+            continue
+        mesh = _find_preferred_mesh(folder)
+        if mesh is None:
+            continue
+        nums = [float(x) for x in re.findall(r"(?<!\d)(\d{2,3})(?!\d)", folder.name)]
+        width_cm = 160.0
+        depth_cm = 200.0
+        for idx, value in enumerate(nums):
+            if 80.0 <= value <= 220.0:
+                width_cm = value
+                if idx + 1 < len(nums) and 120.0 <= nums[idx + 1] <= 240.0:
+                    depth_cm = nums[idx + 1]
+                break
+        title = folder.name.replace("_", " ")
+        rows.append(
+            {
+                "unique_key": f"local_imodern_bed::{folder.name}",
+                "source_site": "imodern_local",
+                "title": title,
+                "category_raw": "Кровати",
+                "category_norm": "bed",
+                "semantic_group": "bed",
+                "asset_status": "local_supplier_asset",
+                "asset_format": mesh.suffix.lstrip(".").lower(),
+                "asset_local_path": str(mesh.resolve()),
+                "style": "современный",
+                "color": _color_from_title(title),
+                "width_cm": width_cm,
+                "depth_cm": depth_cm,
+                "height_cm": 90.0,
+                "description": title,
+            }
+        )
+    return rows
+
+
 def load_catalog_candidates(search_roots: tuple[Path, ...]) -> list[dict[str, Any]]:
     key = tuple(str(p.expanduser().resolve()) for p in search_roots)
     cached = _CATALOG_CACHE.get(key)
@@ -837,6 +901,7 @@ def load_catalog_candidates(search_roots: tuple[Path, ...]) -> list[dict[str, An
     rows.extend(_metadata_candidates_from_roots(search_roots))
     rows.extend(_local_table_candidates())
     rows.extend(_local_chair_candidates())
+    rows.extend(_local_bed_candidates())
     _CATALOG_CACHE[key] = rows
     return rows
 
@@ -1038,6 +1103,9 @@ def _fit_catalog_size_to_room(role: str, candidate: dict[str, Any], target_size:
         else:
             max_w = min(max_w, 0.82)
             max_d = min(max_d, 0.52)
+    if role == "bed":
+        max_w = min(max_w, max(0.95, width - 0.28))
+        max_d = min(max_d, max(1.35, depth - 0.28))
     scale = min(1.0, max_w / max(sx, 1e-6), max_d / max(sy, 1e-6))
     sx, sy, sz = sx * scale, sy * scale, sz * scale
     if role == "sink" and sz < 0.24:
@@ -1048,6 +1116,8 @@ def _fit_catalog_size_to_room(role: str, candidate: dict[str, Any], target_size:
         return max(0.62, sx), max(0.62, sy), max(1.65, min(sz, 2.15))
     if role == "bath":
         return max(1.10, sx), max(0.58, sy), max(0.42, min(sz, 0.78))
+    if role == "bed":
+        return max(0.90, sx), max(1.35, sy), max(0.35, min(sz, 1.10))
     return max(0.12, sx), max(0.12, sy), max(0.08, sz)
 
 
@@ -1588,6 +1658,103 @@ def _is_table_lamp_item(item: dict[str, Any]) -> bool:
     )
 
 
+def _is_support_surface_item(item: dict[str, Any]) -> bool:
+    if _is_ceiling_light_item(item) or _is_table_lamp_item(item) or _is_desktop_device_item(item):
+        return False
+    text = item_text(item)
+    roles = classify_item(item)
+    return "table" in roles or any(
+        token in text
+        for token in (
+            "side_table",
+            "nightstand",
+            "bookcase",
+            "bookshelf",
+            "largeshelffactory",
+            "simplebookcasefactory",
+            "shelf",
+            "console",
+            "cabinet",
+            "dresser",
+            "стеллаж",
+            "полк",
+            "комод",
+            "тумб",
+            "шкаф",
+        )
+    )
+
+
+def _support_surfaces(scene: dict[str, Any]) -> list[tuple[dict[str, Any], dict[str, float]]]:
+    surfaces: list[tuple[dict[str, Any], dict[str, float]]] = []
+    for item in room_items(scene):
+        if not _is_support_surface_item(item):
+            continue
+        aabb = _item_aabb(item)
+        if not aabb:
+            continue
+        width = aabb["x_max"] - aabb["x_min"]
+        depth = aabb["y_max"] - aabb["y_min"]
+        if width < 0.22 or depth < 0.18:
+            continue
+        if aabb["z_max"] < 0.22 or aabb["z_max"] > 1.75:
+            continue
+        surfaces.append((item, aabb))
+    return surfaces
+
+
+def _center_on_support(
+    support: dict[str, float],
+    item_size: tuple[float, float],
+    old_center: tuple[float, float],
+    *,
+    keep_old_when_inside: bool = True,
+) -> tuple[float, float]:
+    sx, sy = item_size
+    margin = 0.04
+    min_x = support["x_min"] + sx / 2.0 + margin
+    max_x = support["x_max"] - sx / 2.0 - margin
+    min_y = support["y_min"] + sy / 2.0 + margin
+    max_y = support["y_max"] - sy / 2.0 - margin
+    center_x = (support["x_min"] + support["x_max"]) * 0.5
+    center_y = (support["y_min"] + support["y_max"]) * 0.5
+    if min_x > max_x:
+        min_x = max_x = center_x
+    if min_y > max_y:
+        min_y = max_y = center_y
+    if keep_old_when_inside and min_x <= old_center[0] <= max_x and min_y <= old_center[1] <= max_y:
+        return old_center
+    return (min(max(center_x, min_x), max_x), min(max(center_y, min_y), max_y))
+
+
+def _nearest_support_for_item(
+    scene: dict[str, Any],
+    item: dict[str, Any],
+    aabb: dict[str, float],
+    *,
+    prefer_tables: bool = False,
+) -> dict[str, float] | None:
+    cx, cy = _aabb_center_xy(aabb)
+    best: tuple[float, dict[str, float]] | None = None
+    for support_item, support in _support_surfaces(scene):
+        if support_item is item:
+            continue
+        overlap_x = support["x_min"] - 0.18 <= cx <= support["x_max"] + 0.18
+        overlap_y = support["y_min"] - 0.18 <= cy <= support["y_max"] + 0.18
+        dx = 0.0 if overlap_x else min(abs(cx - support["x_min"]), abs(cx - support["x_max"]))
+        dy = 0.0 if overlap_y else min(abs(cy - support["y_min"]), abs(cy - support["y_max"]))
+        xy_dist = math.hypot(dx, dy)
+        if xy_dist > 1.10:
+            continue
+        z_gap = abs(aabb["z_min"] - support["z_max"])
+        score = xy_dist + z_gap * 0.55
+        if prefer_tables and "table" in classify_item(support_item):
+            score -= 0.30
+        if best is None or score < best[0]:
+            best = (score, support)
+    return best[1] if best is not None else None
+
+
 def repair_table_lamp_sizes(scene_entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
     repairs: list[dict[str, Any]] = []
     for entry in scene_entries:
@@ -1609,22 +1776,49 @@ def repair_table_lamp_sizes(scene_entries: list[dict[str, Any]]) -> list[dict[st
             new_sx = min(max(sx, 0.34), 0.46)
             new_sy = min(max(sy, 0.34), 0.46)
             new_sz = min(max(sz, 0.52), 0.68)
-            if abs(new_sx - sx) < 1e-4 and abs(new_sy - sy) < 1e-4 and abs(new_sz - sz) < 1e-4:
-                continue
             cx, cy = _aabb_center_xy(aabb)
+            support = _nearest_support_for_item(scene, item, aabb, prefer_tables=True)
+            target_center = (cx, cy)
+            target_z = aabb["z_min"]
+            if support is not None:
+                target_center = _center_on_support(support, (new_sx, new_sy), (cx, cy), keep_old_when_inside=True)
+                target_z = support["z_max"] + 0.004
+            changed = (
+                abs(new_sx - sx) >= 1e-4
+                or abs(new_sy - sy) >= 1e-4
+                or abs(new_sz - sz) >= 1e-4
+                or abs(target_center[0] - cx) >= 1e-4
+                or abs(target_center[1] - cy) >= 1e-4
+                or abs(target_z - aabb["z_min"]) >= 0.015
+            )
+            if not changed:
+                continue
             old_size = item.get("size_m")
+            old_pos = item.get("position_m")
             _set_item_geometry(
                 item,
-                center_xy=(cx, cy),
+                center_xy=target_center,
                 size=(new_sx, new_sy, new_sz),
                 yaw_deg=float(item.get("yaw_deg", item.get("rotation_deg", 0.0)) or 0.0),
-                z_min=aabb["z_min"],
+                z_min=target_z,
                 role=None,
             )
             item["semantic_group"] = "lamp_table"
             item.setdefault("meta", {})["table_lamp_size_repaired"] = True
+            if support is not None:
+                item.setdefault("meta", {})["support_surface_reanchored"] = True
             room_repaired = True
-            repairs.append({"room_id": room_id, "action": "resized_table_lamp", "id": item.get("id"), "old_size_m": old_size, "new_size_m": item.get("size_m")})
+            repairs.append(
+                {
+                    "room_id": room_id,
+                    "action": "repaired_table_lamp_on_support",
+                    "id": item.get("id"),
+                    "old_size_m": old_size,
+                    "new_size_m": item.get("size_m"),
+                    "old_position_m": old_pos,
+                    "new_position_m": item.get("position_m"),
+                }
+            )
         if room_repaired:
             scene.setdefault("meta", {}).setdefault("requirement_postprocess", {})["table_lamp_sizes_repaired"] = True
     return repairs
@@ -1668,22 +1862,164 @@ def repair_desktop_support_items(scene_entries: list[dict[str, Any]]) -> list[di
                     break
             if support is None:
                 continue
-            target_z = support["z_max"] + 0.004
-            if abs(aabb["z_min"] - target_z) < 0.015:
-                continue
             sx = aabb["x_max"] - aabb["x_min"]
             sy = aabb["y_max"] - aabb["y_min"]
             sz = aabb["z_max"] - aabb["z_min"]
+            target_center = _center_on_support(
+                support,
+                (sx, sy),
+                (cx, cy),
+                keep_old_when_inside=False,
+            )
+            target_z = support["z_max"] + 0.004
+            if (
+                abs(aabb["z_min"] - target_z) < 0.015
+                and abs(target_center[0] - cx) < 0.025
+                and abs(target_center[1] - cy) < 0.025
+            ):
+                continue
+            old_pos = item.get("position_m")
             _set_item_geometry(
                 item,
-                center_xy=(cx, cy),
+                center_xy=target_center,
                 size=(sx, sy, sz),
                 yaw_deg=float(item.get("yaw_deg", item.get("rotation_deg", 0.0)) or 0.0),
                 z_min=target_z,
                 role=None,
             )
             item.setdefault("meta", {})["desktop_support_reanchored"] = True
-            repairs.append({"room_id": room_id, "action": "reanchored_desktop_device_to_support", "id": item.get("id"), "old_z_min": aabb["z_min"], "new_z_min": target_z})
+            repairs.append(
+                {
+                    "room_id": room_id,
+                    "action": "reanchored_desktop_device_to_support",
+                    "id": item.get("id"),
+                    "old_position_m": old_pos,
+                    "new_position_m": item.get("position_m"),
+                    "old_z_min": aabb["z_min"],
+                    "new_z_min": target_z,
+                }
+            )
+    return repairs
+
+
+def _is_support_decor_item(item: dict[str, Any]) -> bool:
+    if _is_table_lamp_item(item) or _is_desktop_device_item(item) or _is_ceiling_light_item(item):
+        return False
+    if classify_item(item) & {"toilet", "sink", "bath", "shower", "bath_or_shower", "bed", "table", "chair"}:
+        return False
+    text = item_text(item)
+    return any(
+        token in text
+        for token in (
+            "plant",
+            "plantcontainerfactory",
+            "vase",
+            "trinket",
+            "decor",
+            "горш",
+            "растен",
+            "ваза",
+            "декор",
+        )
+    )
+
+
+def repair_support_decor_items(scene_entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    repairs: list[dict[str, Any]] = []
+    for entry in scene_entries:
+        scene = entry.get("scene") if isinstance(entry.get("scene"), dict) else {}
+        if not scene:
+            continue
+        room = scene.get("room") if isinstance(scene.get("room"), dict) else {}
+        room_id = str(room.get("id") or entry.get("room_id") or "room")
+        for item in room_items(scene):
+            if not _is_support_decor_item(item):
+                continue
+            aabb = _item_aabb(item)
+            if not aabb:
+                continue
+            sx = aabb["x_max"] - aabb["x_min"]
+            sy = aabb["y_max"] - aabb["y_min"]
+            sz = aabb["z_max"] - aabb["z_min"]
+            text = item_text(item)
+            large_floor_decor = (
+                any(token in text for token in ("plant", "plantcontainerfactory", "растен", "горш"))
+                and (max(sx, sy) > 0.45 or sz > 0.75)
+            )
+            if large_floor_decor:
+                if aabb["z_min"] <= 0.06:
+                    continue
+                old_pos = item.get("position_m")
+                _set_item_geometry(
+                    item,
+                    center_xy=_aabb_center_xy(aabb),
+                    size=(sx, sy, sz),
+                    yaw_deg=float(item.get("yaw_deg", item.get("rotation_deg", 0.0)) or 0.0),
+                    z_min=0.0,
+                    role=None,
+                )
+                item.setdefault("meta", {})["support_surface_reanchored"] = "large_floor_decor"
+                repairs.append(
+                    {
+                        "room_id": room_id,
+                        "action": "snapped_large_decor_to_floor",
+                        "id": item.get("id"),
+                        "old_position_m": old_pos,
+                        "new_position_m": item.get("position_m"),
+                    }
+                )
+                continue
+            support = _nearest_support_for_item(scene, item, aabb, prefer_tables=False)
+            if support is None:
+                if aabb["z_min"] <= 0.08:
+                    continue
+                old_pos = item.get("position_m")
+                _set_item_geometry(
+                    item,
+                    center_xy=_aabb_center_xy(aabb),
+                    size=(sx, sy, sz),
+                    yaw_deg=float(item.get("yaw_deg", item.get("rotation_deg", 0.0)) or 0.0),
+                    z_min=0.0,
+                    role=None,
+                )
+                item.setdefault("meta", {})["support_surface_reanchored"] = "floor_fallback"
+                repairs.append(
+                    {
+                        "room_id": room_id,
+                        "action": "snapped_decor_to_floor",
+                        "id": item.get("id"),
+                        "old_position_m": old_pos,
+                        "new_position_m": item.get("position_m"),
+                    }
+                )
+                continue
+            target_center = _center_on_support(support, (sx, sy), _aabb_center_xy(aabb), keep_old_when_inside=True)
+            target_z = support["z_max"] + 0.004
+            if (
+                abs(target_z - aabb["z_min"]) < 0.012
+                and abs(target_center[0] - _aabb_center_xy(aabb)[0]) < 0.02
+                and abs(target_center[1] - _aabb_center_xy(aabb)[1]) < 0.02
+            ):
+                continue
+            old_pos = item.get("position_m")
+            _set_item_geometry(
+                item,
+                center_xy=target_center,
+                size=(sx, sy, sz),
+                yaw_deg=float(item.get("yaw_deg", item.get("rotation_deg", 0.0)) or 0.0),
+                z_min=target_z,
+                role=None,
+            )
+            item.setdefault("meta", {})["support_surface_reanchored"] = True
+            repairs.append(
+                {
+                    "room_id": room_id,
+                    "action": "reanchored_decor_to_support",
+                    "id": item.get("id"),
+                    "old_position_m": old_pos,
+                    "new_position_m": item.get("position_m"),
+                }
+            )
     return repairs
 
 
@@ -1699,7 +2035,7 @@ def repair_bed_layouts(scene_entries: list[dict[str, Any]]) -> list[dict[str, An
             continue
         room = scene.get("room") if isinstance(scene.get("room"), dict) else {}
         room_text = _room_type_text(scene, _sanitary_entry_prompt(entry))
-        if "bedroom" not in room_text and "спаль" not in room_text:
+        if not any(token in room_text for token in ("bedroom", "спаль", "studio", "студ")):
             continue
         room_id = str(room.get("id") or entry.get("room_id") or "room")
         width, depth = room_bounds(room)
@@ -1792,6 +2128,9 @@ def repair_sanitary_layouts(
         room = scene.get("room") if isinstance(scene.get("room"), dict) else {}
         room_id = str(room.get("id") or entry.get("room_id") or "room")
         text = _room_type_text(scene, _sanitary_entry_prompt(entry))
+        stretch_info = _ensure_min_sanitary_room_extent(scene, _sanitary_entry_prompt(entry))
+        if stretch_info is not None:
+            repairs.append({"room_id": room_id, "action": "stretched_small_sanitary_room", **stretch_info})
         width, depth = room_bounds(room)
         margin = 0.12
 
@@ -1901,6 +2240,62 @@ def _room_type_text(scene: dict[str, Any], prompt_room_type: str | None = None) 
 
 def _is_sanitary_scene(scene: dict[str, Any], prompt_room_type: str | None = None) -> bool:
     return any(x in _room_type_text(scene, prompt_room_type) for x in ("bathroom", "toilet", "сануз", "ванн", "туалет"))
+
+
+def _ensure_min_sanitary_room_extent(scene: dict[str, Any], prompt_room_type: str | None = None) -> dict[str, Any] | None:
+    room = scene.get("room") if isinstance(scene.get("room"), dict) else {}
+    text = _room_type_text(scene, prompt_room_type)
+    if not room or not _is_sanitary_scene(scene, prompt_room_type):
+        return None
+    toilet_only = ("toilet" in text or "туалет" in text) and not any(token in text for token in ("bathroom", "ванн", "сануз"))
+    if toilet_only:
+        return None
+    width, depth = room_bounds(room)
+    if width <= 0 or depth <= 0:
+        return None
+    min_short = 1.45
+    min_long = 2.05
+    min_area = 2.85
+    if min(width, depth) >= min_short and max(width, depth) >= min_long and width * depth >= min_area:
+        return None
+
+    if width <= depth:
+        new_width = max(width, min_short)
+        new_depth = max(depth, min_long, min_area / max(new_width, 1e-6))
+    else:
+        new_depth = max(depth, min_short)
+        new_width = max(width, min_long, min_area / max(new_depth, 1e-6))
+
+    poly = _room_polygon_xy(room)
+    bbox = _polygon_bbox(poly)
+    old_w = max(bbox["x_max"] - bbox["x_min"], width, 1e-6)
+    old_d = max(bbox["y_max"] - bbox["y_min"], depth, 1e-6)
+    sx = new_width / old_w
+    sy = new_depth / old_d
+    raw_poly = room.get("floor_polygon")
+    if isinstance(raw_poly, list) and raw_poly:
+        for point in raw_poly:
+            if not isinstance(point, dict):
+                continue
+            try:
+                x = float(point.get("x", 0.0))
+                y_key = "y" if "y" in point else "z"
+                y = float(point.get(y_key, 0.0))
+            except Exception:
+                continue
+            point["x"] = round(bbox["x_min"] + (x - bbox["x_min"]) * sx, 6)
+            point[y_key] = round(bbox["y_min"] + (y - bbox["y_min"]) * sy, 6)
+    room["width_m"] = round(new_width, 4)
+    room["depth_m"] = round(new_depth, 4)
+    room["area_m2"] = round(new_width * new_depth, 4)
+    info = {
+        "old_size_m": [round(width, 4), round(depth, 4)],
+        "new_size_m": [round(new_width, 4), round(new_depth, 4)],
+        "reason": "sanitary_room_too_small_for_toilet_sink_shower",
+    }
+    room.setdefault("meta", {}).setdefault("requirement_postprocess", {})["sanitary_room_stretched"] = info
+    scene.setdefault("meta", {}).setdefault("requirement_postprocess", {})["sanitary_room_stretched"] = info
+    return info
 
 
 def _sanitary_roles_present(scene: dict[str, Any]) -> set[str]:
@@ -2702,10 +3097,20 @@ def add_apartment_required_objects(
             present |= classify_item(item)
     added: list[dict[str, Any]] = []
     if "bed" not in present:
-        target = max(apartment_scenes, key=lambda s: float(((s.get("room") or {}).get("area_m2") or 0.0)))
+        def bed_target_score(scene: dict[str, Any]) -> tuple[int, float]:
+            room = scene.get("room") if isinstance(scene.get("room"), dict) else {}
+            text = _room_type_text(scene, None)
+            priority = 0 if any(token in text for token in ("bedroom", "спаль", "studio", "студ")) else 1
+            return priority, -float(room.get("area_m2") or 0.0)
+
+        target = min(apartment_scenes, key=bed_target_score)
         room = target.get("room") or {}
         width, depth = room_bounds(room)
-        target_size = (min(2.0, max(1.1, width - 0.4)), 1.6, 0.65)
+        target_size = (
+            min(1.8, max(1.2, width - 0.4)),
+            min(2.1, max(1.6, depth - 0.4)),
+            0.65,
+        )
         candidate = select_catalog_candidate("bed", target_size, target, None, asset_search_roots)
         if candidate is None:
             _record_missing_catalog_asset(target, "bed")
@@ -3418,6 +3823,7 @@ def process_apartment(apt_dir: Path, mode: str) -> dict[str, Any]:
     lighting_repairs = repair_ceiling_lighting_layouts(scene_entries)
     table_lamp_repairs = repair_table_lamp_sizes(scene_entries)
     desktop_support_repairs = repair_desktop_support_items(scene_entries)
+    support_decor_repairs = repair_support_decor_items(scene_entries)
     bed_repairs = repair_bed_layouts(scene_entries)
     sanitary_added_per_room = add_missing_sanitary_per_room(scene_entries, asset_search_roots=asset_search_roots)
     sanitary_added = add_missing_sanitary_apartment(scene_entries, asset_search_roots=asset_search_roots)
@@ -3431,7 +3837,7 @@ def process_apartment(apt_dir: Path, mode: str) -> dict[str, Any]:
         scene_path = entry.get("scene_path")
         added = entry.get("added") if isinstance(entry.get("added"), list) else []
         patched_path = room_dir / "pipeline" / mode / "scene_requirements.v1.json"
-        write_json(patched_path, scene)
+        write_json_if_changed(patched_path, scene)
         room_reports.append(
             {
                 "room_id": room_id,
@@ -3484,6 +3890,7 @@ def process_apartment(apt_dir: Path, mode: str) -> dict[str, Any]:
             "lighting_repairs": lighting_repairs,
             "table_lamp_repairs": table_lamp_repairs,
             "desktop_support_repairs": desktop_support_repairs,
+            "support_decor_repairs": support_decor_repairs,
             "bed_repairs": bed_repairs,
             "apartment_added": [
                 {"id": x["id"], "role": x.get("meta", {}).get("required_role"), "room_id": x.get("meta", {}).get("room_id")}
@@ -3514,6 +3921,7 @@ def process_apartment(apt_dir: Path, mode: str) -> dict[str, Any]:
             "lighting_repairs": lighting_repairs,
             "table_lamp_repairs": table_lamp_repairs,
             "desktop_support_repairs": desktop_support_repairs,
+            "support_decor_repairs": support_decor_repairs,
             "bed_repairs": bed_repairs,
             "apartment_added": out_scene["meta"]["apartment_added"],
             "placement_count": len(placements),
