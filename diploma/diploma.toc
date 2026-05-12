@@ -1,21 +1,212 @@
-\xpg@aux {}{russian}
-\contentsline {section}{Введение}{2}{Doc-Start}%
-\contentsline {section}{\numberline {1}Аналитический обзор и выбор базового подхода}{3}{section.1}%
-\contentsline {subsection}{\numberline {1.1}Автоматизация подготовки интерьерных решений}{3}{subsection.1.1}%
-\contentsline {subsection}{\numberline {1.2}Сравнение существующих методов генерации планировок}{4}{subsection.1.2}%
-\contentsline {subsection}{\numberline {1.3}Обоснование выбора Infinigen}{4}{subsection.1.3}%
-\contentsline {subsection}{\numberline {1.4}Постановка задачи}{5}{subsection.1.4}%
-\contentsline {section}{\numberline {2}Разработка пайплайна расстановки объектов}{5}{section.2}%
-\contentsline {subsection}{\numberline {2.1}Общая архитектура решения}{5}{subsection.2.1}%
-\contentsline {subsection}{\numberline {2.2}Улучшение результата расстановки Infinigen}{6}{subsection.2.2}%
-\contentsline {subsection}{\numberline {2.3}Получение описаний объектов и материалов}{7}{subsection.2.3}%
-\contentsline {subsection}{\numberline {2.4}Замена синтетических объектов на магазинные аналоги}{7}{subsection.2.4}%
-\contentsline {subsection}{\numberline {2.5}Формирование отчета и выгрузка результата}{7}{subsection.2.5}%
-\contentsline {section}{\numberline {3}Каталог материалов, замены и экспериментальная оценка}{8}{section.3}%
-\contentsline {subsection}{\numberline {3.1}Сбор каталога предметов и материалов}{8}{subsection.3.1}%
-\contentsline {subsection}{\numberline {3.2}Описание предметов и отделочных материалов}{8}{subsection.3.2}%
-\contentsline {subsection}{\numberline {3.3}Эксперименты и оценка качества}{8}{subsection.3.3}%
-\contentsline {subsection}{\numberline {3.4}Расчет стоимости и варианты замен}{9}{subsection.3.4}%
-\contentsline {subsection}{\numberline {3.5}Выводы по экспериментам}{10}{subsection.3.5}%
-\contentsline {section}{Заключение}{10}{subsection.3.5}%
-\contentsline {section}{Список использованных источников}{11}{subsection.3.5}%
+\babel@toc {russian}{}\relax 
+\contentsline {chapter}{ВВЕДЕНИЕ}{9}{}%
+\contentsline {chapter}{\numberline {1}Анализ существующих решений и выбор базового генератора интерьерных сцен}{12}{}%
+\contentsline {section}{\numberline {1.1}Задача автоматизации подготовки интерьерных 3D-сцен}{12}{}%
+\contentsline {subsection}{\numberline {1.1.1}Понятие интерьерной 3D-сцены}{12}{}%
+\contentsline {subsection}{\numberline {1.1.2}Ручной процесс подготовки интерьерной сцены}{12}{}%
+\contentsline {subsection}{\numberline {1.1.3}Потенциал автоматизации подготовки дизайн-предложений}{12}{}%
+\contentsline {subsection}{\numberline {1.1.4}Отличие структурированной 3D-сцены от изображения}{12}{}%
+\contentsline {subsection}{\numberline {1.1.5}Неоднозначность восстановления 3D-сцены по изображению}{13}{}%
+\contentsline {subsection}{\numberline {1.1.6}Требования к автоматизированной системе}{13}{}%
+\contentsline {section}{\numberline {1.2}Существующие подходы к генерации и проектированию интерьеров}{13}{}%
+\contentsline {subsection}{\numberline {1.2.1}Классификация существующих решений}{13}{}%
+\contentsline {subsection}{\numberline {1.2.2}Системы генерации изображений по текстовому описанию}{13}{}%
+\contentsline {subsection}{\numberline {1.2.3}Интерактивные 3D-планировщики интерьера}{14}{}%
+\contentsline {subsection}{\numberline {1.2.4}Исследовательские методы генерации трёхмерных сцен}{14}{}%
+\contentsline {subsection}{\numberline {1.2.5}Недостаточность существующих решений для полного конвейера}{14}{}%
+\contentsline {section}{\numberline {1.3}Ограничения альтернативных методов генерации сцен}{15}{}%
+\contentsline {subsection}{\numberline {1.3.1}DiffuScene}{15}{}%
+\contentsline {subsection}{\numberline {1.3.2}Генерация расстановки с использованием больших языковых моделей}{16}{}%
+\contentsline {subsection}{\numberline {1.3.3}LEGO-Net}{17}{}%
+\contentsline {subsection}{\numberline {1.3.4}M3DLayout}{17}{}%
+\contentsline {subsection}{\numberline {1.3.5}Сравнение рассмотренных альтернатив}{18}{}%
+\contentsline {section}{\numberline {1.4}Генерация интерьерных сцен с использованием Infinigen}{18}{}%
+\contentsline {subsection}{\numberline {1.4.1}Особенности Infinigen Indoors}{18}{}%
+\contentsline {subsection}{\numberline {1.4.2}Причины выбора Infinigen в качестве базового генератора}{19}{}%
+\contentsline {subsection}{\numberline {1.4.3}Ограничения Infinigen для пользовательского текстового сценария}{19}{}%
+\contentsline {subsection}{\numberline {1.4.4}Необходимость дополнительной постобработки сцены}{19}{}%
+\contentsline {subsection}{\numberline {1.4.5}Особенности кухонь и санузлов как специальных помещений}{20}{}%
+\contentsline {subsection}{\numberline {1.4.6}Роль Infinigen в разработанной системе}{20}{}%
+\contentsline {section}{Выводы по главе\nobreakspace 1}{21}{}%
+\contentsline {chapter}{\numberline {2}Конвейер генерации дизайна помещения по тексту и плану}{23}{}%
+\contentsline {section}{\numberline {2.1}Общая архитектура программного комплекса}{23}{}%
+\contentsline {subsection}{\numberline {2.1.1}Входные данные и общий сценарий работы}{23}{}%
+\contentsline {subsection}{\numberline {2.1.2}Основные этапы конвейера}{24}{}%
+\contentsline {subsection}{\numberline {2.1.3}Модульная организация системы}{27}{}%
+\contentsline {subsection}{\numberline {2.1.4}Режимы генерации и альтернативные генераторы}{29}{}%
+\contentsline {subsection}{\numberline {2.1.5}Промежуточные и итоговые артефакты запуска}{30}{}%
+\contentsline {section}{\numberline {2.2}Форматы входных и выходных данных}{32}{}%
+\contentsline {subsection}{\numberline {2.2.1}Формат описания помещения}{32}{}%
+\contentsline {subsection}{\numberline {2.2.2}Формат \texttt {placement.v1}}{33}{}%
+\contentsline {subsection}{\numberline {2.2.3}Формат \texttt {scene.v1}}{34}{}%
+\contentsline {subsection}{\numberline {2.2.4}Формат supplier-каталога}{35}{}%
+\contentsline {subsection}{\numberline {2.2.5}Связь форматов между этапами}{36}{}%
+\contentsline {subsection}{\numberline {2.2.6}Форматы отчётов и вспомогательных файлов}{36}{}%
+\contentsline {section}{\numberline {2.3}Преобразование текстового описания в структурированную спецификацию}{36}{}%
+\contentsline {subsection}{\numberline {2.3.1}Извлечение типа помещения и площади}{36}{}%
+\contentsline {subsection}{\numberline {2.3.2}Извлечение стиля, палитры и материалов}{37}{}%
+\contentsline {subsection}{\numberline {2.3.3}Извлечение обязательных и дополнительных предметов}{37}{}%
+\contentsline {subsection}{\numberline {2.3.4}Формирование room program и policy}{37}{}%
+\contentsline {subsection}{\numberline {2.3.5}Связь текстовой спецификации с генераторами расстановки}{37}{}%
+\contentsline {section}{\numberline {2.4}Первичная расстановка объектов в помещении}{37}{}%
+\contentsline {subsection}{\numberline {2.4.1}Получение первичной сцены с помощью Infinigen}{37}{}%
+\contentsline {subsection}{\numberline {2.4.2}Процедурные объекты и наименования Infinigen}{37}{}%
+\contentsline {subsection}{\numberline {2.4.3}Проблемы прямого использования объектов Infinigen}{37}{}%
+\contentsline {subsection}{\numberline {2.4.4}Rule-based расстановка как альтернативный режим}{38}{}%
+\contentsline {subsection}{\numberline {2.4.5}Retrieval и ML-режимы первичной расстановки}{38}{}%
+\contentsline {subsection}{\numberline {2.4.6}Почему кухня является наиболее сложной зоной расстановки}{38}{}%
+\contentsline {subsection}{\numberline {2.4.7}Первичная обработка кухонных и санитарных помещений}{38}{}%
+\contentsline {section}{\numberline {2.5}Проверка и доработка расстановки}{38}{}%
+\contentsline {subsection}{\numberline {2.5.1}Проверка выхода объектов за границы помещения}{38}{}%
+\contentsline {subsection}{\numberline {2.5.2}Проверка пересечений объектов}{38}{}%
+\contentsline {subsection}{\numberline {2.5.3}Проверка дверей, окон и зон открывания}{38}{}%
+\contentsline {subsection}{\numberline {2.5.4}Проверка доступности объектов и проходов}{38}{}%
+\contentsline {subsection}{\numberline {2.5.5}Эвристическое исправление расстановки}{39}{}%
+\contentsline {subsection}{\numberline {2.5.6}ML-доработка некорректных объектов}{39}{}%
+\contentsline {subsection}{\numberline {2.5.7}Исправление ориентации объектов по виду сверху}{39}{}%
+\contentsline {section}{\numberline {2.6}Выбор предметов и формирование списка объектов сцены}{39}{}%
+\contentsline {subsection}{\numberline {2.6.1}Формирование целевого списка объектов}{39}{}%
+\contentsline {subsection}{\numberline {2.6.2}Определение семантических групп объектов}{39}{}%
+\contentsline {subsection}{\numberline {2.6.3}Добавление недостающих обязательных объектов}{39}{}%
+\contentsline {subsection}{\numberline {2.6.4}Удаление лишних и технических объектов}{39}{}%
+\contentsline {subsection}{\numberline {2.6.5}Связи между объектами сцены}{40}{}%
+\contentsline {section}{\numberline {2.7}Специальные правила для кухонь и санузлов}{40}{}%
+\contentsline {subsection}{\numberline {2.7.1}Модульное представление кухни}{40}{}%
+\contentsline {subsection}{\numberline {2.7.2}Размещение мойки, плиты, холодильника и СВЧ}{40}{}%
+\contentsline {subsection}{\numberline {2.7.3}Типовые формы кухонной планировки}{40}{}%
+\contentsline {subsection}{\numberline {2.7.4}Дробление кухонной линии на отдельные шкафы и ящики}{40}{}%
+\contentsline {subsection}{\numberline {2.7.5}Правила размещения сантехники в санузлах}{40}{}%
+\contentsline {subsection}{\numberline {2.7.6}Отличие специальных помещений от жилых комнат}{40}{}%
+\contentsline {section}{\numberline {2.8}Настройка отделочных материалов, освещения и дополнительных объектов}{41}{}%
+\contentsline {subsection}{\numberline {2.8.1}Подбор напольного покрытия}{41}{}%
+\contentsline {subsection}{\numberline {2.8.2}Подбор материалов стен}{41}{}%
+\contentsline {subsection}{\numberline {2.8.3}Размещение источников света}{41}{}%
+\contentsline {subsection}{\numberline {2.8.4}Добавление штор, ковров и декоративных объектов}{41}{}%
+\contentsline {subsection}{\numberline {2.8.5}Согласование материалов и общей палитры сцены}{41}{}%
+\contentsline {section}{\numberline {2.9}Экспорт сцены и формирование отчёта}{41}{}%
+\contentsline {subsection}{\numberline {2.9.1}Экспорт структурированного JSON-описания}{41}{}%
+\contentsline {subsection}{\numberline {2.9.2}Построение Blender-сцены}{41}{}%
+\contentsline {subsection}{\numberline {2.9.3}Формирование визуальных материалов}{42}{}%
+\contentsline {subsection}{\numberline {2.9.4}Формирование технических отчётов}{42}{}%
+\contentsline {subsection}{\numberline {2.9.5}Интерпретация результата пользователем}{42}{}%
+\contentsline {section}{Выводы по главе\nobreakspace 2}{42}{}%
+\contentsline {chapter}{\numberline {3}Каталог реальных предметов, подбор замен и экспериментальная оценка}{43}{}%
+\contentsline {section}{\numberline {3.1}Сбор каталога предметов из открытых источников}{43}{}%
+\contentsline {subsection}{\numberline {3.1.1}Мотивация использования реальных предметов}{43}{}%
+\contentsline {subsection}{\numberline {3.1.2}Поиск источников 3D-моделей мебели и материалов}{43}{}%
+\contentsline {subsection}{\numberline {3.1.3}Типы собранных данных}{43}{}%
+\contentsline {subsection}{\numberline {3.1.4}Структура supplier-каталога}{43}{}%
+\contentsline {subsection}{\numberline {3.1.5}Ограниченность открытых источников моделей}{43}{}%
+\contentsline {section}{\numberline {3.2}Проблемы получения трёхмерных моделей реальных предметов}{43}{}%
+\contentsline {subsection}{\numberline {3.2.1}Выбор форматов FBX, glTF и GLB}{43}{}%
+\contentsline {subsection}{\numberline {3.2.2}Проблемы архивов и структуры файлов}{43}{}%
+\contentsline {subsection}{\numberline {3.2.3}Проблемы текстур и материалов}{44}{}%
+\contentsline {subsection}{\numberline {3.2.4}Проблемы масштаба, осей и ориентации ассетов}{44}{}%
+\contentsline {subsection}{\numberline {3.2.5}Дублирование, неполные карточки и неоднородные категории}{44}{}%
+\contentsline {subsection}{\numberline {3.2.6}Сбор двумерных текстур для отделки}{44}{}%
+\contentsline {section}{\numberline {3.3}Нормализация категорий, описаний и визуальных признаков}{44}{}%
+\contentsline {subsection}{\numberline {3.3.1}Таксономия интерьерных объектов}{44}{}%
+\contentsline {subsection}{\numberline {3.3.2}Нормализация категорий из разных источников}{44}{}%
+\contentsline {subsection}{\numberline {3.3.3}Извлечение описаний и свойств из карточек товаров}{44}{}%
+\contentsline {subsection}{\numberline {3.3.4}Обогащение описаний с использованием VLM}{45}{}%
+\contentsline {subsection}{\numberline {3.3.5}Извлечение цветовой палитры из изображений}{45}{}%
+\contentsline {subsection}{\numberline {3.3.6}Контроль качества нормализации}{45}{}%
+\contentsline {section}{\numberline {3.4}Сопоставление объектов сцены с предметами из каталога}{45}{}%
+\contentsline {subsection}{\numberline {3.4.1}Постановка задачи сопоставления}{45}{}%
+\contentsline {subsection}{\numberline {3.4.2}Фильтрация кандидатов по категории}{45}{}%
+\contentsline {subsection}{\numberline {3.4.3}Сопоставление по габаритам}{45}{}%
+\contentsline {subsection}{\numberline {3.4.4}Сопоставление по стилю, цвету и материалу}{45}{}%
+\contentsline {subsection}{\numberline {3.4.5}Учёт наличия локальной или скачиваемой 3D-модели}{45}{}%
+\contentsline {subsection}{\numberline {3.4.6}Ранжирование и режимы выбора кандидатов}{46}{}%
+\contentsline {subsection}{\numberline {3.4.7}Использование LLM для дополнительного ранжирования}{46}{}%
+\contentsline {subsection}{\numberline {3.4.8}Обоснование достаточности такого подбора}{46}{}%
+\contentsline {section}{\numberline {3.5}Подбор вариантов замены и расчёт стоимости}{46}{}%
+\contentsline {subsection}{\numberline {3.5.1}Формирование вариантов замены}{46}{}%
+\contentsline {subsection}{\numberline {3.5.2}Применение выбранных замен к сцене}{46}{}%
+\contentsline {subsection}{\numberline {3.5.3}Согласование одинаковых и связанных предметов}{46}{}%
+\contentsline {subsection}{\numberline {3.5.4}Расчёт стоимости мебели и техники}{46}{}%
+\contentsline {subsection}{\numberline {3.5.5}Расчёт стоимости отделочных материалов}{46}{}%
+\contentsline {subsection}{\numberline {3.5.6}Формирование итогового отчёта о стоимости}{47}{}%
+\contentsline {section}{\numberline {3.6}Экспериментальная проверка программного комплекса}{47}{}%
+\contentsline {subsection}{\numberline {3.6.1}Набор тестовых помещений}{47}{}%
+\contentsline {subsection}{\numberline {3.6.2}Сценарии пользовательских текстовых описаний}{47}{}%
+\contentsline {subsection}{\numberline {3.6.3}Сравниваемые режимы генерации}{47}{}%
+\contentsline {subsection}{\numberline {3.6.4}Методика запуска экспериментов}{47}{}%
+\contentsline {subsection}{\numberline {3.6.5}Анализ успешных и неуспешных генераций}{47}{}%
+\contentsline {subsection}{\numberline {3.6.6}Время генерации и вычислительные ограничения}{47}{}%
+\contentsline {section}{\numberline {3.7}Оценка качества с использованием автоматических метрик и визуально-языковых моделей}{47}{}%
+\contentsline {subsection}{\numberline {3.7.1}Метрики геометрической корректности}{47}{}%
+\contentsline {subsection}{\numberline {3.7.2}Метрики доступности и свободного пространства}{48}{}%
+\contentsline {subsection}{\numberline {3.7.3}Метрики соответствия текстовому описанию}{48}{}%
+\contentsline {subsection}{\numberline {3.7.4}Оценка визуально-языковыми моделями}{48}{}%
+\contentsline {subsection}{\numberline {3.7.5}Агрегация итоговой оценки качества}{48}{}%
+\contentsline {subsection}{\numberline {3.7.6}Сравнение результатов до и после доработки}{48}{}%
+\contentsline {subsection}{\numberline {3.7.7}Ограничения проведённой оценки}{48}{}%
+\contentsline {section}{Выводы по главе\nobreakspace 3}{48}{}%
+\contentsline {chapter}{ЗАКЛЮЧЕНИЕ}{49}{}%
+\contentsline {chapter}{СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ}{50}{}%
+\babel@toc {russian}{}\relax 
+\babel@toc {russian}{}\relax 
+\babel@toc {english}{}\relax 
+\babel@toc {russian}{}\relax 
+\babel@toc {english}{}\relax 
+\babel@toc {russian}{}\relax 
+\babel@toc {english}{}\relax 
+\babel@toc {russian}{}\relax 
+\babel@toc {english}{}\relax 
+\babel@toc {russian}{}\relax 
+\babel@toc {english}{}\relax 
+\babel@toc {russian}{}\relax 
+\babel@toc {english}{}\relax 
+\babel@toc {russian}{}\relax 
+\babel@toc {english}{}\relax 
+\babel@toc {russian}{}\relax 
+\babel@toc {russian}{}\relax 
+\babel@toc {russian}{}\relax 
+\babel@toc {english}{}\relax 
+\babel@toc {russian}{}\relax 
+\babel@toc {english}{}\relax 
+\babel@toc {russian}{}\relax 
+\babel@toc {english}{}\relax 
+\babel@toc {russian}{}\relax 
+\babel@toc {english}{}\relax 
+\babel@toc {russian}{}\relax 
+\babel@toc {english}{}\relax 
+\babel@toc {russian}{}\relax 
+\babel@toc {english}{}\relax 
+\babel@toc {russian}{}\relax 
+\babel@toc {english}{}\relax 
+\babel@toc {russian}{}\relax 
+\babel@toc {russian}{}\relax 
+\babel@toc {russian}{}\relax 
+\babel@toc {english}{}\relax 
+\babel@toc {russian}{}\relax 
+\babel@toc {english}{}\relax 
+\babel@toc {russian}{}\relax 
+\babel@toc {english}{}\relax 
+\babel@toc {russian}{}\relax 
+\babel@toc {english}{}\relax 
+\babel@toc {russian}{}\relax 
+\babel@toc {english}{}\relax 
+\babel@toc {russian}{}\relax 
+\babel@toc {english}{}\relax 
+\babel@toc {russian}{}\relax 
+\babel@toc {english}{}\relax 
+\babel@toc {russian}{}\relax 
+\babel@toc {russian}{}\relax 
+\babel@toc {russian}{}\relax 
+\babel@toc {english}{}\relax 
+\babel@toc {russian}{}\relax 
+\babel@toc {english}{}\relax 
+\babel@toc {russian}{}\relax 
+\babel@toc {english}{}\relax 
+\babel@toc {russian}{}\relax 
+\babel@toc {english}{}\relax 
+\babel@toc {russian}{}\relax 
+\babel@toc {english}{}\relax 
+\babel@toc {russian}{}\relax 
+\babel@toc {english}{}\relax 
+\babel@toc {russian}{}\relax 
+\babel@toc {english}{}\relax 
+\babel@toc {russian}{}\relax 
+\contentsfinish 

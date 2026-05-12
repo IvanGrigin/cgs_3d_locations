@@ -1,0 +1,520 @@
+% $ biblatex auxiliary file $
+% $ biblatex bbl format version 3.3 $
+% Do not modify the above lines!
+%
+% This is an auxiliary file used by the 'biblatex' package.
+% This file may safely be deleted. It will be recreated by
+% biber as required.
+%
+\begingroup
+\makeatletter
+\@ifundefined{ver@biblatex.sty}
+  {\@latex@error
+     {Missing 'biblatex' package}
+     {The bibliography requires the 'biblatex' package.}
+      \aftergroup\endinput}
+  {}
+\endgroup
+
+
+\refsection{0}
+  \datalist[entry]{nyt/global//global/global/global}
+    \entry{sanuzelserviceBathroomRules}{online}{}{}
+      \list{organization}{1}{%
+        {Санузел-Сервис}%
+      }
+      \field{sortinit}{П}
+      \field{sortinithash}{b60c3989b0a91e15e157f5b4997c35c7}
+      \field{labeltitlesource}{title}
+      \field{langid}{russian}
+      \field{title}{Правила размещения сантехники в санузле}
+      \field{urlday}{12}
+      \field{urlmonth}{5}
+      \field{urlyear}{2026}
+      \field{urldateera}{ce}
+      \verb{urlraw}
+      \verb https://sanuzelservice.ru/
+      \endverb
+      \verb{url}
+      \verb https://sanuzelservice.ru/
+      \endverb
+    \endentry
+    \entry{paschalidou2021atiss}{inproceedings}{useauthor=false}{}
+      \name{author}{6}{}{%
+        {{hash=f8dada037a17034890f532b8e5ce9d6c}{%
+           family={Paschalidou},
+           familyi={P\bibinitperiod},
+           given={Despoina},
+           giveni={D\bibinitperiod}}}%
+        {{hash=6b69b2ce80ada4f8884b287f56fafcf6}{%
+           family={Kar},
+           familyi={K\bibinitperiod},
+           given={Amlan},
+           giveni={A\bibinitperiod}}}%
+        {{hash=bb6c50c746a8dfa9f12d2b8eca65882a}{%
+           family={Shugrina},
+           familyi={S\bibinitperiod},
+           given={Maria},
+           giveni={M\bibinitperiod}}}%
+        {{hash=1385d3fa16f20884c6f1879595666f6c}{%
+           family={Kreis},
+           familyi={K\bibinitperiod},
+           given={Karsten},
+           giveni={K\bibinitperiod}}}%
+        {{hash=06133052ac3c14a188601b82783cd4f7}{%
+           family={Geiger},
+           familyi={G\bibinitperiod},
+           given={Andreas},
+           giveni={A\bibinitperiod}}}%
+        {{hash=132467c4a712be4725c988c89c68a30e}{%
+           family={Fidler},
+           familyi={F\bibinitperiod},
+           given={Sanja},
+           giveni={S\bibinitperiod}}}%
+      }
+      \strng{authorbibnamehash}{44c381ef9aef8018853001ad1573dd7d}
+      \strng{authornamehash}{44c381ef9aef8018853001ad1573dd7d}
+      \strng{authorfullhash}{421093938d504447c1d05b3748475adc}
+      \strng{authorfullhashraw}{421093938d504447c1d05b3748475adc}
+      \field{sortinit}{A}
+      \field{sortinithash}{2f401846e2029bad6b3ecc16d50031e2}
+      \field{labeltitlesource}{title}
+      \field{booktitle}{Advances in Neural Information Processing Systems}
+      \field{title}{ATISS: Autoregressive Transformers for Indoor Scene Synthesis}
+      \field{year}{2021}
+    \endentry
+    \entry{tang2024diffuscene}{inproceedings}{useauthor=false}{}
+      \name{author}{6}{}{%
+        {{hash=cbfed7cf64a5e638bb01999dde83a187}{%
+           family={Tang},
+           familyi={T\bibinitperiod},
+           given={Jiapeng},
+           giveni={J\bibinitperiod}}}%
+        {{hash=65ffd910e4e3bcc0ebe958bd1e5475dd}{%
+           family={Nie},
+           familyi={N\bibinitperiod},
+           given={Yinyu},
+           giveni={Y\bibinitperiod}}}%
+        {{hash=cafb53607e2067b856898ace9144a54e}{%
+           family={Markhasin},
+           familyi={M\bibinitperiod},
+           given={Lev},
+           giveni={L\bibinitperiod}}}%
+        {{hash=964283da01a9c1039ae067c7e4454635}{%
+           family={Dai},
+           familyi={D\bibinitperiod},
+           given={Angela},
+           giveni={A\bibinitperiod}}}%
+        {{hash=0c6bd39b4732b392a232da44bde7374a}{%
+           family={Thies},
+           familyi={T\bibinitperiod},
+           given={Justus},
+           giveni={J\bibinitperiod}}}%
+        {{hash=3e07f51dbc36ece3b41bb5bcfe5b3b07}{%
+           family={Nie{ß}ner},
+           familyi={N\bibinitperiod},
+           given={Matthias},
+           giveni={M\bibinitperiod}}}%
+      }
+      \strng{authorbibnamehash}{cf3d267e84caffed158bed010602e415}
+      \strng{authornamehash}{cf3d267e84caffed158bed010602e415}
+      \strng{authorfullhash}{a13384be63a73284248cb03a97e5c325}
+      \strng{authorfullhashraw}{a13384be63a73284248cb03a97e5c325}
+      \field{sortinit}{D}
+      \field{sortinithash}{6f385f66841fb5e82009dc833c761848}
+      \field{labeltitlesource}{title}
+      \field{booktitle}{Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition}
+      \field{title}{DiffuScene: Denoising Diffusion Models for Generative Indoor Scene Synthesis}
+      \field{year}{2024}
+    \endentry
+    \entry{wu2024direct3d}{article}{useauthor=false}{}
+      \true{moreauthor}
+      \name{author}{1}{}{%
+        {{hash=974f8e3414a1248e71d6fc7b6a6551c5}{%
+           family={Wu},
+           familyi={W\bibinitperiod}}}%
+      }
+      \strng{authorbibnamehash}{8543415bdc5fd8be1dcb03de1c03936d}
+      \strng{authornamehash}{8543415bdc5fd8be1dcb03de1c03936d}
+      \strng{authorfullhash}{8543415bdc5fd8be1dcb03de1c03936d}
+      \strng{authorfullhashraw}{8543415bdc5fd8be1dcb03de1c03936d}
+      \field{sortinit}{D}
+      \field{sortinithash}{6f385f66841fb5e82009dc833c761848}
+      \field{labeltitlesource}{title}
+      \field{journaltitle}{arXiv preprint}
+      \field{title}{Direct3D: Scalable Image-to-3D Generation}
+      \field{urlday}{12}
+      \field{urlmonth}{5}
+      \field{urlyear}{2026}
+      \field{year}{2024}
+      \field{urldateera}{ce}
+      \verb{urlraw}
+      \verb https://arxiv.org/
+      \endverb
+      \verb{url}
+      \verb https://arxiv.org/
+      \endverb
+    \endentry
+    \entry{infinigen2024indoors}{inproceedings}{useauthor=false}{}
+      \name{author}{12}{}{%
+        {{hash=e698276a2dd702d35a708df1be4def4b}{%
+           family={Raistrick},
+           familyi={R\bibinitperiod},
+           given={Alexander},
+           giveni={A\bibinitperiod}}}%
+        {{hash=618cc407bb37b9309aa9cabb7c17f255}{%
+           family={Mei},
+           familyi={M\bibinitperiod},
+           given={Lingjie},
+           giveni={L\bibinitperiod}}}%
+        {{hash=cddb9ac617cf9a794a82c0d57b67b299}{%
+           family={Kayan},
+           familyi={K\bibinitperiod},
+           given={Karhan},
+           giveni={K\bibinitperiod}}}%
+        {{hash=41ec926ce0efef3f3b72dd6426aef084}{%
+           family={Yan},
+           familyi={Y\bibinitperiod},
+           given={David},
+           giveni={D\bibinitperiod}}}%
+        {{hash=56610a9a7b56afee4435384331bd1691}{%
+           family={Zuo},
+           familyi={Z\bibinitperiod},
+           given={Yiming},
+           giveni={Y\bibinitperiod}}}%
+        {{hash=80c01efebb766da1497a742159225e98}{%
+           family={Han},
+           familyi={H\bibinitperiod},
+           given={Beining},
+           giveni={B\bibinitperiod}}}%
+        {{hash=4ed39109da8aac9715b374c21aede9de}{%
+           family={Wen},
+           familyi={W\bibinitperiod},
+           given={Hongyu},
+           giveni={H\bibinitperiod}}}%
+        {{hash=accaa3e6b8af780025e4593f5aa32358}{%
+           family={Parakh},
+           familyi={P\bibinitperiod},
+           given={Meenal},
+           giveni={M\bibinitperiod}}}%
+        {{hash=5040ff8017aad3c5054408bd15cdbcef}{%
+           family={Alexandropoulos},
+           familyi={A\bibinitperiod},
+           given={Stamatis},
+           giveni={S\bibinitperiod}}}%
+        {{hash=c064a175013003e8de74144d8ab3972f}{%
+           family={Lipson},
+           familyi={L\bibinitperiod},
+           given={Lahav},
+           giveni={L\bibinitperiod}}}%
+        {{hash=644a5b38b0f33a946b3ff9084c870e57}{%
+           family={Ma},
+           familyi={M\bibinitperiod},
+           given={Zeyu},
+           giveni={Z\bibinitperiod}}}%
+        {{hash=0ae7fdc13773f928525f673b05f37149}{%
+           family={Deng},
+           familyi={D\bibinitperiod},
+           given={Jia},
+           giveni={J\bibinitperiod}}}%
+      }
+      \strng{authorbibnamehash}{8aa8d8a564d8c40e37132c41cdfa3bad}
+      \strng{authornamehash}{8aa8d8a564d8c40e37132c41cdfa3bad}
+      \strng{authorfullhash}{82f1f86658d0deff3cc2e78d61075d9d}
+      \strng{authorfullhashraw}{82f1f86658d0deff3cc2e78d61075d9d}
+      \field{sortinit}{I}
+      \field{sortinithash}{8d291c51ee89b6cd86bf5379f0b151d8}
+      \field{labeltitlesource}{title}
+      \field{booktitle}{Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition}
+      \field{title}{Infinigen Indoors: Photorealistic Indoor Scenes using Procedural Generation}
+      \field{year}{2024}
+      \field{pages}{21783\bibrangedash 21794}
+      \range{pages}{12}
+    \endentry
+    \entry{wei2023legonet}{article}{useauthor=false}{}
+      \name{author}{7}{}{%
+        {{hash=f68114ee625ed879a7a0077cc43397b5}{%
+           family={Wei},
+           familyi={W\bibinitperiod},
+           given={Qiuhong\bibnamedelima Anna},
+           giveni={Q\bibinitperiod\bibinitdelim A\bibinitperiod}}}%
+        {{hash=f710c9442d790d652e32cab207158554}{%
+           family={Ding},
+           familyi={D\bibinitperiod},
+           given={Sijie},
+           giveni={S\bibinitperiod}}}%
+        {{hash=cef3fbbccf81ac6acea8e00c8137c326}{%
+           family={Park},
+           familyi={P\bibinitperiod},
+           given={Jeong\bibnamedelima Joon},
+           giveni={J\bibinitperiod\bibinitdelim J\bibinitperiod}}}%
+        {{hash=9e43e892cca9dfbc4f804295b824f90b}{%
+           family={Sajnani},
+           familyi={S\bibinitperiod},
+           given={Rahul},
+           giveni={R\bibinitperiod}}}%
+        {{hash=8e80f06eb9daf43124d944102b4ab981}{%
+           family={Poulenard},
+           familyi={P\bibinitperiod},
+           given={Adrien},
+           giveni={A\bibinitperiod}}}%
+        {{hash=23cb3a4b1c3caea702e56b406468939f}{%
+           family={Sridhar},
+           familyi={S\bibinitperiod},
+           given={Srinath},
+           giveni={S\bibinitperiod}}}%
+        {{hash=4d4e5ccdf2edc6a547ab14d5b0113a71}{%
+           family={Guibas},
+           familyi={G\bibinitperiod},
+           given={Leonidas},
+           giveni={L\bibinitperiod}}}%
+      }
+      \strng{authorbibnamehash}{12c91db3ecd194b460a6168fde362985}
+      \strng{authornamehash}{12c91db3ecd194b460a6168fde362985}
+      \strng{authorfullhash}{25fe0e28dfcd71fceab35f712d963327}
+      \strng{authorfullhashraw}{25fe0e28dfcd71fceab35f712d963327}
+      \field{sortinit}{L}
+      \field{sortinithash}{7c47d417cecb1f4bd38d1825c427a61a}
+      \field{labeltitlesource}{title}
+      \field{journaltitle}{arXiv preprint arXiv:2301.09629}
+      \field{title}{LEGO-Net: Learning Regular Rearrangements of Objects in Rooms}
+      \field{year}{2023}
+      \verb{urlraw}
+      \verb https://arxiv.org/abs/2301.09629
+      \endverb
+      \verb{url}
+      \verb https://arxiv.org/abs/2301.09629
+      \endverb
+    \endentry
+    \entry{zhang2025m3dlayout}{article}{useauthor=false}{}
+      \name{author}{7}{}{%
+        {{hash=65d7cf978fa9435af4af24d2a1a406ef}{%
+           family={Zhang},
+           familyi={Z\bibinitperiod},
+           given={Yiheng},
+           giveni={Y\bibinitperiod}}}%
+        {{hash=b671f0907dd21ddf9c48c8a1f6e3fe6b}{%
+           family={Cai},
+           familyi={C\bibinitperiod},
+           given={Zhuojiang},
+           giveni={Z\bibinitperiod}}}%
+        {{hash=59512515eb2f25f081dcfe10362be53a}{%
+           family={Wang},
+           familyi={W\bibinitperiod},
+           given={Mingdao},
+           giveni={M\bibinitperiod}}}%
+        {{hash=5f785e8e25b70381c39eb596aedd2936}{%
+           family={Guo},
+           familyi={G\bibinitperiod},
+           given={Meitong},
+           giveni={M\bibinitperiod}}}%
+        {{hash=516971b307beedd64a521ab11e04b08e}{%
+           family={Li},
+           familyi={L\bibinitperiod},
+           given={Tianxiao},
+           giveni={T\bibinitperiod}}}%
+        {{hash=84e9edb45602671fc0899e2c5a23f482}{%
+           family={Lin},
+           familyi={L\bibinitperiod},
+           given={Li},
+           giveni={L\bibinitperiod}}}%
+        {{hash=f2a8a1f953b4762679289e613411044f}{%
+           family={Wang},
+           familyi={W\bibinitperiod},
+           given={Yuwang},
+           giveni={Y\bibinitperiod}}}%
+      }
+      \strng{authorbibnamehash}{e34ac5d077ebecb99221189854bbcde4}
+      \strng{authornamehash}{e34ac5d077ebecb99221189854bbcde4}
+      \strng{authorfullhash}{c56ca4d81fc308c3aff2c483d14067cc}
+      \strng{authorfullhashraw}{c56ca4d81fc308c3aff2c483d14067cc}
+      \field{sortinit}{M}
+      \field{sortinithash}{4625c616857f13d17ce56f7d4f97d451}
+      \field{labeltitlesource}{title}
+      \field{journaltitle}{arXiv preprint arXiv:2509.23728}
+      \field{title}{M3DLayout: A Multi-Source Dataset of 3D Indoor Layouts and Structured Descriptions for 3D Generation}
+      \field{year}{2025}
+      \verb{urlraw}
+      \verb https://arxiv.org/abs/2509.23728
+      \endverb
+      \verb{url}
+      \verb https://arxiv.org/abs/2509.23728
+      \endverb
+    \endentry
+    \entry{zeng2024rsa}{article}{useauthor=false}{}
+      \true{moreauthor}
+      \name{author}{1}{}{%
+        {{hash=154e2dc8aa8b1744df088d074bddfc27}{%
+           family={Zeng},
+           familyi={Z\bibinitperiod},
+           given={Yifei},
+           giveni={Y\bibinitperiod}}}%
+      }
+      \strng{authorbibnamehash}{47d50de74c189ea838bb29d835a9c3bb}
+      \strng{authornamehash}{47d50de74c189ea838bb29d835a9c3bb}
+      \strng{authorfullhash}{47d50de74c189ea838bb29d835a9c3bb}
+      \strng{authorfullhashraw}{47d50de74c189ea838bb29d835a9c3bb}
+      \field{sortinit}{R}
+      \field{sortinithash}{5e1c39a9d46ffb6bebd8f801023a9486}
+      \field{labeltitlesource}{title}
+      \field{journaltitle}{arXiv preprint}
+      \field{title}{RSA: Resolving Scale Ambiguity in Monocular 3D Reconstruction}
+      \field{urlday}{12}
+      \field{urlmonth}{5}
+      \field{urlyear}{2026}
+      \field{year}{2024}
+      \field{urldateera}{ce}
+      \verb{urlraw}
+      \verb https://arxiv.org/
+      \endverb
+      \verb{url}
+      \verb https://arxiv.org/
+      \endverb
+    \endentry
+    \entry{bhgBathroomPlumbing}{online}{}{}
+      \list{organization}{2}{%
+        {Better Homes}%
+        {Gardens}%
+      }
+      \field{sortinit}{B}
+      \field{sortinithash}{d7095fff47cda75ca2589920aae98399}
+      \field{labeltitlesource}{title}
+      \field{langid}{english}
+      \field{title}{Bathroom Plumbing Planning}
+      \field{urlday}{12}
+      \field{urlmonth}{5}
+      \field{urlyear}{2026}
+      \field{urldateera}{ce}
+      \verb{urlraw}
+      \verb https://www.bhg.com/
+      \endverb
+      \verb{url}
+      \verb https://www.bhg.com/
+      \endverb
+    \endentry
+    \entry{homestyler}{online}{}{}
+      \list{organization}{1}{%
+        {Homestyler}%
+      }
+      \field{sortinit}{H}
+      \field{sortinithash}{23a3aa7c24e56cfa16945d55545109b5}
+      \field{labeltitlesource}{title}
+      \field{langid}{english}
+      \field{title}{Homestyler}
+      \field{urlday}{12}
+      \field{urlmonth}{5}
+      \field{urlyear}{2026}
+      \field{urldateera}{ce}
+      \verb{urlraw}
+      \verb https://www.homestyler.com/
+      \endverb
+      \verb{url}
+      \verb https://www.homestyler.com/
+      \endverb
+    \endentry
+    \entry{ikeaKreativ}{online}{}{}
+      \list{organization}{1}{%
+        {IKEA}%
+      }
+      \field{sortinit}{I}
+      \field{sortinithash}{8d291c51ee89b6cd86bf5379f0b151d8}
+      \field{labeltitlesource}{title}
+      \field{langid}{english}
+      \field{title}{IKEA Kreativ}
+      \field{urlday}{12}
+      \field{urlmonth}{5}
+      \field{urlyear}{2026}
+      \field{urldateera}{ce}
+      \verb{urlraw}
+      \verb https://www.ikea.com/us/en/home-design/
+      \endverb
+      \verb{url}
+      \verb https://www.ikea.com/us/en/home-design/
+      \endverb
+    \endentry
+    \entry{reformCphKitchenLayout}{online}{}{}
+      \list{organization}{1}{%
+        {Reform}%
+      }
+      \field{sortinit}{K}
+      \field{sortinithash}{c02bf6bff1c488450c352b40f5d853ab}
+      \field{labeltitlesource}{title}
+      \field{langid}{english}
+      \field{title}{Kitchen Layout Guide}
+      \field{urlday}{12}
+      \field{urlmonth}{5}
+      \field{urlyear}{2026}
+      \field{urldateera}{ce}
+      \verb{urlraw}
+      \verb https://www.reformcph.com/
+      \endverb
+      \verb{url}
+      \verb https://www.reformcph.com/
+      \endverb
+    \endentry
+    \entry{tomHowleyKitchenLayouts}{online}{}{}
+      \list{organization}{1}{%
+        {Tom Howley}%
+      }
+      \field{sortinit}{K}
+      \field{sortinithash}{c02bf6bff1c488450c352b40f5d853ab}
+      \field{labeltitlesource}{title}
+      \field{langid}{english}
+      \field{title}{Kitchen Layout Ideas}
+      \field{urlday}{12}
+      \field{urlmonth}{5}
+      \field{urlyear}{2026}
+      \field{urldateera}{ce}
+      \verb{urlraw}
+      \verb https://www.tomhowley.co.uk/
+      \endverb
+      \verb{url}
+      \verb https://www.tomhowley.co.uk/
+      \endverb
+    \endentry
+    \entry{nkbaKitchenGuidelines}{online}{}{}
+      \list{organization}{2}{%
+        {National Kitchen}%
+        {Bath Association}%
+      }
+      \field{sortinit}{K}
+      \field{sortinithash}{c02bf6bff1c488450c352b40f5d853ab}
+      \field{labeltitlesource}{title}
+      \field{langid}{english}
+      \field{title}{Kitchen Planning Guidelines}
+      \field{urlday}{12}
+      \field{urlmonth}{5}
+      \field{urlyear}{2026}
+      \field{urldateera}{ce}
+      \verb{urlraw}
+      \verb https://nkba.org/
+      \endverb
+      \verb{url}
+      \verb https://nkba.org/
+      \endverb
+    \endentry
+    \entry{planner5d}{online}{}{}
+      \list{organization}{1}{%
+        {Planner 5D}%
+      }
+      \field{sortinit}{P}
+      \field{sortinithash}{ff3bcf24f47321b42cb156c2cc8a8422}
+      \field{labeltitlesource}{title}
+      \field{langid}{english}
+      \field{title}{Planner 5D}
+      \field{urlday}{12}
+      \field{urlmonth}{5}
+      \field{urlyear}{2026}
+      \field{urldateera}{ce}
+      \verb{urlraw}
+      \verb https://planner5d.com/
+      \endverb
+      \verb{url}
+      \verb https://planner5d.com/
+      \endverb
+    \endentry
+  \enddatalist
+  \missing{itmo-student-thesis}
+\endrefsection
+\endinput
+

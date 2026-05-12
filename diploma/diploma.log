@@ -1,4 +1,4 @@
-This is XeTeX, Version 3.141592653-2.6-0.999998 (TeX Live 2026) (preloaded format=xelatex 2026.5.4)  4 MAY 2026 22:43
+This is XeTeX, Version 3.141592653-2.6-0.999998 (TeX Live 2026) (preloaded format=xelatex 2026.5.4)  12 MAY 2026 08:56
 entering extended mode
  restricted \write18 enabled.
  %&-line parsing enabled.
@@ -6,8 +6,19 @@ entering extended mode
 (./diploma.tex
 LaTeX2e <2025-11-01>
 L3 programming layer <2026-01-19>
-(/usr/local/texlive/2026/texmf-dist/tex/latex/extsizes/extarticle.cls
-Document Class: extarticle 1996/10/08 v1.0 Non Standard LaTeX document class
+(./itmo-student-thesis.cls
+Document Class: itmo-student-thesis 2023/04/16 v1.4.5
+(/usr/local/texlive/2026/texmf-dist/tex/latex/xkeyval/xkvltxp.sty
+Package: xkvltxp 2014/05/25 v1.3 LaTeX2e kernel patch (HA)
+
+(/usr/local/texlive/2026/texmf-dist/tex/generic/xkeyval/xkvutils.tex
+\XKV@toks=\toks17
+\XKV@tempa@toks=\toks18
+\XKV@tempb@toks=\toks19
+
+(/usr/local/texlive/2026/texmf-dist/tex/generic/xkeyval/keyval.tex)))
+(/usr/local/texlive/2026/texmf-dist/tex/latex/extsizes/extreport.cls
+Document Class: extreport 1996/10/08 v1.0 Non Standard LaTeX document class
 (/usr/local/texlive/2026/texmf-dist/tex/latex/extsizes/size14.clo
 File: size14.clo 1999/11/11 v1.4a NON-Standard LaTeX file (size option)
 )
@@ -21,17 +32,26 @@ LaTeX Font Info:    Overwriting symbol font `largesymbols' in version `bold'
 \big@size=\dimen148
 )
 \c@part=\count271
-\c@section=\count272
-\c@subsection=\count273
-\c@subsubsection=\count274
-\c@paragraph=\count275
-\c@subparagraph=\count276
-\c@figure=\count277
-\c@table=\count278
+\c@chapter=\count272
+\c@section=\count273
+\c@subsection=\count274
+\c@subsubsection=\count275
+\c@paragraph=\count276
+\c@subparagraph=\count277
+\c@figure=\count278
+\c@table=\count279
 \abovecaptionskip=\skip49
 \belowcaptionskip=\skip50
 \bibindent=\dimen149
 )
+(/usr/local/texlive/2026/texmf-dist/tex/latex/xkeyval/xkeyval.sty
+Package: xkeyval 2025/11/04 v2.10 package option processing (HA)
+
+(/usr/local/texlive/2026/texmf-dist/tex/generic/xkeyval/xkeyval.tex
+(/usr/local/texlive/2026/texmf-dist/tex/generic/xkeyval/xkvutils.tex)
+\XKV@depth=\count280
+File: xkeyval.tex 2014/12/03 v2.7a key=value parser (HA)
+))
 (/usr/local/texlive/2026/texmf-dist/tex/latex/fontspec/fontspec.sty
 (/usr/local/texlive/2026/texmf-dist/tex/latex/l3packages/xparse/xparse.sty
 (/usr/local/texlive/2026/texmf-dist/tex/latex/l3kernel/expl3.sty
@@ -39,9 +59,9 @@ Package: expl3 2026-01-19 L3 programming layer (loader)
 
 (/usr/local/texlive/2026/texmf-dist/tex/latex/l3backend/l3backend-xetex.def
 File: l3backend-xetex.def 2025-10-09 L3 backend support: XeTeX
-\g__graphics_track_int=\count279
-\g__pdfannot_backend_int=\count280
-\g__pdfannot_backend_link_int=\count281
+\g__graphics_track_int=\count281
+\g__pdfannot_backend_int=\count282
+\g__pdfannot_backend_link_int=\count283
 ))
 Package: xparse 2025-10-09 L3 Experimental document command parser
 )
@@ -50,17 +70,17 @@ Package: fontspec 2025/09/29 v2.9g Font selection for XeLaTeX and LuaLaTeX
 (/usr/local/texlive/2026/texmf-dist/tex/latex/fontspec/fontspec-xetex.sty
 Package: fontspec-xetex 2025/09/29 v2.9g Font selection for XeLaTeX and LuaLaTe
 X
-\l__fontspec_script_int=\count282
-\l__fontspec_language_int=\count283
-\l__fontspec_strnum_int=\count284
-\l__fontspec_tmp_int=\count285
-\l__fontspec_tmpa_int=\count286
-\l__fontspec_tmpb_int=\count287
-\l__fontspec_tmpc_int=\count288
-\l__fontspec_em_int=\count289
-\l__fontspec_emdef_int=\count290
-\l__fontspec_strong_int=\count291
-\l__fontspec_strongdef_int=\count292
+\l__fontspec_script_int=\count284
+\l__fontspec_language_int=\count285
+\l__fontspec_strnum_int=\count286
+\l__fontspec_tmp_int=\count287
+\l__fontspec_tmpa_int=\count288
+\l__fontspec_tmpb_int=\count289
+\l__fontspec_tmpc_int=\count290
+\l__fontspec_em_int=\count291
+\l__fontspec_emdef_int=\count292
+\l__fontspec_strong_int=\count293
+\l__fontspec_strongdef_int=\count294
 \l__fontspec_tmpa_dim=\dimen150
 \l__fontspec_tmpb_dim=\dimen151
 \l__fontspec_tmpc_dim=\dimen152
@@ -69,154 +89,292 @@ X
 Package: fontenc 2025/07/18 v2.1d Standard LaTeX package
 )
 (/usr/local/texlive/2026/texmf-dist/tex/latex/fontspec/fontspec.cfg)))
-(/usr/local/texlive/2026/texmf-dist/tex/latex/polyglossia/polyglossia.sty
-Package: polyglossia 2025/12/01 v2.9 Modern multilingual typesetting with XeLaT
-eX and LuaLaTeX
 
-(/usr/local/texlive/2026/texmf-dist/tex/latex/etoolbox/etoolbox.sty
-Package: etoolbox 2025/10/02 v2.5m e-TeX tools for LaTeX (JAW)
-\etb@tempcnta=\count293
-)
-(/usr/local/texlive/2026/texmf-dist/tex/generic/iftex/iftex.sty
-Package: iftex 2024/12/12 v1.0g TeX engine tests
-)
-\l_xpg_alias_keyvals_int=\count294
+Package fontspec Warning: 
+(fontspec)                Ignored LuaTeX-only feature:
+(fontspec)                'Renderer=Full/Basic/Node/Base/HarfBuzz'.
 
-(/usr/local/texlive/2026/texmf-dist/tex/latex/polyglossia/gloss-latex.ldf
-File: gloss-latex.ldf polyglossia: module for default language
-))
-(/usr/local/texlive/2026/texmf-dist/tex/latex/polyglossia/gloss-russian.ldf
-File: gloss-russian.ldf polyglossia: module for Russian
-
-(/usr/local/texlive/2026/texmf-dist/tex/latex/polyglossia/xpg-cyrillicnumbers.s
-ty
-Package: xpg-cyrillicnumbers 2019/11/15 v0.2 Formatting of Cyrillic alphabetic 
-numbers
-) (/usr/local/texlive/2026/texmf-dist/tex/latex/polyglossia/babelsh.def
-File: babelsh.def 2022/06/21 Babel common definitions for shorthands
- Taken verbatim from babel files (2022/06/06 v3.76)
-)
-Package babel Info: Making " an active character on input line 120.
-)
-
-Package polyglossia Info: Default language is russian
-
-
-(/usr/local/texlive/2026/texmf-dist/tex/latex/polyglossia/gloss-english.ldf
-File: gloss-english.ldf polyglossia: module for English
-)
 
 Package fontspec Info: 
 (fontspec)             Font family 'TimesNewRoman(0)' created for font 'Times
-(fontspec)             New Roman' with options [Ligatures=TeX].
+(fontspec)             New Roman' with options
+(fontspec)             [Ligatures={TeX},Renderer=Basic,Ligatures=TeX,Ligatures=
+{TeX,Historic}].
 (fontspec)              
 (fontspec)              This font family consists of the following NFSS
 (fontspec)             series/shapes:
 (fontspec)              
 (fontspec)             - 'normal' (m/n) with NFSS spec.: <->"Times New
-(fontspec)             Roman/OT:script=latn;language=dflt;mapping=tex-text;"
+(fontspec)             Roman/OT:script=latn;language=dflt;+hlig;mapping=tex-tex
+t;"
 (fontspec)             - 'bold' (b/n) with NFSS spec.: <->"Times New
-(fontspec)             Roman/B/OT:script=latn;language=dflt;mapping=tex-text;"
+(fontspec)             Roman/B/OT:script=latn;language=dflt;+hlig;mapping=tex-t
+ext;"
 (fontspec)             - 'italic' (m/it) with NFSS spec.: <->"Times New
-(fontspec)             Roman/I/OT:script=latn;language=dflt;mapping=tex-text;"
+(fontspec)             Roman/I/OT:script=latn;language=dflt;+hlig;mapping=tex-t
+ext;"
 (fontspec)             - 'bold italic' (b/it) with NFSS spec.: <->"Times New
-(fontspec)             Roman/BI/OT:script=latn;language=dflt;mapping=tex-text;"
+(fontspec)             Roman/BI/OT:script=latn;language=dflt;+hlig;mapping=tex-
+text;"
 
+
+Package fontspec Warning: 
+(fontspec)                Ignored LuaTeX-only feature:
+(fontspec)                'Renderer=Full/Basic/Node/Base/HarfBuzz'.
+
+
+Package fontspec Info: 
+(fontspec)             Font family 'Arial(0)' created for font 'Arial' with
+(fontspec)             options [Ligatures={TeX},Renderer=Basic,Ligatures=TeX].
+(fontspec)              
+(fontspec)              This font family consists of the following NFSS
+(fontspec)             series/shapes:
+(fontspec)              
+(fontspec)             - 'normal' (m/n) with NFSS spec.:
+(fontspec)             <->"Arial/OT:script=latn;language=dflt;mapping=tex-text;
+"
+(fontspec)             - 'bold' (b/n) with NFSS spec.:
+(fontspec)             <->"Arial/B/OT:script=latn;language=dflt;mapping=tex-tex
+t;"
+(fontspec)             - 'italic' (m/it) with NFSS spec.:
+(fontspec)             <->"Arial/I/OT:script=latn;language=dflt;mapping=tex-tex
+t;"
+(fontspec)             - 'bold italic' (b/it) with NFSS spec.:
+(fontspec)             <->"Arial/BI/OT:script=latn;language=dflt;mapping=tex-te
+xt;"
+
+
+Package fontspec Warning: 
+(fontspec)                Ignored LuaTeX-only feature:
+(fontspec)                'Renderer=Full/Basic/Node/Base/HarfBuzz'.
 
 
 Package fontspec Info: 
 (fontspec)             Font family 'CourierNew(0)' created for font 'Courier
 (fontspec)             New' with options
-(fontspec)             [WordSpace={1,0,0},HyphenChar=None,PunctuationSpace=Word
-Space].
+(fontspec)             [Ligatures={TeX},Renderer=Basic,WordSpace={1,0,0},Hyphen
+Char=None,PunctuationSpace=WordSpace].
 (fontspec)              
 (fontspec)              This font family consists of the following NFSS
 (fontspec)             series/shapes:
 (fontspec)              
 (fontspec)             - 'normal' (m/n) with NFSS spec.: <->"Courier
-(fontspec)             New/OT:script=latn;language=dflt;"
+(fontspec)             New/OT:script=latn;language=dflt;mapping=tex-text;"
 (fontspec)             - 'bold' (b/n) with NFSS spec.: <->"Courier
-(fontspec)             New/B/OT:script=latn;language=dflt;"
+(fontspec)             New/B/OT:script=latn;language=dflt;mapping=tex-text;"
 (fontspec)             - 'italic' (m/it) with NFSS spec.: <->"Courier
-(fontspec)             New/I/OT:script=latn;language=dflt;"
+(fontspec)             New/I/OT:script=latn;language=dflt;mapping=tex-text;"
 (fontspec)             - 'bold italic' (b/it) with NFSS spec.: <->"Courier
-(fontspec)             New/BI/OT:script=latn;language=dflt;"
+(fontspec)             New/BI/OT:script=latn;language=dflt;mapping=tex-text;"
 
+(/usr/local/texlive/2026/texmf-dist/tex/generic/babel/babel.sty
+Package: babel 2026/03/08 v26.4 The multilingual framework for LuaLaTeX, pdfLaT
+eX and XeLaTeX
+\babel@savecnt=\count295
+LaTeX Encoding Info:    Redeclaring text command \ij (encoding OT1) on input li
+ne 2078.
+LaTeX Encoding Info:    Redeclaring text command \IJ (encoding OT1) on input li
+ne 2080.
+LaTeX Encoding Info:    Redeclaring text command \ij (encoding T1) on input lin
+e 2082.
+LaTeX Encoding Info:    Redeclaring text command \IJ (encoding T1) on input lin
+e 2083.
+LaTeX Encoding Info:    Ignoring declaration for text command \ij (encoding ?) 
+on input line 2084.
+LaTeX Encoding Info:    Ignoring declaration for text command \IJ (encoding ?) 
+on input line 2086.
+LaTeX Encoding Info:    Ignoring declaration for text command \SS (encoding ?) 
+on input line 2111.
+\U@D=\dimen153
+\l@unhyphenated=\language91
 
-Package fontspec Info: 
-(fontspec)             Font family 'TimesNewRoman(1)' created for font 'Times
-(fontspec)             New Roman' with options [].
-(fontspec)              
-(fontspec)              This font family consists of the following NFSS
-(fontspec)             series/shapes:
-(fontspec)              
-(fontspec)             - 'normal' (m/n) with NFSS spec.: <->"Times New
-(fontspec)             Roman/OT:script=latn;language=dflt;"
-(fontspec)             - 'bold' (b/n) with NFSS spec.: <->"Times New
-(fontspec)             Roman/B/OT:script=latn;language=dflt;"
-(fontspec)             - 'italic' (m/it) with NFSS spec.: <->"Times New
-(fontspec)             Roman/I/OT:script=latn;language=dflt;"
-(fontspec)             - 'bold italic' (b/it) with NFSS spec.: <->"Times New
-(fontspec)             Roman/BI/OT:script=latn;language=dflt;"
+(/usr/local/texlive/2026/texmf-dist/tex/generic/babel/xebabel.def)
+\bbl@readstream=\read2
+\bbl@dirlevel=\count296
 
+(/usr/local/texlive/2026/texmf-dist/tex/generic/babel/locale/en/babel-english.t
+ex)
+(/usr/local/texlive/2026/texmf-dist/tex/generic/babel/locale/ru/babel-russian.t
+ex)
+Package babel Info: Importing font and identification data for english
+(babel)             from babel-en.ini. Reported on input line 4330.
+ (/usr/local/texlive/2026/texmf-dist/tex/generic/babel-english/english.ldf
+Language: english 2017/06/06 v3.3r English support from the babel system
+Package babel Info: Hyphen rules for 'canadian' set to \l@english
+(babel)             (\language0). Reported on input line 102.
+Package babel Info: Hyphen rules for 'australian' set to \l@ukenglish
+(babel)             (\language22). Reported on input line 105.
+Package babel Info: Hyphen rules for 'newzealand' set to \l@ukenglish
+(babel)             (\language22). Reported on input line 108.
+)
+Package babel Info: Importing font and identification data for russian
+(babel)             from babel-ru.ini. Reported on input line 4330.
 
-Package fontspec Info: 
-(fontspec)             Font family 'CourierNew(1)' created for font 'Courier
-(fontspec)             New' with options [].
-(fontspec)              
-(fontspec)              This font family consists of the following NFSS
-(fontspec)             series/shapes:
-(fontspec)              
-(fontspec)             - 'normal' (m/n) with NFSS spec.: <->"Courier
-(fontspec)             New/OT:script=latn;language=dflt;"
-(fontspec)             - 'bold' (b/n) with NFSS spec.: <->"Courier
-(fontspec)             New/B/OT:script=latn;language=dflt;"
-(fontspec)             - 'italic' (m/it) with NFSS spec.: <->"Courier
-(fontspec)             New/I/OT:script=latn;language=dflt;"
-(fontspec)             - 'bold italic' (b/it) with NFSS spec.: <->"Courier
-(fontspec)             New/BI/OT:script=latn;language=dflt;"
+(/usr/local/texlive/2026/texmf-dist/tex/generic/babel-russian/russianb.ldf
+File: russianb.ldf 2021/01/10 1.3m Russian support for the Babel system
+Language: russian 2020/09/09 1.3k Russian support for the Babel system
+Package babel Info: Making " an active character on input line 124.
+Package babel Info: Default for \cyrdash is provided on input line 163.
+))
+(/usr/local/texlive/2026/texmf-dist/tex/latex/csquotes/csquotes.sty
+Package: csquotes 2024-04-04 v5.2o context-sensitive quotations (JAW)
 
+(/usr/local/texlive/2026/texmf-dist/tex/latex/etoolbox/etoolbox.sty
+Package: etoolbox 2025/10/02 v2.5m e-TeX tools for LaTeX (JAW)
+\etb@tempcnta=\count297
+)
+\csq@reset=\count298
+\csq@gtype=\count299
+\csq@glevel=\count300
+\csq@qlevel=\count301
+\csq@maxlvl=\count302
+\csq@tshold=\count303
+\csq@ltx@everypar=\toks20
 
+(/usr/local/texlive/2026/texmf-dist/tex/latex/csquotes/csquotes.def
+File: csquotes.def 2024-04-04 v5.2o csquotes generic definitions (JAW)
+)
+Package csquotes Info: Trying to load configuration file 'csquotes.cfg'...
+Package csquotes Info: ... configuration file loaded successfully.
+
+(/usr/local/texlive/2026/texmf-dist/tex/latex/csquotes/csquotes.cfg
+File: csquotes.cfg 
+))
+(/usr/local/texlive/2026/texmf-dist/tex/generic/oberdiek/iflang.sty
+Package: iflang 2018/01/21 v1.7 Checks for the current language (HO)
+
+(/usr/local/texlive/2026/texmf-dist/tex/generic/infwarerr/infwarerr.sty
+Package: infwarerr 2019/12/03 v1.5 Providing info/warning/error messages (HO)
+)
+(/usr/local/texlive/2026/texmf-dist/tex/generic/pdftexcmds/pdftexcmds.sty
+Package: pdftexcmds 2020-06-27 v0.33 Utility functions of pdfTeX for LuaTeX (HO
+)
+
+(/usr/local/texlive/2026/texmf-dist/tex/generic/iftex/iftex.sty
+Package: iftex 2024/12/12 v1.0g TeX engine tests
+)
+(/usr/local/texlive/2026/texmf-dist/tex/generic/ltxcmds/ltxcmds.sty
+Package: ltxcmds 2023-12-04 v1.26 LaTeX kernel commands for general use (HO)
+)
+Package pdftexcmds Info: \pdf@primitive is available.
+Package pdftexcmds Info: \pdf@ifprimitive is available.
+Package pdftexcmds Info: \pdfdraftmode not found.
+)
+Package iflang Info: Naming convention for patterns: babel.
+)
 (/usr/local/texlive/2026/texmf-dist/tex/latex/geometry/geometry.sty
 Package: geometry 2026/03/07 v6.0 Page Geometry
 
-(/usr/local/texlive/2026/texmf-dist/tex/latex/graphics/keyval.sty
-Package: keyval 2022/05/29 v1.15 key=value parser (DPC)
-\KV@toks@=\toks17
-)
 (/usr/local/texlive/2026/texmf-dist/tex/generic/iftex/ifvtex.sty
 Package: ifvtex 2019/10/25 v1.7 ifvtex legacy package. Use iftex instead.
 )
-\Gm@cnth=\count295
-\Gm@cntv=\count296
-\c@Gm@tempcnt=\count297
-\Gm@bindingoffset=\dimen153
-\Gm@wd@mp=\dimen154
-\Gm@odd@mp=\dimen155
-\Gm@even@mp=\dimen156
-\Gm@layoutwidth=\dimen157
-\Gm@layoutheight=\dimen158
-\Gm@layouthoffset=\dimen159
-\Gm@layoutvoffset=\dimen160
-\Gm@dimlist=\toks18
+\Gm@cnth=\count304
+\Gm@cntv=\count305
+\c@Gm@tempcnt=\count306
+\Gm@bindingoffset=\dimen154
+\Gm@wd@mp=\dimen155
+\Gm@odd@mp=\dimen156
+\Gm@even@mp=\dimen157
+\Gm@layoutwidth=\dimen158
+\Gm@layoutheight=\dimen159
+\Gm@layouthoffset=\dimen160
+\Gm@layoutvoffset=\dimen161
+\Gm@dimlist=\toks21
 )
-(/usr/local/texlive/2026/texmf-dist/tex/latex/setspace/setspace.sty
-Package: setspace 2022/12/04 v6.7b set line spacing
+(/usr/local/texlive/2026/texmf-dist/tex/latex/amsmath/amsmath.sty
+Package: amsmath 2025/07/09 v2.17z AMS math features
+\@mathmargin=\skip51
+
+For additional information on amsmath, use the `?' option.
+(/usr/local/texlive/2026/texmf-dist/tex/latex/amsmath/amstext.sty
+Package: amstext 2024/11/17 v2.01 AMS text
+
+(/usr/local/texlive/2026/texmf-dist/tex/latex/amsmath/amsgen.sty
+File: amsgen.sty 1999/11/30 v2.0 generic functions
+\@emptytoks=\toks22
+\ex@=\dimen162
+))
+(/usr/local/texlive/2026/texmf-dist/tex/latex/amsmath/amsbsy.sty
+Package: amsbsy 1999/11/29 v1.2d Bold Symbols
+\pmbraise@=\dimen163
 )
-(/usr/local/texlive/2026/texmf-dist/tex/latex/tools/indentfirst.sty
-Package: indentfirst 2023/07/02 v1.03 Indent first paragraph (DPC)
+(/usr/local/texlive/2026/texmf-dist/tex/latex/amsmath/amsopn.sty
+Package: amsopn 2022/04/08 v2.04 operator names
 )
-(/usr/local/texlive/2026/texmf-dist/tex/latex/titlesec/titlesec.sty
-Package: titlesec 2025/01/04 v2.17 Sectioning titles
-\ttl@box=\box53
-\beforetitleunit=\skip51
-\aftertitleunit=\skip52
-\ttl@plus=\dimen161
-\ttl@minus=\dimen162
-\ttl@toksa=\toks19
-\titlewidth=\dimen163
-\titlewidthlast=\dimen164
-\titlewidthfirst=\dimen165
+\inf@bad=\count307
+LaTeX Info: Redefining \frac on input line 233.
+\uproot@=\count308
+\leftroot@=\count309
+LaTeX Info: Redefining \overline on input line 398.
+LaTeX Info: Redefining \colon on input line 409.
+\classnum@=\count310
+\DOTSCASE@=\count311
+LaTeX Info: Redefining \ldots on input line 495.
+LaTeX Info: Redefining \dots on input line 498.
+LaTeX Info: Redefining \cdots on input line 619.
+\Mathstrutbox@=\box53
+\strutbox@=\box54
+LaTeX Info: Redefining \big on input line 721.
+LaTeX Info: Redefining \Big on input line 722.
+LaTeX Info: Redefining \bigg on input line 723.
+LaTeX Info: Redefining \Bigg on input line 724.
+\big@size=\dimen164
+LaTeX Font Info:    Redeclaring font encoding OML on input line 742.
+LaTeX Font Info:    Redeclaring font encoding OMS on input line 743.
+\macc@depth=\count312
+LaTeX Info: Redefining \bmod on input line 904.
+LaTeX Info: Redefining \pmod on input line 909.
+LaTeX Info: Redefining \smash on input line 939.
+LaTeX Info: Redefining \relbar on input line 969.
+LaTeX Info: Redefining \Relbar on input line 970.
+\c@MaxMatrixCols=\count313
+\dotsspace@=\muskip17
+\c@parentequation=\count314
+\dspbrk@lvl=\count315
+\tag@help=\toks23
+\row@=\count316
+\column@=\count317
+\maxfields@=\count318
+\andhelp@=\toks24
+\eqnshift@=\dimen165
+\alignsep@=\dimen166
+\tagshift@=\dimen167
+\tagwidth@=\dimen168
+\totwidth@=\dimen169
+\lineht@=\dimen170
+\@envbody=\toks25
+\multlinegap=\skip52
+\multlinetaggap=\skip53
+\mathdisplay@stack=\toks26
+LaTeX Info: Redefining \[ on input line 2950.
+LaTeX Info: Redefining \] on input line 2951.
+)
+(/usr/local/texlive/2026/texmf-dist/tex/latex/amsfonts/amssymb.sty
+Package: amssymb 2013/01/14 v3.01 AMS font symbols
+
+(/usr/local/texlive/2026/texmf-dist/tex/latex/amsfonts/amsfonts.sty
+Package: amsfonts 2013/01/14 v3.01 Basic AMSFonts support
+\symAMSa=\mathgroup4
+\symAMSb=\mathgroup5
+LaTeX Font Info:    Redeclaring math symbol \hbar on input line 98.
+LaTeX Font Info:    Overwriting math alphabet `\mathfrak' in version `bold'
+(Font)                  U/euf/m/n --> U/euf/b/n on input line 106.
+))
+(/usr/local/texlive/2026/texmf-dist/tex/latex/amscls/amsthm.sty
+Package: amsthm 2020/05/29 v2.20.6
+\thm@style=\toks27
+\thm@bodyfont=\toks28
+\thm@headfont=\toks29
+\thm@notefont=\toks30
+\thm@headpunct=\toks31
+\thm@preskip=\skip54
+\thm@postskip=\skip55
+\thm@headsep=\skip56
+\dth@everypar=\toks32
+)
+(/usr/local/texlive/2026/texmf-dist/tex/latex/amsmath/amsxtra.sty
+Package: amsxtra 1999/11/15 v1.2c AMS extra commands
+LaTeX Info: Redefining \nobreakspace on input line 54.
 )
 (/usr/local/texlive/2026/texmf-dist/tex/latex/graphics/graphicx.sty
 Package: graphicx 2024/12/31 v1.2e Enhanced LaTeX Graphics (DPC,SPQR)
@@ -235,301 +393,710 @@ Package graphics Info: Driver file: xetex.def on input line 106.
 (/usr/local/texlive/2026/texmf-dist/tex/latex/graphics-def/xetex.def
 File: xetex.def 2025/11/01 v5.0p Graphics/color driver for xetex
 ))
-\Gin@req@height=\dimen166
-\Gin@req@width=\dimen167
+\Gin@req@height=\dimen171
+\Gin@req@width=\dimen172
 )
-(/usr/local/texlive/2026/texmf-dist/tex/latex/float/float.sty
-Package: float 2001/11/08 v1.3d Float enhancements (AL)
-\c@float@type=\count298
-\float@exts=\toks20
-\float@box=\box54
-\@float@everytoks=\toks21
-\@floatcapt=\box55
+(/usr/local/texlive/2026/texmf-dist/tex/latex/xcolor/xcolor.sty
+Package: xcolor 2024/09/29 v3.02 LaTeX color extensions (UK)
+
+(/usr/local/texlive/2026/texmf-dist/tex/latex/graphics-cfg/color.cfg
+File: color.cfg 2016/01/02 v1.6 sample color configuration
+)
+Package xcolor Info: Driver file: xetex.def on input line 274.
+
+(/usr/local/texlive/2026/texmf-dist/tex/latex/graphics/mathcolor.ltx)
+Package xcolor Info: Model `cmy' substituted by `cmy0' on input line 1349.
+Package xcolor Info: Model `RGB' extended on input line 1365.
+Package xcolor Info: Model `HTML' substituted by `rgb' on input line 1367.
+Package xcolor Info: Model `Hsb' substituted by `hsb' on input line 1368.
+Package xcolor Info: Model `tHsb' substituted by `hsb' on input line 1369.
+Package xcolor Info: Model `HSB' substituted by `hsb' on input line 1370.
+Package xcolor Info: Model `Gray' substituted by `gray' on input line 1371.
+Package xcolor Info: Model `wave' substituted by `hsb' on input line 1372.
+)
+(/usr/local/texlive/2026/texmf-dist/tex/latex/colortbl/colortbl.sty
+Package: colortbl 2024/10/29 v1.0k Color table columns (DPC)
+
+(/usr/local/texlive/2026/texmf-dist/tex/latex/tools/array.sty
+Package: array 2025/09/25 v2.6n Tabular extension package (FMi)
+\col@sep=\dimen173
+\ar@mcellbox=\box55
+\extrarowheight=\dimen174
+\NC@list=\toks33
+\extratabsurround=\skip57
+\backup@length=\skip58
+\ar@cellbox=\box56
+)
+\everycr=\toks34
+\minrowclearance=\skip59
+\rownum=\count319
+)
+(/usr/local/texlive/2026/texmf-dist/tex/latex/tools/tabularx.sty
+Package: tabularx 2023/12/11 v2.12a `tabularx' package (DPC)
+\TX@col@width=\dimen175
+\TX@old@table=\dimen176
+\TX@old@col=\dimen177
+\TX@target=\dimen178
+\TX@delta=\dimen179
+\TX@cols=\count320
+\TX@ftn=\toks35
+)
+(/usr/local/texlive/2026/texmf-dist/tex/latex/fancyhdr/fancyhdr.sty
+Package: fancyhdr 2025/02/07 v5.2 Extensive control of page headers and footers
+
+\f@nch@headwidth=\skip60
+\f@nch@offset@elh=\skip61
+\f@nch@offset@erh=\skip62
+\f@nch@offset@olh=\skip63
+\f@nch@offset@orh=\skip64
+\f@nch@offset@elf=\skip65
+\f@nch@offset@erf=\skip66
+\f@nch@offset@olf=\skip67
+\f@nch@offset@orf=\skip68
+\f@nch@height=\skip69
+\f@nch@footalignment=\skip70
+\f@nch@widthL=\skip71
+\f@nch@widthC=\skip72
+\f@nch@widthR=\skip73
+\@temptokenb=\toks36
 )
 (/usr/local/texlive/2026/texmf-dist/tex/latex/caption/caption.sty
 Package: caption 2023/08/05 v3.6o Customizing captions (AR)
 
 (/usr/local/texlive/2026/texmf-dist/tex/latex/caption/caption3.sty
 Package: caption3 2023/07/31 v2.4d caption3 kernel (AR)
-\caption@tempdima=\dimen168
-\captionmargin=\dimen169
-\caption@leftmargin=\dimen170
-\caption@rightmargin=\dimen171
-\caption@width=\dimen172
-\caption@indent=\dimen173
-\caption@parindent=\dimen174
-\caption@hangindent=\dimen175
+\caption@tempdima=\dimen180
+\captionmargin=\dimen181
+\caption@leftmargin=\dimen182
+\caption@rightmargin=\dimen183
+\caption@width=\dimen184
+\caption@indent=\dimen185
+\caption@parindent=\dimen186
+\caption@hangindent=\dimen187
 Package caption Info: Standard document class detected.
 )
-\c@caption@flags=\count299
-\c@continuedfloat=\count300
-Package caption Info: float package is loaded.
+\c@caption@flags=\count321
+\c@continuedfloat=\count322
 )
-(/usr/local/texlive/2026/texmf-dist/tex/latex/tocloft/tocloft.sty
-Package: tocloft 2017/08/31 v2.3i parameterised ToC, etc., typesetting
-Package tocloft Info: The document has section divisions on input line 51.
-\cftparskip=\skip53
-\cftbeforetoctitleskip=\skip54
-\cftaftertoctitleskip=\skip55
-\cftbeforepartskip=\skip56
-\cftpartnumwidth=\skip57
-\cftpartindent=\skip58
-\cftbeforesecskip=\skip59
-\cftsecindent=\skip60
-\cftsecnumwidth=\skip61
-\cftbeforesubsecskip=\skip62
-\cftsubsecindent=\skip63
-\cftsubsecnumwidth=\skip64
-\cftbeforesubsubsecskip=\skip65
-\cftsubsubsecindent=\skip66
-\cftsubsubsecnumwidth=\skip67
-\cftbeforeparaskip=\skip68
-\cftparaindent=\skip69
-\cftparanumwidth=\skip70
-\cftbeforesubparaskip=\skip71
-\cftsubparaindent=\skip72
-\cftsubparanumwidth=\skip73
-\cftbeforeloftitleskip=\skip74
-\cftafterloftitleskip=\skip75
-\cftbeforefigskip=\skip76
-\cftfigindent=\skip77
-\cftfignumwidth=\skip78
-\c@lofdepth=\count301
-\c@lotdepth=\count302
-\cftbeforelottitleskip=\skip79
-\cftafterlottitleskip=\skip80
-\cftbeforetabskip=\skip81
-\cfttabindent=\skip82
-\cfttabnumwidth=\skip83
+(/usr/local/texlive/2026/texmf-dist/tex/latex/floatrow/floatrow.sty
+Package: floatrow 2008/08/02 v0.3b floatrow: float package extension
+\c@float@type=\count323
+\float@exts=\toks37
+\float@box=\box57
+\@floatcapt=\box58
+Package floatrow Info: Modified float package code loaded on input line 455.
+Package floatrow Info: Modified rotfloat package code loaded on input line 473.
+
+\FR@everyfloat=\toks38
+\flrow@foot=\insert252
+\FB@wd=\dimen188
+\FBo@wd=\dimen189
+\FBc@wd=\dimen190
+\FBo@ht=\skip74
+\FBc@ht=\skip75
+\FBf@ht=\skip76
+\FBo@max=\skip77
+\FBc@max=\skip78
+\FBf@max=\skip79
+\c@FBl@b=\count324
+\floatbox@depth=\count325
+\c@FRobj=\count326
+\c@FRsobj=\count327
+\Xhsize=\skip80
+\sXhsize=\skip81
+\Zhsize=\skip82
+\sZhsize=\skip83
+\flrow@rowbox=\box59
+\FR@Zunitlength=\dimen191
+\c@FBcnt=\count328
+\FPOScnt=\count329
+\LTleft=\skip84
+\LTright=\skip85
+\LTleft=\skip86
+\LTright=\skip87
+\flrow@types=\toks39
 )
-(/usr/local/texlive/2026/texmf-dist/tex/latex/hyperref/hyperref.sty
-Package: hyperref 2026-01-29 v7.01p Hypertext links for LaTeX
+(/usr/local/texlive/2026/texmf-dist/tex/latex/algorithms/algorithm.sty
+Invalid UTF-8 byte or sequence at line 11 replaced by U+FFFD.
+Package: algorithm 2009/08/24 v0.1 Document Style `algorithm' - floating enviro
+nment
+
+(/usr/local/texlive/2026/texmf-dist/tex/latex/base/ifthen.sty
+Package: ifthen 2024/03/16 v1.1e Standard LaTeX ifthen package (DPC)
+)
+\c@algorithm=\count330
+)
+(/usr/local/texlive/2026/texmf-dist/tex/latex/algorithmicx/algorithmicx.sty
+Package: algorithmicx 2005/04/27 v1.2 Algorithmicx
+
+Document Style algorithmicx 1.2 - a greatly improved `algorithmic' style
+\c@ALG@line=\count331
+\c@ALG@rem=\count332
+\c@ALG@nested=\count333
+\ALG@tlm=\skip88
+\ALG@thistlm=\skip89
+\c@ALG@Lnr=\count334
+\c@ALG@blocknr=\count335
+\c@ALG@storecount=\count336
+\c@ALG@tmpcounter=\count337
+\ALG@tmplength=\skip90
+) (/usr/local/texlive/2026/texmf-dist/tex/latex/algorithmicx/algpseudocode.sty
+Package: algpseudocode 
+
+Document Style - pseudocode environments for use with the `algorithmicx' style
+) (/usr/local/texlive/2026/texmf-dist/tex/latex/enumitem/enumitem.sty
+Package: enumitem 2025/02/06 v3.11 Customized lists
+\enitkv@toks@=\toks40
+\labelindent=\skip91
+\enit@outerparindent=\dimen192
+\enit@toks=\toks41
+\enit@inbox=\box60
+\enit@count@id=\count338
+\enitdp@description=\count339
+)
+(/usr/local/texlive/2026/texmf-dist/tex/latex/setspace/setspace.sty
+Package: setspace 2022/12/04 v6.7b set line spacing
+)
+(/usr/local/texlive/2026/texmf-dist/tex/latex/biblatex/biblatex.sty
+Package: biblatex 2025/07/10 v3.21 programmable bibliographies (PK/MW)
+
+(/usr/local/texlive/2026/texmf-dist/tex/latex/kvoptions/kvoptions.sty
+Package: kvoptions 2022-06-15 v3.15 Key value format for package options (HO)
 
 (/usr/local/texlive/2026/texmf-dist/tex/latex/kvsetkeys/kvsetkeys.sty
 Package: kvsetkeys 2022-10-05 v1.19 Key value parser (HO)
-)
-(/usr/local/texlive/2026/texmf-dist/tex/generic/kvdefinekeys/kvdefinekeys.sty
-Package: kvdefinekeys 2019-12-19 v1.6 Define keys (HO)
-)
-(/usr/local/texlive/2026/texmf-dist/tex/generic/pdfescape/pdfescape.sty
-Package: pdfescape 2019/12/09 v1.15 Implements pdfTeX's escape features (HO)
-
-(/usr/local/texlive/2026/texmf-dist/tex/generic/ltxcmds/ltxcmds.sty
-Package: ltxcmds 2023-12-04 v1.26 LaTeX kernel commands for general use (HO)
-)
-(/usr/local/texlive/2026/texmf-dist/tex/generic/pdftexcmds/pdftexcmds.sty
-Package: pdftexcmds 2020-06-27 v0.33 Utility functions of pdfTeX for LuaTeX (HO
-)
-
-(/usr/local/texlive/2026/texmf-dist/tex/generic/infwarerr/infwarerr.sty
-Package: infwarerr 2019/12/03 v1.5 Providing info/warning/error messages (HO)
-)
-Package pdftexcmds Info: \pdf@primitive is available.
-Package pdftexcmds Info: \pdf@ifprimitive is available.
-Package pdftexcmds Info: \pdfdraftmode not found.
 ))
-(/usr/local/texlive/2026/texmf-dist/tex/latex/hycolor/hycolor.sty
-Package: hycolor 2020-01-27 v1.10 Color options for hyperref/bookmark (HO)
-)
-(/usr/local/texlive/2026/texmf-dist/tex/latex/hyperref/nameref.sty
-Package: nameref 2026-01-29 v2.58 Cross-referencing by name of section
+(/usr/local/texlive/2026/texmf-dist/tex/latex/logreq/logreq.sty
+Package: logreq 2010/08/04 v1.0 xml request logger
+\lrq@indent=\count340
 
-(/usr/local/texlive/2026/texmf-dist/tex/latex/refcount/refcount.sty
-Package: refcount 2019/12/15 v3.6 Data extraction from label references (HO)
-)
-(/usr/local/texlive/2026/texmf-dist/tex/generic/gettitlestring/gettitlestring.s
-ty
-Package: gettitlestring 2019/12/15 v1.6 Cleanup title references (HO)
- (/usr/local/texlive/2026/texmf-dist/tex/latex/kvoptions/kvoptions.sty
-Package: kvoptions 2022-06-15 v3.15 Key value format for package options (HO)
+(/usr/local/texlive/2026/texmf-dist/tex/latex/logreq/logreq.def
+File: logreq.def 2010/08/04 v1.0 logreq spec v1.0
 ))
-\c@section@level=\count303
-)
-(/usr/local/texlive/2026/texmf-dist/tex/generic/stringenc/stringenc.sty
-Package: stringenc 2019/11/29 v1.12 Convert strings between diff. encodings (HO
-)
-)
-\@linkdim=\dimen176
-\Hy@linkcounter=\count304
-\Hy@pagecounter=\count305
-
-(/usr/local/texlive/2026/texmf-dist/tex/latex/hyperref/pd1enc.def
-File: pd1enc.def 2026-01-29 v7.01p Hyperref: PDFDocEncoding definition (HO)
-)
-(/usr/local/texlive/2026/texmf-dist/tex/generic/intcalc/intcalc.sty
-Package: intcalc 2019/12/15 v1.3 Expandable calculations with integers (HO)
-)
-\Hy@SavedSpaceFactor=\count306
-
-(/usr/local/texlive/2026/texmf-dist/tex/latex/hyperref/puenc.def
-File: puenc.def 2026-01-29 v7.01p Hyperref: PDF Unicode definition (HO)
-)
-Package hyperref Info: Hyper figures OFF on input line 4201.
-Package hyperref Info: Link nesting OFF on input line 4206.
-Package hyperref Info: Hyper index ON on input line 4209.
-Package hyperref Info: Plain pages OFF on input line 4216.
-Package hyperref Info: Backreferencing OFF on input line 4221.
-Package hyperref Info: Implicit mode ON; LaTeX internals redefined.
-Package hyperref Info: Bookmarks ON on input line 4468.
-\c@Hy@tempcnt=\count307
-
 (/usr/local/texlive/2026/texmf-dist/tex/latex/url/url.sty
-\Urlmuskip=\muskip17
+\Urlmuskip=\muskip18
 Package: url 2013/09/16  ver 3.4  Verb mode for urls, etc.
 )
-LaTeX Info: Redefining \url on input line 4807.
-\XeTeXLinkMargin=\dimen177
+\c@tabx@nest=\count341
+\c@listtotal=\count342
+\c@listcount=\count343
+\c@liststart=\count344
+\c@liststop=\count345
+\c@citecount=\count346
+\c@citetotal=\count347
+\c@multicitecount=\count348
+\c@multicitetotal=\count349
+\c@instcount=\count350
+\c@maxnames=\count351
+\c@minnames=\count352
+\c@maxitems=\count353
+\c@minitems=\count354
+\c@citecounter=\count355
+\c@maxcitecounter=\count356
+\c@savedcitecounter=\count357
+\c@uniquelist=\count358
+\c@uniquename=\count359
+\c@refsection=\count360
+\c@refsegment=\count361
+\c@maxextratitle=\count362
+\c@maxextratitleyear=\count363
+\c@maxextraname=\count364
+\c@maxextradate=\count365
+\c@maxextraalpha=\count366
+\c@abbrvpenalty=\count367
+\c@highnamepenalty=\count368
+\c@lownamepenalty=\count369
+\c@maxparens=\count370
+\c@parenlevel=\count371
+\blx@tempcnta=\count372
+\blx@tempcntb=\count373
+\blx@tempcntc=\count374
+\c@blx@maxsection=\count375
+\blx@maxsegment@0=\count376
+\blx@notetype=\count377
+\blx@parenlevel@text=\count378
+\blx@parenlevel@foot=\count379
+\blx@sectionciteorder@0=\count380
+\blx@sectionciteorderinternal@0=\count381
+\blx@entrysetcounter=\count382
+\blx@biblioinstance=\count383
+\labelnumberwidth=\skip92
+\labelalphawidth=\skip93
+\biblabelsep=\skip94
+\bibitemsep=\skip95
+\bibnamesep=\skip96
+\bibinitsep=\skip97
+\bibparsep=\skip98
+\bibhang=\skip99
+\blx@bcfin=\read3
+\blx@bcfout=\write3
+\blx@langwohyphens=\language92
+\c@mincomprange=\count384
+\c@maxcomprange=\count385
+\c@mincompwidth=\count386
+Package biblatex Info: Trying to load biblatex default data model...
+Package biblatex Info: ... file 'blx-dm.def' found.
 
-(/usr/local/texlive/2026/texmf-dist/tex/generic/bitset/bitset.sty
-Package: bitset 2019/12/09 v1.3 Handle bit-vector datatype (HO)
-
-(/usr/local/texlive/2026/texmf-dist/tex/generic/bigintcalc/bigintcalc.sty
-Package: bigintcalc 2019/12/15 v1.5 Expandable calculations on big integers (HO
+(/usr/local/texlive/2026/texmf-dist/tex/latex/biblatex/blx-dm.def
+File: blx-dm.def 2025/07/10 v3.21 biblatex datamodel (PK/MW)
 )
+Package biblatex Info: Trying to load biblatex citestyle data model...
+Package biblatex Info: ... file 'numeric-comp.dbx' not found.
+Package biblatex Info: Trying to load biblatex bibstyle data model...
+Package biblatex Info: ... file 'gost-numeric.dbx' found.
+
+(/usr/local/texlive/2026/texmf-dist/tex/latex/biblatex-gost/gost-numeric.dbx
+File: gost-numeric.dbx 2023/04/25 v1.24 biblatex-gost data model
+Package biblatex Info: Trying to load biblatex-gost data model...
+Package biblatex Info: ... file 'biblatex-gost.dbx' found.
+
+(/usr/local/texlive/2026/texmf-dist/tex/latex/biblatex-gost/biblatex-gost.dbx
+File: biblatex-gost.dbx 2023/04/25 v1.24 biblatex-gost data model
 ))
-\Fld@menulength=\count308
-\Field@Width=\dimen178
-\Fld@charsize=\dimen179
-Package hyperref Info: Hyper figures OFF on input line 6084.
-Package hyperref Info: Link nesting OFF on input line 6089.
-Package hyperref Info: Hyper index ON on input line 6092.
-Package hyperref Info: backreferencing OFF on input line 6099.
-Package hyperref Info: Link coloring OFF on input line 6104.
-Package hyperref Info: Link coloring with OCG OFF on input line 6109.
-Package hyperref Info: PDF/A mode OFF on input line 6114.
-\Hy@abspage=\count309
-\c@Item=\count310
-\c@Hfootnote=\count311
-)
-Package hyperref Info: Driver (autodetected): hxetex.
+Package biblatex Info: Trying to load biblatex custom data model...
+Package biblatex Info: ... file 'biblatex-dm.cfg' not found.
+\c@afterword=\count387
+\c@savedafterword=\count388
+\c@annotator=\count389
+\c@savedannotator=\count390
+\c@author=\count391
+\c@savedauthor=\count392
+\c@bookauthor=\count393
+\c@savedbookauthor=\count394
+\c@commentator=\count395
+\c@savedcommentator=\count396
+\c@editor=\count397
+\c@savededitor=\count398
+\c@editora=\count399
+\c@savededitora=\count400
+\c@editorb=\count401
+\c@savededitorb=\count402
+\c@editorc=\count403
+\c@savededitorc=\count404
+\c@foreword=\count405
+\c@savedforeword=\count406
+\c@holder=\count407
+\c@savedholder=\count408
+\c@introduction=\count409
+\c@savedintroduction=\count410
+\c@namea=\count411
+\c@savednamea=\count412
+\c@nameb=\count413
+\c@savednameb=\count414
+\c@namec=\count415
+\c@savednamec=\count416
+\c@translator=\count417
+\c@savedtranslator=\count418
+\c@shortauthor=\count419
+\c@savedshortauthor=\count420
+\c@shorteditor=\count421
+\c@savedshorteditor=\count422
+\c@booktranslator=\count423
+\c@savedbooktranslator=\count424
+\c@bookcommentator=\count425
+\c@savedbookcommentator=\count426
+\c@bookannotator=\count427
+\c@savedbookannotator=\count428
+\c@bookintroduction=\count429
+\c@savedbookintroduction=\count430
+\c@bookforeword=\count431
+\c@savedbookforeword=\count432
+\c@bookafterword=\count433
+\c@savedbookafterword=\count434
+\c@labelname=\count435
+\c@savedlabelname=\count436
+\c@institution=\count437
+\c@savedinstitution=\count438
+\c@lista=\count439
+\c@savedlista=\count440
+\c@listb=\count441
+\c@savedlistb=\count442
+\c@listc=\count443
+\c@savedlistc=\count444
+\c@listd=\count445
+\c@savedlistd=\count446
+\c@liste=\count447
+\c@savedliste=\count448
+\c@listf=\count449
+\c@savedlistf=\count450
+\c@location=\count451
+\c@savedlocation=\count452
+\c@organization=\count453
+\c@savedorganization=\count454
+\c@origlocation=\count455
+\c@savedoriglocation=\count456
+\c@origpublisher=\count457
+\c@savedorigpublisher=\count458
+\c@publisher=\count459
+\c@savedpublisher=\count460
+\c@language=\count461
+\c@savedlanguage=\count462
+\c@origlanguage=\count463
+\c@savedoriglanguage=\count464
+\c@bookoriglanguage=\count465
+\c@savedbookoriglanguage=\count466
+\c@specdata=\count467
+\c@savedspecdata=\count468
+\c@credits=\count469
+\c@savedcredits=\count470
+\c@bookcredits=\count471
+\c@savedbookcredits=\count472
+\c@editioncredits=\count473
+\c@savededitioncredits=\count474
+\c@pageref=\count475
+\c@savedpageref=\count476
+\shorthandwidth=\skip100
+\shortjournalwidth=\skip101
+\shortserieswidth=\skip102
+\shorttitlewidth=\skip103
+\shortauthorwidth=\skip104
+\shorteditorwidth=\skip105
+\locallabelnumberwidth=\skip106
+\locallabelalphawidth=\skip107
+\localshorthandwidth=\skip108
+\localshortjournalwidth=\skip109
+\localshortserieswidth=\skip110
+\localshorttitlewidth=\skip111
+\localshortauthorwidth=\skip112
+\localshorteditorwidth=\skip113
+Package biblatex Info: Trying to load enhanced support for Unicode engines...
+Package biblatex Info: ... file 'blx-unicode.def' found.
+(/usr/local/texlive/2026/texmf-dist/tex/latex/biblatex/blx-unicode.def)
+Package biblatex Info: Trying to load compatibility code...
+Package biblatex Info: ... file 'blx-compat.def' found.
 
-(/usr/local/texlive/2026/texmf-dist/tex/latex/hyperref/hxetex.def
-File: hxetex.def 2026-01-29 v7.01p Hyperref driver for XeTeX
-\pdfm@box=\box56
-\c@Hy@AnnotLevel=\count312
-\HyField@AnnotCount=\count313
-\Fld@listcount=\count314
-\c@bookmark@seq@number=\count315
+(/usr/local/texlive/2026/texmf-dist/tex/latex/biblatex/blx-compat.def
+File: blx-compat.def 2025/07/10 v3.21 biblatex compatibility (PK/MW)
+)
+Package biblatex Info: Trying to load generic definitions...
+Package biblatex Info: ... file 'biblatex.def' found.
 
-(/usr/local/texlive/2026/texmf-dist/tex/latex/rerunfilecheck/rerunfilecheck.sty
-Package: rerunfilecheck 2025-06-21 v1.11 Rerun checks for auxiliary files (HO)
+(/usr/local/texlive/2026/texmf-dist/tex/latex/biblatex/biblatex.def
+File: biblatex.def 2025/07/10 v3.21 biblatex compatibility (PK/MW)
+\c@textcitecount=\count477
+\c@textcitetotal=\count478
+\c@textcitemaxnames=\count479
+\c@biburlbigbreakpenalty=\count480
+\c@biburlbreakpenalty=\count481
+\c@biburlnumpenalty=\count482
+\c@biburlucpenalty=\count483
+\c@biburllcpenalty=\count484
+\biburlbigskip=\muskip19
+\biburlnumskip=\muskip20
+\biburlucskip=\muskip21
+\biburllcskip=\muskip22
+\c@smartand=\count485
+)
+Package biblatex Info: Trying to load bibliography style 'gost-numeric'...
+Package biblatex Info: ... file 'gost-numeric.bbx' found.
 
-(/usr/local/texlive/2026/texmf-dist/tex/generic/uniquecounter/uniquecounter.sty
-Package: uniquecounter 2019/12/15 v1.4 Provide unlimited unique counter (HO)
+(/usr/local/texlive/2026/texmf-dist/tex/latex/biblatex-gost/gost-numeric.bbx
+File: gost-numeric.bbx 2023/04/25 v1.24 biblatex-gost styles
+Package biblatex Info: Trying to load bibliography style 'gost-standard'...
+Package biblatex Info: ... file 'gost-standard.bbx' found.
+
+(/usr/local/texlive/2026/texmf-dist/tex/latex/biblatex-gost/gost-standard.bbx
+File: gost-standard.bbx 2023/04/25 v1.24 biblatex-gost styles
+Package biblatex Info: Trying to load biblatex-gost generic definitions...
+Package biblatex Info: ... file 'biblatex-gost.def' found.
+
+(/usr/local/texlive/2026/texmf-dist/tex/latex/biblatex-gost/biblatex-gost.def
+File: biblatex-gost.def 2023/04/25 v1.24 biblatex-gost styles
 )
-Package uniquecounter Info: New unique counter `rerunfilecheck' on input line 2
-84.
+\c@blx@gost@pointer=\count486
+\c@bbx:relatedcount=\count487
+\c@bbx:relatedtotal=\count488
+Package biblatex Info: Redefining autocite command 'footnote'.
+Package biblatex Info: Redefining autocite command 'superscript'.
+))
+Package biblatex Info: Trying to load citation style 'numeric-comp'...
+Package biblatex Info: ... file 'numeric-comp.cbx' found.
+ (/usr/local/texlive/2026/texmf-dist/tex/latex/biblatex/cbx/numeric-comp.cbx
+File: numeric-comp.cbx 2025/07/10 v3.21 biblatex citation style (PK/MW)
+\c@cbx@tempcnta=\count489
+\c@cbx@tempcntb=\count490
+\c@cbx@tempcntc=\count491
+\c@cbx@tempcntd=\count492
+Package biblatex Info: Redefining '\cite'.
+Package biblatex Info: Redefining '\parencite'.
+Package biblatex Info: Redefining '\footcite'.
+Package biblatex Info: Redefining '\footcitetext'.
+Package biblatex Info: Redefining '\smartcite'.
+Package biblatex Info: Redefining '\supercite'.
+Package biblatex Info: Redefining '\textcite'.
+Package biblatex Info: Redefining '\textcites'.
+Package biblatex Info: Redefining '\cites'.
+Package biblatex Info: Redefining '\parencites'.
+Package biblatex Info: Redefining '\smartcites'.
 )
-\Hy@SectionHShift=\skip84
+Package biblatex Info: Trying to load configuration file...
+Package biblatex Info: ... file 'biblatex.cfg' found.
+
+(/usr/local/texlive/2026/texmf-dist/tex/latex/biblatex/biblatex.cfg
+File: biblatex.cfg 
 )
-Package hyperref Info: Option `colorlinks' set `true' on input line 49.
- (./diploma.aux)
+Package biblatex Info: XeTeX detected.
+(biblatex)             Assuming input encoding 'utf8'.
+Package biblatex Info: Document encoding is UTF8 ....
+Package biblatex Info: ... and expl3
+(biblatex)             2026-01-19 L3 programming layer (loader) 
+(biblatex)             is new enough (at least 2020/04/06),
+(biblatex)             setting 'casechanger=expl3'.
+
+(/usr/local/texlive/2026/texmf-dist/tex/latex/biblatex/blx-case-expl3.sty
+Package: blx-case-expl3 2025/07/10 v3.21 expl3 case changing code for biblatex
+))
+(/usr/local/texlive/2026/texmf-dist/tex/latex/totcount/totcount.sty
+Package: totcount 2011/01/25 v1.2 package for gettingthe total value of LaTeX c
+ounters
+)
+(/usr/local/texlive/2026/texmf-dist/tex/latex/tools/longtable.sty
+Package: longtable 2025-10-13 v4.24 Multi-page Table package (DPC)
+\LTleft=\skip114
+\LTright=\skip115
+\LTpre=\skip116
+\LTpost=\skip117
+\LTchunksize=\count493
+\LTcapwidth=\dimen193
+\LT@head=\box61
+\LT@firsthead=\box62
+\LT@foot=\box63
+\LT@lastfoot=\box64
+\LT@gbox=\box65
+\LT@cols=\count494
+\LT@rows=\count495
+\c@LT@tables=\count496
+\c@LT@chunks=\count497
+\LT@p@ftn=\toks42
+)
+(./diploma.tct
+\c@figure@totc=\count498
+\c@table@totc=\count499
+\c@algorithm@totc=\count500
+\c@citnum@totc=\count501
+\c@appendix@totc=\count502
+\c@c@relatedworksourcecount@totc=\count503
+\c@c@russiansourcesfiveyears@totc=\count504
+\c@c@russiansourcestenyears@totc=\count505
+\c@c@russiansourcesveryold@totc=\count506
+\c@c@foreignsourcesfiveyears@totc=\count507
+\c@c@foreignsourcestenyears@totc=\count508
+\c@c@foreignsourcesveryold@totc=\count509
+\c@c@internetsources@totc=\count510
+)
+\diploma.tct@stream=\write4
+\openout4 = `diploma.tct'.
+
+ (./diploma.tct) (./diploma.tct)
+\c@citnum=\count511
+ (./diploma.tct)
+\c@appendix=\count512
+ (./diploma.tct)
+\c@theorem=\count513
+(/usr/local/texlive/2026/texmf-dist/tex/latex/listings/listings.sty
+\lst@mode=\count514
+\lst@gtempboxa=\box66
+\lst@token=\toks43
+\lst@length=\count515
+\lst@currlwidth=\dimen194
+\lst@column=\count516
+\lst@pos=\count517
+\lst@lostspace=\dimen195
+\lst@width=\dimen196
+\lst@newlines=\count518
+\lst@lineno=\count519
+\lst@maxwidth=\dimen197
+
+(/usr/local/texlive/2026/texmf-dist/tex/latex/listings/lstpatch.sty
+File: lstpatch.sty 2025/11/14 1.11b (Carsten Heinz)
+)
+(/usr/local/texlive/2026/texmf-dist/tex/latex/listings/lstmisc.sty
+File: lstmisc.sty 2025/11/14 1.11b (Carsten Heinz)
+\c@lstnumber=\count520
+\lst@skipnumbers=\count521
+\lst@framebox=\box67
+)
+(/usr/local/texlive/2026/texmf-dist/tex/latex/listings/listings.cfg
+File: listings.cfg 2025/11/14 1.11b listings configuration
+))
+Package: listings 2025/11/14 1.11b (Carsten Heinz)
+
+==> First Aid for listings.sty no longer applied!
+    Expected:
+        2024/09/23 1.10c (Carsten Heinz)
+    but found:
+        2025/11/14 1.11b (Carsten Heinz)
+    so I'm assuming it got fixed.
+(/usr/local/texlive/2026/texmf-dist/tex/latex/listings/lstlang1.sty
+File: lstlang1.sty 2025/11/14 1.11b listings language file
+)
+(/usr/local/texlive/2026/texmf-dist/tex/latex/chngcntr/chngcntr.sty
+Package: chngcntr 2018/04/09 v1.1a change counter resetting
+Package chngcntr Info: \counterwithout already defined.
+(chngcntr)             Quitting chngcntr on input line 21.
+)
+\c@@bibliocounter=\count522
+\c@c@relatedworksourcecount=\count523
+
+(./diploma.tct)
+\c@c@russiansourcesfiveyears=\count524
+ (./diploma.tct)
+\c@c@russiansourcestenyears=\count525
+ (./diploma.tct)
+\c@c@russiansourcesveryold=\count526
+ (./diploma.tct)
+\c@c@foreignsourcesfiveyears=\count527
+ (./diploma.tct)
+\c@c@foreignsourcestenyears=\count528
+(./diploma.tct)
+\c@c@foreignsourcesveryold=\count529
+ (./diploma.tct)
+\c@c@internetsources=\count530
+ (./diploma.tct)
+(/usr/local/texlive/2026/texmf-dist/tex/latex/titlesec/titlesec.sty
+Package: titlesec 2025/01/04 v2.17 Sectioning titles
+\ttl@box=\box68
+\beforetitleunit=\skip118
+\aftertitleunit=\skip119
+\ttl@plus=\dimen198
+\ttl@minus=\dimen199
+\ttl@toksa=\toks44
+\titlewidth=\dimen256
+\titlewidthlast=\dimen257
+\titlewidthfirst=\dimen258
+)
+(/usr/local/texlive/2026/texmf-dist/tex/latex/titlesec/titletoc.sty
+Package: titletoc 2025/01/04 v2.17 TOC entries
+\ttl@leftsep=\dimen259
+)
+\chapterPrefix=\skip120
+\sectionPrefix=\skip121
+\subsectionPrefix=\skip122
+
+(/usr/local/texlive/2026/texmf-dist/tex/generic/ulem/ulem.sty
+\UL@box=\box69
+\UL@hyphenbox=\box70
+\UL@skip=\skip123
+\UL@hook=\toks45
+\UL@height=\dimen260
+\UL@pe=\count531
+\UL@pixel=\dimen261
+\ULC@box=\box71
+Package: ulem 2019/11/18
+\ULdepth=\dimen262
+)
+(/usr/local/texlive/2026/texmf-dist/tex/generic/iftex/ifpdf.sty
+Package: ifpdf 2019/10/25 v3.4 ifpdf legacy package. Use iftex instead.
+))
+Package csquotes Info: Checking for multilingual support...
+Package csquotes Info: ... found 'babel' package.
+Package csquotes Info: Adjusting default style.
+Package csquotes Info: Redefining alias 'default' -> 'russian'.
+
+(./diploma.aux
+Package babel Info: 'russian' activates 'russian' shorthands.
+(babel)             Reported on input line 6.
+)
 \openout1 = `diploma.aux'.
 
-LaTeX Font Info:    Checking defaults for OML/cmm/m/it on input line 51.
-LaTeX Font Info:    ... okay on input line 51.
-LaTeX Font Info:    Checking defaults for OMS/cmsy/m/n on input line 51.
-LaTeX Font Info:    ... okay on input line 51.
-LaTeX Font Info:    Checking defaults for OT1/cmr/m/n on input line 51.
-LaTeX Font Info:    ... okay on input line 51.
-LaTeX Font Info:    Checking defaults for T1/cmr/m/n on input line 51.
-LaTeX Font Info:    ... okay on input line 51.
-LaTeX Font Info:    Checking defaults for TS1/cmr/m/n on input line 51.
-LaTeX Font Info:    ... okay on input line 51.
-LaTeX Font Info:    Checking defaults for TU/lmr/m/n on input line 51.
-LaTeX Font Info:    ... okay on input line 51.
-LaTeX Font Info:    Checking defaults for OMX/cmex/m/n on input line 51.
-LaTeX Font Info:    ... okay on input line 51.
-LaTeX Font Info:    Checking defaults for U/cmr/m/n on input line 51.
-LaTeX Font Info:    ... okay on input line 51.
-LaTeX Font Info:    Checking defaults for PD1/pdf/m/n on input line 51.
-LaTeX Font Info:    ... okay on input line 51.
-LaTeX Font Info:    Checking defaults for PU/pdf/m/n on input line 51.
-LaTeX Font Info:    ... okay on input line 51.
+LaTeX Font Info:    Checking defaults for OML/cmm/m/it on input line 7.
+LaTeX Font Info:    ... okay on input line 7.
+LaTeX Font Info:    Checking defaults for OMS/cmsy/m/n on input line 7.
+LaTeX Font Info:    ... okay on input line 7.
+LaTeX Font Info:    Checking defaults for OT1/cmr/m/n on input line 7.
+LaTeX Font Info:    ... okay on input line 7.
+LaTeX Font Info:    Checking defaults for T1/cmr/m/n on input line 7.
+LaTeX Font Info:    ... okay on input line 7.
+LaTeX Font Info:    Checking defaults for TS1/cmr/m/n on input line 7.
+LaTeX Font Info:    ... okay on input line 7.
+LaTeX Font Info:    Checking defaults for TU/lmr/m/n on input line 7.
+LaTeX Font Info:    ... okay on input line 7.
+LaTeX Font Info:    Checking defaults for OMX/cmex/m/n on input line 7.
+LaTeX Font Info:    ... okay on input line 7.
+LaTeX Font Info:    Checking defaults for U/cmr/m/n on input line 7.
+LaTeX Font Info:    ... okay on input line 7.
 
 Package fontspec Info: 
 (fontspec)             Adjusting the maths setup (use [no-math] to avoid
 (fontspec)             this).
 
-\symlegacymaths=\mathgroup4
+\symlegacymaths=\mathgroup6
 LaTeX Font Info:    Overwriting symbol font `legacymaths' in version `bold'
-(Font)                  OT1/cmr/m/n --> OT1/cmr/bx/n on input line 51.
-LaTeX Font Info:    Redeclaring math accent \acute on input line 51.
-LaTeX Font Info:    Redeclaring math accent \grave on input line 51.
-LaTeX Font Info:    Redeclaring math accent \ddot on input line 51.
-LaTeX Font Info:    Redeclaring math accent \tilde on input line 51.
-LaTeX Font Info:    Redeclaring math accent \bar on input line 51.
-LaTeX Font Info:    Redeclaring math accent \breve on input line 51.
-LaTeX Font Info:    Redeclaring math accent \check on input line 51.
-LaTeX Font Info:    Redeclaring math accent \hat on input line 51.
-LaTeX Font Info:    Redeclaring math accent \dot on input line 51.
-LaTeX Font Info:    Redeclaring math accent \mathring on input line 51.
-LaTeX Font Info:    Redeclaring math symbol \colon on input line 51.
-LaTeX Font Info:    Redeclaring math symbol \Gamma on input line 51.
-LaTeX Font Info:    Redeclaring math symbol \Delta on input line 51.
-LaTeX Font Info:    Redeclaring math symbol \Theta on input line 51.
-LaTeX Font Info:    Redeclaring math symbol \Lambda on input line 51.
-LaTeX Font Info:    Redeclaring math symbol \Xi on input line 51.
-LaTeX Font Info:    Redeclaring math symbol \Pi on input line 51.
-LaTeX Font Info:    Redeclaring math symbol \Sigma on input line 51.
-LaTeX Font Info:    Redeclaring math symbol \Upsilon on input line 51.
-LaTeX Font Info:    Redeclaring math symbol \Phi on input line 51.
-LaTeX Font Info:    Redeclaring math symbol \Psi on input line 51.
-LaTeX Font Info:    Redeclaring math symbol \Omega on input line 51.
-LaTeX Font Info:    Redeclaring math symbol \mathdollar on input line 51.
-LaTeX Font Info:    Redeclaring symbol font `operators' on input line 51.
+(Font)                  OT1/cmr/m/n --> OT1/cmr/bx/n on input line 7.
+LaTeX Font Info:    Redeclaring math accent \acute on input line 7.
+LaTeX Font Info:    Redeclaring math accent \grave on input line 7.
+LaTeX Font Info:    Redeclaring math accent \ddot on input line 7.
+LaTeX Font Info:    Redeclaring math accent \tilde on input line 7.
+LaTeX Font Info:    Redeclaring math accent \bar on input line 7.
+LaTeX Font Info:    Redeclaring math accent \breve on input line 7.
+LaTeX Font Info:    Redeclaring math accent \check on input line 7.
+LaTeX Font Info:    Redeclaring math accent \hat on input line 7.
+LaTeX Font Info:    Redeclaring math accent \dot on input line 7.
+LaTeX Font Info:    Redeclaring math accent \mathring on input line 7.
+LaTeX Font Info:    Redeclaring math symbol \Gamma on input line 7.
+LaTeX Font Info:    Redeclaring math symbol \Delta on input line 7.
+LaTeX Font Info:    Redeclaring math symbol \Theta on input line 7.
+LaTeX Font Info:    Redeclaring math symbol \Lambda on input line 7.
+LaTeX Font Info:    Redeclaring math symbol \Xi on input line 7.
+LaTeX Font Info:    Redeclaring math symbol \Pi on input line 7.
+LaTeX Font Info:    Redeclaring math symbol \Sigma on input line 7.
+LaTeX Font Info:    Redeclaring math symbol \Upsilon on input line 7.
+LaTeX Font Info:    Redeclaring math symbol \Phi on input line 7.
+LaTeX Font Info:    Redeclaring math symbol \Psi on input line 7.
+LaTeX Font Info:    Redeclaring math symbol \Omega on input line 7.
+LaTeX Font Info:    Redeclaring math symbol \mathdollar on input line 7.
+LaTeX Font Info:    Redeclaring symbol font `operators' on input line 7.
 LaTeX Font Info:    Encoding `OT1' has changed to `TU' for symbol font
-(Font)              `operators' in the math version `normal' on input line 51.
+(Font)              `operators' in the math version `normal' on input line 7.
 LaTeX Font Info:    Overwriting symbol font `operators' in version `normal'
-(Font)                  OT1/cmr/m/n --> TU/TimesNewRoman(0)/m/n on input line 5
-1.
+(Font)                  OT1/cmr/m/n --> TU/TimesNewRoman(0)/m/n on input line 7
+.
 LaTeX Font Info:    Encoding `OT1' has changed to `TU' for symbol font
-(Font)              `operators' in the math version `bold' on input line 51.
+(Font)              `operators' in the math version `bold' on input line 7.
 LaTeX Font Info:    Overwriting symbol font `operators' in version `bold'
 (Font)                  OT1/cmr/bx/n --> TU/TimesNewRoman(0)/m/n on input line 
-51.
+7.
 LaTeX Font Info:    Overwriting symbol font `operators' in version `normal'
 (Font)                  TU/TimesNewRoman(0)/m/n --> TU/TimesNewRoman(0)/m/n on 
-input line 51.
+input line 7.
 LaTeX Font Info:    Overwriting math alphabet `\mathit' in version `normal'
 (Font)                  OT1/cmr/m/it --> TU/TimesNewRoman(0)/m/it on input line
- 51.
+ 7.
 LaTeX Font Info:    Overwriting math alphabet `\mathbf' in version `normal'
 (Font)                  OT1/cmr/bx/n --> TU/TimesNewRoman(0)/b/n on input line 
-51.
+7.
 LaTeX Font Info:    Overwriting math alphabet `\mathsf' in version `normal'
-(Font)                  OT1/cmss/m/n --> TU/lmss/m/n on input line 51.
+(Font)                  OT1/cmss/m/n --> TU/Arial(0)/m/n on input line 7.
 LaTeX Font Info:    Overwriting math alphabet `\mathtt' in version `normal'
-(Font)                  OT1/cmtt/m/n --> TU/CourierNew(0)/m/n on input line 51.
-
+(Font)                  OT1/cmtt/m/n --> TU/CourierNew(0)/m/n on input line 7.
 LaTeX Font Info:    Overwriting symbol font `operators' in version `bold'
 (Font)                  TU/TimesNewRoman(0)/m/n --> TU/TimesNewRoman(0)/b/n on 
-input line 51.
+input line 7.
 LaTeX Font Info:    Overwriting math alphabet `\mathit' in version `bold'
 (Font)                  OT1/cmr/bx/it --> TU/TimesNewRoman(0)/b/it on input lin
-e 51.
+e 7.
 LaTeX Font Info:    Overwriting math alphabet `\mathsf' in version `bold'
-(Font)                  OT1/cmss/bx/n --> TU/lmss/b/n on input line 51.
+(Font)                  OT1/cmss/bx/n --> TU/Arial(0)/b/n on input line 7.
 LaTeX Font Info:    Overwriting math alphabet `\mathtt' in version `bold'
-(Font)                  OT1/cmtt/m/n --> TU/CourierNew(0)/b/n on input line 51.
-
+(Font)                  OT1/cmtt/m/n --> TU/CourierNew(0)/b/n on input line 7.
+LaTeX Info: Redefining \th on input line 7.
 
 *geometry* driver: auto-detecting
 *geometry* detected driver: xetex
 *geometry* verbose mode - [ preamble ] result:
 * driver: xetex
-* paper: a4paper
+* paper: <default>
 * layout: <same size as paper>
 * layoutoffset:(h,v)=(0.0pt,0.0pt)
 * modes: 
-* h-part:(L,W,R)=(85.35826pt, 469.47049pt, 42.67912pt)
+* h-part:(L,W,R)=(76.82234pt, 478.00641pt, 42.67912pt)
 * v-part:(T,H,B)=(56.9055pt, 731.23584pt, 56.9055pt)
 * \paperwidth=597.50787pt
 * \paperheight=845.04684pt
-* \textwidth=469.47049pt
+* \textwidth=478.00641pt
 * \textheight=731.23584pt
-* \oddsidemargin=13.08827pt
-* \evensidemargin=13.08827pt
+* \oddsidemargin=4.55235pt
+* \evensidemargin=4.55235pt
 * \topmargin=-54.36449pt
 * \headheight=14.0pt
 * \headsep=25.0pt
@@ -549,95 +1116,894 @@ LaTeX Font Info:    Overwriting math alphabet `\mathtt' in version `bold'
 * (1in=72.27pt=25.4mm, 1cm=28.453pt)
 
 Package caption Info: Begin \AtBeginDocument code.
-Package caption Info: hyperref package is loaded.
+Package caption Info: float package is loaded.
+Package caption Info: floatrow package is loaded.
+Package caption Info: floatrow package is loaded.
+Package caption Info: listings package is loaded.
+Package caption Info: longtable package is loaded.
+(/usr/local/texlive/2026/texmf-dist/tex/latex/caption/ltcaption.sty
+Package: ltcaption 2021/01/08 v1.4c longtable captions (AR)
+)
+Package caption Info: Fixing longtable code of `floatrow' package.
 Package caption Info: End \AtBeginDocument code.
-(/usr/local/texlive/2026/texmf-dist/tex/latex/graphics/color.sty
-Package: color 2025/01/14 v1.3e Standard LaTeX Color (DPC)
 
-(/usr/local/texlive/2026/texmf-dist/tex/latex/graphics-cfg/color.cfg
-File: color.cfg 2016/01/02 v1.6 sample color configuration
+(/usr/local/texlive/2026/texmf-dist/tex/latex/floatrow/fr-longtable.sty
+Package: fr-longtable 2007/11/28 v0.1b (beta) floatrow: additions for longtable
+
+\flrow@LT@lasthead=\box72
+\flrow@LT@prelastfoot=\box73
+\c@FBLTpage=\count532
 )
-Package color Info: Driver file: xetex.def on input line 149.
+Package biblatex Info: Trying to load language 'russian' -> 'russian-gost'...
+Package biblatex Info: ... file 'russian-gost.lbx' found.
 
-(/usr/local/texlive/2026/texmf-dist/tex/latex/graphics/mathcolor.ltx))
-Package hyperref Info: Link coloring ON on input line 51.
+(/usr/local/texlive/2026/texmf-dist/tex/latex/biblatex-gost/russian-gost.lbx
+File: russian-gost.lbx 2023/04/25 v1.24 biblatex-gost styles
+Package biblatex Info: Trying to load language 'russian'...
+Package biblatex Info: ... file 'russian.lbx' found.
 
-(./diploma.out) (./diploma.out)
-\@outlinefile=\write3
-\openout3 = `diploma.out'.
-
- [1
-
-] (./diploma.toc
-LaTeX Font Info:    External font `cmex7' loaded for size
-(Font)              <7> on input line 2.
+(/usr/local/texlive/2026/texmf-dist/tex/latex/biblatex/lbx/russian.lbx
+File: russian.lbx 2025/07/10 v3.21 biblatex localization (PK/MW)
 )
-\tf@toc=\write4
-\openout4 = `diploma.toc'.
+Package biblatex Info: Trying to load language 'russian'...
+Package biblatex Info: ... file 'russian.lbx' found.
 
- [1]
-Overfull \hbox (30.7911pt too wide) in paragraph at lines 85--93
-\TU/TimesNewRoman(1)/m/n/14.4 здавать фотореалистичные сцены, однако значительн
-ая часть работы по-прежнему
+(/usr/local/texlive/2026/texmf-dist/tex/latex/biblatex/lbx/russian.lbx
+File: russian.lbx 2025/07/10 v3.21 biblatex localization (PK/MW)
+))
+Package biblatex Info: Trying to load language 'english' -> 'english-gost'...
+Package biblatex Info: ... file 'english-gost.lbx' found.
+
+(/usr/local/texlive/2026/texmf-dist/tex/latex/biblatex-gost/english-gost.lbx
+File: english-gost.lbx 2023/04/25 v1.24 biblatex-gost styles
+Package biblatex Info: Trying to load language 'english'...
+Package biblatex Info: ... file 'english.lbx' found.
+
+(/usr/local/texlive/2026/texmf-dist/tex/latex/biblatex/lbx/english.lbx
+File: english.lbx 2025/07/10 v3.21 biblatex localization (PK/MW)
+)
+Package biblatex Info: Trying to load language 'english'...
+Package biblatex Info: ... file 'english.lbx' found.
+
+(/usr/local/texlive/2026/texmf-dist/tex/latex/biblatex/lbx/english.lbx
+File: english.lbx 2025/07/10 v3.21 biblatex localization (PK/MW)
+))
+Package biblatex Info: XeTeX detected.
+(biblatex)             Assuming input encoding 'utf8'.
+Package biblatex Info: Data encoding 'utf8' specified.
+(biblatex)             No need to reencode data.
+\openout3 = `diploma.bcf'.
+
+Package biblatex Info: Trying to load bibliographic data...
+Package biblatex Info: ... file 'diploma.bbl' found.
+
+(./diploma.bbl
+
+Package biblatex Warning: The following entry could not be found
+(biblatex)                in the database:
+(biblatex)                itmo-student-thesis
+(biblatex)                Please verify the spelling and rerun
+(biblatex)                LaTeX afterwards.
+
+)
+Package biblatex Info: Reference section=0 on input line 7.
+Package biblatex Info: Reference segment=0 on input line 7.
+\c@lstlisting=\count533
+\appendixPrefix=\skip124
+ (/usr/local/texlive/2026/texmf-dist/tex/latex/amsfonts/umsa.fd)
+(/usr/local/texlive/2026/texmf-dist/tex/latex/amsfonts/umsb.fd) [1
+
+] [1]
+(./diploma.toc
+Underfull \hbox (badness 10000) in paragraph at lines 3--3
+ []|| []\TU/TimesNewRoman(0)/m/n/14.4 Анализ существующих решений и выбор базов
+ого генератора 
  []
 
 
-Overfull \hbox (1.91142pt too wide) in paragraph at lines 111--113
-[]\TU/TimesNewRoman(1)/m/n/14.4 разработать пайплайн улучшения расстановки объе
-ктов, настройки све-
- []
-
-[2] [3] [4]
-Overfull \hbox (11.56064pt too wide) in paragraph at lines 217--219
-[]\TU/TimesNewRoman(1)/m/n/14.4 входные данные: геометрия помещения, тип комнат
-ы, ограничения, пред-
- []
-
-[5]
-Overfull \hbox (51.89413pt too wide) in paragraph at lines 237--237
-[]  \TU/CourierNew(1)/m/n/14.4 \includegraphics[width=0.95\textwidth]{images/pi
-peline.png}[] 
+Underfull \hbox (badness 10000) in paragraph at lines 9--9
+ []|| [] \TU/TimesNewRoman(0)/m/n/14.4 Неоднозначность восстановления 3D-сцены 
+по 
  []
 
 
-Overfull \hbox (37.49187pt too wide) in paragraph at lines 237--237
-[]  \TU/CourierNew(1)/m/n/14.4 \caption{Общая схема пайплайна генерации интерье
-рной сцены}[] 
- []
-
-[6]
-Overfull \hbox (6.69339pt too wide) in paragraph at lines 264--269
-[]\TU/TimesNewRoman(1)/m/n/14.4 В тексте нужно указать, какие признаки извлекаю
-тся: тип объекта, стиль,
+Underfull \hbox (badness 10000) in paragraph at lines 11--11
+ []|| []\TU/TimesNewRoman(0)/m/n/14.4 Существующие подходы к генерации и проект
+ированию 
  []
 
 
-Overfull \hbox (0.71846pt too wide) in paragraph at lines 297--300
-\TU/TimesNewRoman(1)/m/n/14.4 каждого товара желательно хранить название, катег
-орию, изображения, ссыл-
+Underfull \hbox (badness 1789) in paragraph at lines 16--16
+ []|| [] \TU/TimesNewRoman(0)/m/n/14.4 Недостаточность существующих решений для
+ полного 
+ []
+
+
+Underfull \hbox (badness 10000) in paragraph at lines 19--19
+ []|| [] \TU/TimesNewRoman(0)/m/n/14.4 Генерация расстановки с использованием б
+ольших 
+ []
+
+
+Underfull \hbox (badness 10000) in paragraph at lines 28--28
+ []|| [] \TU/TimesNewRoman(0)/m/n/14.4 Особенности кухонь и санузлов как специа
+льных 
+ []
+
+[4
+
+]
+Underfull \hbox (badness 10000) in paragraph at lines 45--45
+ []|| []\TU/TimesNewRoman(0)/m/n/14.4 Преобразование текстового описания в стру
+ктурированную 
+ []
+
+
+Underfull \hbox (badness 10000) in paragraph at lines 57--57
+ []|| [] \TU/TimesNewRoman(0)/m/n/14.4 Почему кухня является наиболее сложной з
+оной 
+ []
+
+[5] [6]
+Underfull \hbox (badness 2799) in paragraph at lines 93--93
+ []|| []\TU/TimesNewRoman(0)/m/n/14.4 Каталог реальных предметов, подбор замен 
+и экспериментальная 
+ []
+
+
+Underfull \hbox (badness 10000) in paragraph at lines 105--105
+ []|| [] \TU/TimesNewRoman(0)/m/n/14.4 Дублирование, неполные карточки и неодно
+родные 
  []
 
 [7]
-Overfull \hbox (2.97035pt too wide) in paragraph at lines 324--328
-[]\TU/TimesNewRoman(1)/m/n/14.4 Эксперименты должны показать, что предложенный 
-пайплайн дает при-
+Underfull \hbox (badness 2020) in paragraph at lines 137--137
+ []|| []\TU/TimesNewRoman(0)/m/n/14.4 Оценка качества с использованием автомати
+ческих метрик и 
  []
 
-[8] [9] [10] [11] (./diploma.aux)
+)
+\tf@toc=\write5
+\openout5 = `diploma.toc'.
+
+ [8]
+Underfull \hbox (badness 3439) in paragraph at lines 28--29
+[]\TU/TimesNewRoman(0)/m/n/14.4 По результатам анализа существующих решений мож
+но выделить
+ []
+
+
+Underfull \hbox (badness 2409) in paragraph at lines 28--29
+\TU/TimesNewRoman(0)/m/n/14.4 ограничение, существенное для задачи подготовки и
+нтерьерных дизайн-
+ []
+
+[9
+
+]
+Underfull \hbox (badness 10000) in paragraph at lines 40--41
+[]\TU/TimesNewRoman(0)/m/n/14.4 Реализовать экспорт: сохранение структурированн
+ого результата
+ []
+
+
+Underfull \hbox (badness 10000) in paragraph at lines 44--45
+[]\TU/TimesNewRoman(0)/m/n/14.4 Реализовать расчёт ориентировочной стоимости сф
+ормированного
+ []
+
+[10] [11]
+Глава 1.
+
+Underfull \hbox (badness 10000) in paragraph at lines 66--67
+[]\TU/TimesNewRoman(0)/m/n/14.4 Подготовка интерьерной 3D-сцены вручную требует
+ выполнения
+ []
+
+
+Underfull \hbox (badness 2088) in paragraph at lines 66--67
+\TU/TimesNewRoman(0)/m/n/14.4 нескольких этапов. Специалисту необходимо проанал
+изировать план по-
+ []
+
+[12
+
+] [13] [14] [15]
+Underfull \hbox (badness 2564) in paragraph at lines 124--125
+[]\TU/TimesNewRoman(0)/m/n/14.4 Также был рассмотрен подход, при котором расста
+новка объектов
+ []
+
+[16] [17]
+Underfull \hbox (badness 10000) in paragraph at lines 160--160
+[]|\TU/TimesNewRoman(0)/b/n/14.4 Ограничение для
+ []
+
+
+Underfull \hbox (badness 10000) in paragraph at lines 162--162
+[]|\TU/TimesNewRoman(0)/m/n/14.4 Генерация
+ []
+
+
+Underfull \hbox (badness 10000) in paragraph at lines 162--162
+[]|\TU/TimesNewRoman(0)/m/n/14.4 Быстрое получение
+ []
+
+
+Underfull \hbox (badness 10000) in paragraph at lines 162--162
+\TU/TimesNewRoman(0)/m/n/14.4 визуального образа
+ []
+
+
+Underfull \hbox (badness 10000) in paragraph at lines 162--162
+[]|\TU/TimesNewRoman(0)/m/n/14.4 Отсутствуют явные
+ []
+
+
+Underfull \hbox (badness 3088) in paragraph at lines 162--162
+\TU/TimesNewRoman(0)/m/n/14.4 объектов и редакти-
+ []
+
+
+Underfull \hbox (badness 10000) in paragraph at lines 162--163
+[]|\TU/TimesNewRoman(0)/m/n/14.4 Аналог по
+ []
+
+
+Underfull \hbox (badness 10000) in paragraph at lines 162--163
+\TU/TimesNewRoman(0)/m/n/14.4 пользова-
+ []
+
+
+Underfull \hbox (badness 10000) in paragraph at lines 162--163
+\TU/TimesNewRoman(0)/m/n/14.4 тельской
+ []
+
+
+Overfull \hbox (9.72092pt too wide) in paragraph at lines 164--164
+[]|\TU/TimesNewRoman(0)/m/n/14.4 Интерактивные
+ []
+
+
+Underfull \hbox (badness 10000) in paragraph at lines 164--164
+\TU/TimesNewRoman(0)/m/n/14.4 3D-
+ []
+
+
+Overfull \hbox (5.3545pt too wide) in paragraph at lines 164--164
+\TU/TimesNewRoman(0)/m/n/14.4 планировщики| 
+ []
+
+
+Underfull \hbox (badness 10000) in paragraph at lines 164--164
+[]|\TU/TimesNewRoman(0)/m/n/14.4 Значительная часть
+ []
+
+
+Underfull \hbox (badness 2990) in paragraph at lines 164--164
+\TU/TimesNewRoman(0)/m/n/14.4 выполняется пользо-
+ []
+
+
+Underfull \hbox (badness 10000) in paragraph at lines 164--165
+[]|\TU/TimesNewRoman(0)/m/n/14.4 Аналог по
+ []
+
+
+Underfull \hbox (badness 10000) in paragraph at lines 164--165
+\TU/TimesNewRoman(0)/m/n/14.4 практическо-
+ []
+
+
+Underfull \hbox (badness 10000) in paragraph at lines 166--166
+[]|\TU/TimesNewRoman(0)/m/n/14.4 Генерация 3D-
+ []
+
+
+Underfull \hbox (badness 10000) in paragraph at lines 166--166
+\TU/TimesNewRoman(0)/m/n/14.4 конфигурации
+ []
+
+
+Underfull \hbox (badness 10000) in paragraph at lines 166--166
+\TU/TimesNewRoman(0)/m/n/14.4 ка text-conditioned
+ []
+
+
+Underfull \hbox (badness 10000) in paragraph at lines 166--166
+[]|\TU/TimesNewRoman(0)/m/n/14.4 Недостаточный
+ []
+
+
+Underfull \hbox (badness 10000) in paragraph at lines 166--166
+\TU/TimesNewRoman(0)/m/n/14.4 контроль точной
+ []
+
+
+Underfull \hbox (badness 10000) in paragraph at lines 166--166
+\TU/TimesNewRoman(0)/m/n/14.4 геометрии задан-
+ []
+
+
+Underfull \hbox (badness 10000) in paragraph at lines 166--166
+\TU/TimesNewRoman(0)/m/n/14.4 ного помещения в
+ []
+
+
+Underfull \hbox (badness 10000) in paragraph at lines 166--166
+\TU/TimesNewRoman(0)/m/n/14.4 проведённых экспе-
+ []
+
+
+Overfull \hbox (21.83897pt too wide) in paragraph at lines 166--167
+[]|\TU/TimesNewRoman(0)/m/n/14.4 Альтернативный
+ []
+
+
+Underfull \hbox (badness 1688) in paragraph at lines 168--168
+[]|\TU/TimesNewRoman(0)/m/n/14.4 Отсутствие гарантии
+ []
+
+
+Underfull \hbox (badness 6691) in paragraph at lines 168--168
+\TU/TimesNewRoman(0)/m/n/14.4 геометрической кор-
+ []
+
+
+Underfull \hbox (badness 1147) in paragraph at lines 168--168
+\TU/TimesNewRoman(0)/m/n/14.4 ректности без внеш-
+ []
+
+
+Underfull \hbox (badness 10000) in paragraph at lines 168--169
+[]|\TU/TimesNewRoman(0)/m/n/14.4 Компонент
+ []
+
+
+Underfull \hbox (badness 10000) in paragraph at lines 168--169
+\TU/TimesNewRoman(0)/m/n/14.4 обработки
+ []
+
+
+Underfull \hbox (badness 1127) in paragraph at lines 168--169
+\TU/TimesNewRoman(0)/m/n/14.4 текста и по-
+ []
+
+
+Underfull \hbox (badness 10000) in paragraph at lines 170--170
+[]|\TU/TimesNewRoman(0)/m/n/14.4 Регуляризация
+ []
+
+
+Underfull \hbox (badness 6691) in paragraph at lines 170--170
+\TU/TimesNewRoman(0)/m/n/14.4 существующей рас-
+ []
+
+
+Underfull \hbox (badness 10000) in paragraph at lines 170--170
+[]|\TU/TimesNewRoman(0)/m/n/14.4 Не решает полный
+ []
+
+
+Underfull \hbox (badness 10000) in paragraph at lines 170--170
+\TU/TimesNewRoman(0)/m/n/14.4 конвейер от текста
+ []
+
+
+Underfull \hbox (badness 1377) in paragraph at lines 170--170
+\TU/TimesNewRoman(0)/m/n/14.4 и плана до каталога
+ []
+
+
+Underfull \hbox (badness 10000) in paragraph at lines 170--171
+[]|\TU/TimesNewRoman(0)/m/n/14.4 Возможный
+ []
+
+
+Underfull \hbox (badness 10000) in paragraph at lines 170--171
+\TU/TimesNewRoman(0)/m/n/14.4 улучшатель
+ []
+
+
+Underfull \hbox (badness 10000) in paragraph at lines 172--172
+[]|\TU/TimesNewRoman(0)/m/n/14.4 Детальные компо-
+ []
+
+
+Underfull \hbox (badness 2744) in paragraph at lines 172--172
+\TU/TimesNewRoman(0)/m/n/14.4 новки и структури-
+ []
+
+
+Underfull \hbox (badness 1776) in paragraph at lines 172--172
+\TU/TimesNewRoman(0)/m/n/14.4 рованные текстовые
+ []
+
+
+Underfull \hbox (badness 10000) in paragraph at lines 172--172
+[]|\TU/TimesNewRoman(0)/m/n/14.4 Недостаточный
+ []
+
+
+Underfull \hbox (badness 10000) in paragraph at lines 172--172
+\TU/TimesNewRoman(0)/m/n/14.4 контроль точных
+ []
+
+
+Underfull \hbox (badness 6893) in paragraph at lines 172--172
+\TU/TimesNewRoman(0)/m/n/14.4 параметров комнаты
+ []
+
+
+Overfull \hbox (15.91164pt too wide) in paragraph at lines 172--173
+[]|\TU/TimesNewRoman(0)/m/n/14.4 Перспективный
+ []
+
+
+Underfull \hbox (badness 10000) in paragraph at lines 174--174
+[]|\TU/TimesNewRoman(0)/m/n/14.4 Infinigen
+ []
+
+
+Underfull \hbox (badness 10000) in paragraph at lines 174--174
+\TU/TimesNewRoman(0)/m/n/14.4 ция редактируемых
+ []
+
+
+Underfull \hbox (badness 5161) in paragraph at lines 174--174
+[]|\TU/TimesNewRoman(0)/m/n/14.4 Нет прямой генера-
+ []
+
+
+Underfull \hbox (badness 10000) in paragraph at lines 174--175
+[]|\TU/TimesNewRoman(0)/m/n/14.4 Базовый
+ []
+
+
+Underfull \hbox (badness 10000) in paragraph at lines 174--175
+\TU/TimesNewRoman(0)/m/n/14.4 генератор
+ []
+
+
+Underfull \hbox (badness 10000) in paragraph at lines 174--175
+\TU/TimesNewRoman(0)/m/n/14.4 первичной
+ []
+
+
+Overfull \hbox (2.19638pt too wide) in paragraph at lines 158--177
+ [][] 
+ []
+
+
+LaTeX Warning: `h' float specifier changed to `ht'.
+
+[18]
+Underfull \hbox (badness 1097) in paragraph at lines 201--202
+\TU/TimesNewRoman(0)/m/n/14.4 предложения по произвольному пользовательскому те
+кстовому описанию.
+ []
+
+
+Underfull \hbox (badness 4752) in paragraph at lines 201--202
+\TU/TimesNewRoman(0)/m/n/14.4 Пользовательское описание необходимо дополнительн
+о преобразовать в
+ []
+
+[19] [20]
+Underfull \hbox (badness 3449) in paragraph at lines 223--224
+[]\TU/TimesNewRoman(0)/m/n/14.4 Рассмотрены существующие подходы к генерации и 
+проектирова-
+ []
+
+
+Underfull \hbox (badness 5924) in paragraph at lines 223--224
+\TU/TimesNewRoman(0)/m/n/14.4 нию интерьеров: системы генерации изображений, ин
+терактивные 3D-
+ []
+
+
+Underfull \hbox (badness 1184) in paragraph at lines 225--226
+\TU/TimesNewRoman(0)/m/n/14.4 новки с помощью больших языковых моделей, LEGO-Ne
+t и M3DLayout.
+ []
+
+
+Underfull \hbox (badness 2027) in paragraph at lines 227--228
+[]\TU/TimesNewRoman(0)/m/n/14.4 В качестве базового генератора первичной сцены 
+выбран Infinigen
+ []
+
+[21] [22]
+Глава 2.
+[23
+
+]
+Underfull \hbox (badness 10000) in paragraph at lines 249--250
+[]\TU/TimesNewRoman(0)/m/n/14.4 Вторым этапом является анализ стиля и типа поме
+щения. На
+ []
+
+
+Underfull \hbox (badness 10000) in paragraph at lines 249--250
+\TU/TimesNewRoman(0)/m/n/14.4 основе пользовательского текста и данных комнаты 
+строится файл
+ []
+
+
+Underfull \hbox (badness 1924) in paragraph at lines 249--250
+\TU/TimesNewRoman(0)/m/n/14.4 товые предпочтения, материалные признаки, краткое
+ стилевое описание,
+ []
+
+
+Underfull \hbox (badness 1163) in paragraph at lines 249--250
+\TU/TimesNewRoman(0)/m/n/14.4 варов. Затем исходный JSON комнаты дополняется ст
+илевым контекстом
+ []
+
+[24]
+Underfull \hbox (badness 1194) in paragraph at lines 251--252
+\TU/TimesNewRoman(0)/m/n/14.4 ме Infinigen запускается wrapper \TU/CourierNew(0
+)/m/n/14.4 run_infinigen_clean.py\TU/TimesNewRoman(0)/m/n/14.4 . Он стро-
+ []
+
+
+Underfull \hbox (badness 1005) in paragraph at lines 251--252
+\TU/TimesNewRoman(0)/m/n/14.4 ит временный модуль floor plan для Infinigen, пер
+едаёт в генератор кон-
+ []
+
+
+Underfull \hbox (badness 6625) in paragraph at lines 255--256
+[]\TU/TimesNewRoman(0)/m/n/14.4 Четвёртым этапом является нормализация результа
+та. Первичный
+ []
+
+
+Underfull \hbox (badness 10000) in paragraph at lines 255--256
+\TU/TimesNewRoman(0)/m/n/14.4 placement приводится к формату \TU/CourierNew(0)/
+m/n/14.4 placement.v1.json\TU/TimesNewRoman(0)/m/n/14.4 . Если вход-
+ []
+
+
+Underfull \hbox (badness 3547) in paragraph at lines 255--256
+\TU/TimesNewRoman(0)/m/n/14.4 ная комната была задана в JSON-формате, то дополн
+ительно строится
+ []
+
+[25] [26]
+Underfull \hbox (badness 10000) in paragraph at lines 271--272
+[]\TU/TimesNewRoman(0)/m/n/14.4 Слой запуска генераторов реализован в модуле
+ []
+
+
+Overfull \hbox (143.39606pt too wide) in paragraph at lines 275--276
+[]\TU/TimesNewRoman(0)/m/n/14.4 Интеграция с Infinigen реализована в модуле \TU
+/CourierNew(0)/m/n/14.4 src/Plasement/run_infinigen_clean.py\TU/TimesNewRoman(0
+)/m/n/14.4 .
+ []
+
+[27]
+Overfull \hbox (30.37346pt too wide) in paragraph at lines 277--278
+[]\TU/TimesNewRoman(0)/m/n/14.4 Процедурный режим реализован в пакете \TU/Couri
+erNew(0)/m/n/14.4 pipeline/procedural_rooms\TU/TimesNewRoman(0)/m/n/14.4 .
+ []
+
+
+Underfull \hbox (badness 10000) in paragraph at lines 279--280
+[]\TU/TimesNewRoman(0)/m/n/14.4 Supplier-модуль состоит из нескольких частей. М
+одуль
+ []
+
+
+Underfull \hbox (badness 6078) in paragraph at lines 279--280
+\TU/CourierNew(0)/m/n/14.4 layout_targets.py \TU/TimesNewRoman(0)/m/n/14.4 извл
+екает из сцены цели для замены. Модуль
+ []
+
+
+Underfull \hbox (badness 10000) in paragraph at lines 281--282
+[]\TU/TimesNewRoman(0)/m/n/14.4 Отдельные модули отвечают за специальные элемен
+ты сцены.
+ []
+
+
+Underfull \hbox (badness 10000) in paragraph at lines 281--282
+\TU/CourierNew(0)/m/n/14.4 kitchen_stage.py \TU/TimesNewRoman(0)/m/n/14.4 и пак
+ет \TU/CourierNew(0)/m/n/14.4 suppliers/kitchen \TU/TimesNewRoman(0)/m/n/14.4 р
+еализуют про-
+ []
+
+
+Underfull \hbox (badness 10000) in paragraph at lines 281--282
+\TU/TimesNewRoman(0)/m/n/14.4 цедурное построение кухонного гарнитура и подбор 
+кухонных мате-
+ []
+
+
+Underfull \hbox (badness 10000) in paragraph at lines 281--282
+\TU/TimesNewRoman(0)/m/n/14.4 риалов и техники. \TU/CourierNew(0)/m/n/14.4 floo
+ring_stage.py \TU/TimesNewRoman(0)/m/n/14.4 выбирает покрытие пола.
+ []
+
+[28]
+Underfull \hbox (badness 10000) in paragraph at lines 287--288
+[]\TU/TimesNewRoman(0)/m/n/14.4 Система технически поддерживает несколько генер
+аторов пер-
+ []
+
+
+Underfull \hbox (badness 10000) in paragraph at lines 287--288
+\TU/TimesNewRoman(0)/m/n/14.4 вичной расстановки: \TU/CourierNew(0)/m/n/14.4 cu
+be\TU/TimesNewRoman(0)/m/n/14.4 , \TU/CourierNew(0)/m/n/14.4 forest\TU/TimesNew
+Roman(0)/m/n/14.4 , \TU/CourierNew(0)/m/n/14.4 graph_stat\TU/TimesNewRoman(0)/m
+/n/14.4 , \TU/CourierNew(0)/m/n/14.4 diffusion\TU/TimesNewRoman(0)/m/n/14.4 ,
+ []
+
+
+Underfull \hbox (badness 10000) in paragraph at lines 287--288
+\TU/CourierNew(0)/m/n/14.4 layout_refiner\TU/TimesNewRoman(0)/m/n/14.4 , \TU/Co
+urierNew(0)/m/n/14.4 diffuscene_remote\TU/TimesNewRoman(0)/m/n/14.4 , \TU/Couri
+erNew(0)/m/n/14.4 ollama_llm\TU/TimesNewRoman(0)/m/n/14.4 , \TU/CourierNew(0)/m
+/n/14.4 lego_gen\TU/TimesNewRoman(0)/m/n/14.4 ,
+ []
+
+
+Underfull \hbox (badness 10000) in paragraph at lines 287--288
+\TU/CourierNew(0)/m/n/14.4 m3dlayout_ar\TU/TimesNewRoman(0)/m/n/14.4 , \TU/Cour
+ierNew(0)/m/n/14.4 m3dlayout_diffusion \TU/TimesNewRoman(0)/m/n/14.4 и \TU/Cour
+ierNew(0)/m/n/14.4 infinigen_clean\TU/TimesNewRoman(0)/m/n/14.4 .
+ []
+
+
+Underfull \hbox (badness 7116) in paragraph at lines 287--288
+\TU/TimesNewRoman(0)/m/n/14.4 Эти варианты отражены в конфигурации \TU/CourierN
+ew(0)/m/n/14.4 PLACER_SPECS \TU/TimesNewRoman(0)/m/n/14.4 и в блоке
+ []
+
+
+Underfull \hbox (badness 5077) in paragraph at lines 287--288
+\TU/TimesNewRoman(0)/m/n/14.4 и \TU/CourierNew(0)/m/n/14.4 procedural + supplie
+r\TU/TimesNewRoman(0)/m/n/14.4 . Остальные режимы использовались как
+ []
+
+[29]
+Underfull \hbox (badness 10000) in paragraph at lines 301--302
+[]\TU/TimesNewRoman(0)/m/n/14.4 На ранних этапах сохраняются текстовые и стилев
+ые артефак-
+ []
+
+
+Underfull \hbox (badness 10000) in paragraph at lines 301--302
+\TU/TimesNewRoman(0)/m/n/14.4 ты: \TU/CourierNew(0)/m/n/14.4 prompt.txt\TU/Time
+sNewRoman(0)/m/n/14.4 , \TU/CourierNew(0)/m/n/14.4 prompt.styled.txt\TU/TimesNe
+wRoman(0)/m/n/14.4 , \TU/CourierNew(0)/m/n/14.4 chooser_prompt.txt\TU/TimesNewR
+oman(0)/m/n/14.4 ,
+ []
+
+
+Underfull \hbox (badness 10000) in paragraph at lines 301--302
+\TU/CourierNew(0)/m/n/14.4 style_profile.json\TU/TimesNewRoman(0)/m/n/14.4 , \T
+U/CourierNew(0)/m/n/14.4 style_supplier_preferences.json \TU/TimesNewRoman(0)/m
+/n/14.4 и
+ []
+
+
+Underfull \hbox (badness 2318) in paragraph at lines 301--302
+\TU/CourierNew(0)/m/n/14.4 room.style.v1.json\TU/TimesNewRoman(0)/m/n/14.4 . Эт
+и файлы фиксируют исходный запрос поль-
+ []
+
+
+Underfull \hbox (badness 10000) in paragraph at lines 305--306
+[]\TU/TimesNewRoman(0)/m/n/14.4 Для режима Infinigen дополнительно сохраняются 
+спе-
+ []
+
+
+Underfull \hbox (badness 10000) in paragraph at lines 305--306
+\TU/TimesNewRoman(0)/m/n/14.4 цифические артефакты: \TU/CourierNew(0)/m/n/14.4 
+infinigen_clean_scene.blend\TU/TimesNewRoman(0)/m/n/14.4 ,
+ []
+
+
+Underfull \hbox (badness 10000) in paragraph at lines 305--306
+\TU/CourierNew(0)/m/n/14.4 infinigen_clean_meta.json\TU/TimesNewRoman(0)/m/n/14
+.4 , \TU/CourierNew(0)/m/n/14.4 run.log\TU/TimesNewRoman(0)/m/n/14.4 , \TU/Cour
+ierNew(0)/m/n/14.4 inventory.json\TU/TimesNewRoman(0)/m/n/14.4 ,
+ []
+
+
+Underfull \hbox (badness 10000) in paragraph at lines 305--306
+\TU/CourierNew(0)/m/n/14.4 inventory_summary.json\TU/TimesNewRoman(0)/m/n/14.4 
+, \TU/CourierNew(0)/m/n/14.4 solver_summary.json\TU/TimesNewRoman(0)/m/n/14.4 ,
+
+ []
+
+
+Underfull \hbox (badness 1168) in paragraph at lines 305--306
+\TU/CourierNew(0)/m/n/14.4 candidate_pool.json \TU/TimesNewRoman(0)/m/n/14.4 и 
+при необходимости \TU/CourierNew(0)/m/n/14.4 early_failure.json\TU/TimesNewRoma
+n(0)/m/n/14.4 .
+ []
+
+
+Underfull \hbox (badness 1810) in paragraph at lines 305--306
+\TU/TimesNewRoman(0)/m/n/14.4 Эти файлы позволяют проверить, какие объекты были
+ реально созданы
+ []
+
+
+Underfull \hbox (badness 1275) in paragraph at lines 305--306
+\TU/TimesNewRoman(0)/m/n/14.4 Infinigen, какие стадии генерации были выполнены,
+ были ли нарушения
+ []
+
+[30]
+Underfull \hbox (badness 1917) in paragraph at lines 309--310
+[]\TU/TimesNewRoman(0)/m/n/14.4 Отчёты supplier-модуля сохраняются в нескольких
+ форматах. Крат-
+ []
+
+
+Underfull \hbox (badness 2359) in paragraph at lines 309--310
+\TU/TimesNewRoman(0)/m/n/14.4 кий отчёт содержит основные выбранные товары, пол
+ный отчёт содер-
+ []
+
+
+Underfull \hbox (badness 1590) in paragraph at lines 309--310
+\TU/TimesNewRoman(0)/m/n/14.4 жит расширенную диагностику и кандидатов, HTML-от
+чёт предназначен
+ []
+
+
+Underfull \hbox (badness 1043) in paragraph at lines 309--310
+\TU/TimesNewRoman(0)/m/n/14.4 для просмотра, а summary JSON используется для ма
+шинной обработки.
+ []
+
+
+Underfull \hbox (badness 2529) in paragraph at lines 309--310
+\TU/TimesNewRoman(0)/m/n/14.4 Дополнительно создаются \TU/CourierNew(0)/m/n/14.
+4 supplier_variants.comparison.json \TU/TimesNewRoman(0)/m/n/14.4 и
+ []
+
+
+Underfull \hbox (badness 2269) in paragraph at lines 313--314
+[]\TU/TimesNewRoman(0)/m/n/14.4 Финальными результатами являются Blender-сцена,
+ визуализации и
+ []
+
+[31]
+Underfull \hbox (badness 1997) in paragraph at lines 316--317
+[]\TU/TimesNewRoman(0)/m/n/14.4 В программном комплексе используется несколько 
+JSON-форматов,
+ []
+
+[32] [33] [34]
+Overfull \hbox (8.53206pt too wide) in paragraph at lines 381--382
+[]\TU/TimesNewRoman(0)/m/n/14.4 Supplier-каталог хранится в формате \TU/Courier
+New(0)/m/n/14.4 supplier_catalog_export/v1\TU/TimesNewRoman(0)/m/n/14.4 .
+ []
+
+
+Underfull \hbox (badness 1852) in paragraph at lines 381--382
+\TU/TimesNewRoman(0)/m/n/14.4 ленном примере каталог содержит 6251 запись. Мета
+данные фиксируют
+ []
+
+
+Underfull \hbox (badness 2875) in paragraph at lines 381--382
+\TU/TimesNewRoman(0)/m/n/14.4 описаниями, извлечение цветовых признаков из изоб
+ражений и ручные
+ []
+
+
+Underfull \hbox (badness 10000) in paragraph at lines 388--389
+[]\TU/CourierNew(0)/m/n/14.4 model_download_url\TU/TimesNewRoman(0)/m/n/14.4 , 
+\TU/CourierNew(0)/m/n/14.4 asset_local_path\TU/TimesNewRoman(0)/m/n/14.4 , \TU/
+CourierNew(0)/m/n/14.4 asset_status\TU/TimesNewRoman(0)/m/n/14.4 ,
+ []
+
+
+Underfull \hbox (badness 2799) in paragraph at lines 395--396
+[]\TU/CourierNew(0)/m/n/14.4 image_color_features \TU/TimesNewRoman(0)/m/n/14.4
+ — цветовые признаки, извлечённые из
+ []
+
+[35]
+Underfull \hbox (badness 1142) in paragraph at lines 404--405
+\TU/TimesNewRoman(0)/m/n/14.4 щения задаёт геометрию. Генератор создаёт \TU/Cou
+rierNew(0)/m/n/14.4 placement.v1\TU/TimesNewRoman(0)/m/n/14.4 . Затем нор-
+ []
+
+[36] [37] [38] [39] [40]
+Underfull \hbox (badness 1009) in paragraph at lines 531--532
+[]\TU/TimesNewRoman(0)/m/n/14.4 В подразделе будет описано сохранение итоговой 
+сцены в формате
+ []
+
+[41] [42]
+Глава 3.
+[43
+
+] [44] [45]
+Underfull \hbox (badness 3058) in paragraph at lines 636--637
+[]\TU/TimesNewRoman(0)/m/n/14.4 В подразделе будет описано, как для одного layo
+ut формируются
+ []
+
+[46] [47] [48]
+
+LaTeX Warning: Citation 'itmo-student-thesis' undefined on input line 704.
+
+[49
+
+]
+Underfull \hbox (badness 2237) in paragraph at lines 705--705
+[]\TU/TimesNewRoman(0)/m/n/14.4 Правила размещения сантехники в санузле [Электр
+онный ресурс] /
+ []
+
+
+Underfull \hbox (badness 4416) in paragraph at lines 705--705
+[]\TU/TimesNewRoman(0)/m/n/14.4 ATISS: Autoregressive Transformers for Indoor S
+cene Synthesis / D.
+ []
+
+
+Underfull \hbox (badness 4429) in paragraph at lines 705--705
+[]\TU/TimesNewRoman(0)/m/n/14.4 DiffuScene: Denoising Diffusion Models for Gene
+rative Indoor Scene
+ []
+
+
+Underfull \hbox (badness 3323) in paragraph at lines 705--705
+\TU/TimesNewRoman(0)/m/n/14.4 Descriptions for 3D Generation / Y. Zhang [и др.]
+ [] arXiv preprint
+ []
+
+[50
+
+]
+\c@@yearminusfive@src=\count534
+\c@@yearminusten@src=\count535
+
+
+LaTeX Warning: Empty bibliography on input line 705.
+
+
+LaTeX Warning: Empty bibliography on input line 705.
+
+
+LaTeX Warning: Empty bibliography on input line 705.
+
+
+Package biblatex Warning: Split bibliography detected.
+(biblatex)                Many simple split bibliography setups with
+(biblatex)                non-overlapping bibliographies benefit from
+(biblatex)                setting 'defernumbers=true'.
+(biblatex)                See the documentation for details.
+(biblatex)                This warning can be suppressed with
+(biblatex)                '\BiblatexSplitbibDefernumbersWarningOff'.
+
+[51] (./diploma.aux)
  ***********
 LaTeX2e <2025-11-01>
 L3 programming layer <2026-01-19>
  ***********
-Package rerunfilecheck Info: File `diploma.out' has not changed.
-(rerunfilecheck)             Checksum: 7335D74860FC18DA40EE2867ABB698E7;6548.
+Package logreq Info: Writing requests to 'diploma.run.xml'.
+\openout1 = `diploma.run.xml'.
+
  ) 
 Here is how much of TeX's memory you used:
- 14127 strings out of 468168
- 286297 string characters out of 5432816
- 751229 words of memory out of 5000000
- 42684 multiletter control sequences out of 15000+600000
- 629685 words of font info for 76 fonts, out of 8000000 for 9000
+ 23254 strings out of 468168
+ 470589 string characters out of 5432816
+ 1624529 words of memory out of 5000000
+ 51621 multiletter control sequences out of 15000+600000
+ 630754 words of font info for 93 fonts, out of 8000000 for 9000
  1348 hyphenation exceptions out of 8191
- 73i,5n,101p,508b,422s stack positions out of 10000i,1000n,20000p,200000b,200000s
+ 88i,12n,131p,1184b,7294s stack positions out of 10000i,1000n,20000p,200000b,200000s
 
-Output written on diploma.pdf (12 pages).
+Output written on diploma.pdf (50 pages).

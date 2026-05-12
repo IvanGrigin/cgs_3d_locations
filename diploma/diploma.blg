@@ -1,0 +1,18 @@
+[0] Config.pm:328> INFO - This is Biber 2.21
+[0] Config.pm:331> INFO - Logfile is 'diploma.blg'
+[26] biber-darwin:342> INFO - === Tue May 12, 2026, 08:56:07
+[34] Biber.pm:421> INFO - Reading 'diploma.bcf'
+[75] Biber.pm:1002> INFO - Found 16 citekeys in bib section 0
+[81] Biber.pm:4487> INFO - Processing section 0
+[85] Biber.pm:4678> INFO - Looking for bibtex file 'references.bib' for section 0
+[86] bibtex.pm:1713> INFO - LaTeX decoding ...
+[89] bibtex.pm:1519> INFO - Found BibTeX data source 'references.bib'
+[131] UCollate.pm:68> INFO - Overriding locale 'ru-RU' defaults 'normalization = NFD' with 'normalization = prenormalized'
+[131] UCollate.pm:68> INFO - Overriding locale 'ru-RU' defaults 'variable = shifted' with 'variable = non-ignorable'
+[131] Biber.pm:4307> INFO - Sorting list 'nyt/global//global/global/global' of type 'entry' with template 'nyt' and locale 'ru-RU'
+[131] Biber.pm:4313> INFO - No sort tailoring available for locale 'ru-RU'
+[138] bbl.pm:676> INFO - Writing 'diploma.bbl' with encoding 'UTF-8'
+[141] bbl.pm:779> INFO - Output to diploma.bbl
+[141] Biber.pm:132> WARN - BibTeX subsystem: warning: comma(s) at end of name (removing)
+[141] Biber.pm:132> WARN - I didn't find a database entry for 'itmo-student-thesis' (section 0)
+[141] Biber.pm:134> INFO - WARNINGS: 2
