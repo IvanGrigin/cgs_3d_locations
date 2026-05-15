@@ -1,0 +1,19 @@
+\begin{table}[h]
+\centering
+\small
+\caption{Сравнение распределений расположения объектов с 3D-FRONT по нормализованным тепловым картам (grid=32, sigma=1.25, augmentation=rot90\_flip)}
+\label{tab:layout\_heatmap\_metrics}
+\begin{tabular}{lrrrrrrr}
+\hline
+Метод & Категорий & Покрытие & TV & JS & SW & Смещение & Max diff, п.п. \\
+\hline
+infinigen & 7 & 0.701 & 0.394 & 0.409 & 0.051 & 0.000 & 0.416 \\
+diffuscene & 5 & 0.733 & 0.735 & 0.745 & 0.087 & 0.000 & 1.465 \\
+retrieval & 9 & 1.000 & 0.466 & 0.501 & 0.049 & 0.000 & 0.708 \\
+random & 3 & 0.429 & 0.588 & 0.598 & 0.086 & 0.000 & 0.543 \\
+ollama\_llm & 6 & 0.640 & 0.548 & 0.555 & 0.076 & 0.002 & 0.625 \\
+cube & 9 & 1.000 & 0.410 & 0.422 & 0.061 & 0.000 & 0.459 \\
+relaxed & 9 & 1.000 & 0.655 & 0.662 & 0.088 & 0.001 & 1.083 \\
+\hline
+\end{tabular}
+\end{table}

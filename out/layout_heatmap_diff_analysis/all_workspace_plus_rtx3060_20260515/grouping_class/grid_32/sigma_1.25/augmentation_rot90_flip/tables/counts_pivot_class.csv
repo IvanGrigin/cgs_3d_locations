@@ -1,0 +1,12 @@
+analysis_room_type,analysis_class_name,group_key,3dfront,cube,diffuscene,infinigen,m3dlayout,ollama_llm,random,relaxed,retrieval
+__all__,bed,__all____bed,7290,1085,0,450,18,235,60,91,168
+__all__,cabinet,__all____cabinet,3868,1151,674,3950,0,76,22,174,756
+__all__,chair,__all____chair,13461,480,46,109,0,17,9,333,504
+__all__,decor,__all____decor,970,204,0,2262,6,49,0,92,189
+__all__,double_bed,__all____double_bed,0,0,432,0,0,0,0,0,168
+__all__,lamp,__all____lamp,0,1290,611,881,6,130,32,397,840
+__all__,nightstand,__all____nightstand,11411,2007,1100,18,12,440,53,134,672
+__all__,sofa,__all____sofa,3104,56,0,94,0,2,0,54,252
+__all__,table,__all____table,6948,1355,56,476,2,46,28,274,504
+__all__,tv,__all____tv,3578,56,0,97,0,2,0,54,252
+__all__,wardrobe,__all____wardrobe,5309,1083,863,4,2,239,58,148,336
