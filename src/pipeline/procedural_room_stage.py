@@ -23,11 +23,11 @@ def add_procedural_room_arguments(parser: Any) -> None:
         "--procedural-rooms",
         default="auto",
         choices=["auto", "always", "never"],
-        help="Apply dense procedural generation for bedroom/living_room/corridor scenes.",
+        help="Apply rule-based procedural generation for supported room scenes.",
     )
     group.add_argument(
         "--procedural-room-types",
-        default="bedroom,living_room,corridor",
+        default="bedroom,living_room,corridor,bathroom,toilet",
         help="Comma-separated normalized room types for --procedural-rooms auto.",
     )
     group.add_argument(

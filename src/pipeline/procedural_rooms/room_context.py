@@ -31,6 +31,7 @@ class RoomContext:
     bounds: tuple[float, float, float, float]
     centroid: Vec2
     door_clearance_zones: list[AABB] = field(default_factory=list)
+    window_clearance_zones: list[AABB] = field(default_factory=list)
 
     @property
     def width_m(self) -> float:
@@ -101,8 +102,15 @@ def normalize_room_type(room_type: Any, prompt: str = "", area_m2: float | None 
         "studio": "studio",
         "kitchen": "kitchen",
         "bathroom": "bathroom",
+        "ванная": "bathroom",
+        "ванная комната": "bathroom",
+        "bath": "bathroom",
         "joint_bathroom": "bathroom",
+        "санузел": "bathroom",
+        "совмещенный санузел": "bathroom",
         "toilet": "toilet",
+        "туалет": "toilet",
+        "уборная": "toilet",
         "wc": "toilet",
     }
     if raw in mapping:
@@ -140,15 +148,19 @@ def build_room_context(scene: dict[str, Any], prompt: str = "") -> RoomContext:
             Vec2(0.0, depth),
         ]
 
-    doors = list(room.get("doors") or [])
-    windows = list(room.get("windows") or [])
+    openings = room.get("openings") if isinstance(room.get("openings"), dict) else {}
+    doors = list(room.get("doors") or openings.get("doors") or [])
+    windows = list(room.get("windows") or openings.get("windows") or [])
     walls = build_wall_segments(polygon, room.get("walls") or [], doors=doors, windows=windows)
     area = as_float(room.get("area_m2"), polygon_area(polygon))
     if area <= 0.001:
         area = polygon_area(polygon)
     bounds = polygon_bounds(polygon)
-    ceiling = as_float(room.get("ceiling_height_m", room.get("ceiling_height")), 2.8)
-    raw_type = room.get("room_type", room.get("type", "room"))
+    ceiling = as_float(
+        room.get("ceiling_height_m", room.get("ceiling_height", room.get("height_m"))),
+        2.8,
+    )
+    raw_type = room.get("room_type", room.get("type", room.get("type_hint", "room")))
     normalized_type = normalize_room_type(raw_type, prompt=prompt, area_m2=area)
 
     ctx = RoomContext(
@@ -175,4 +187,12 @@ def build_room_context(scene: dict[str, Any], prompt: str = "") -> RoomContext:
         zone = opening_clearance_aabb(wall, door, polygon, clearance_depth=1.0, clearance_side=0.2)
         if zone is not None:
             ctx.door_clearance_zones.append(zone)
+    for window in windows:
+        wall_id = str(window.get("wall_id", ""))
+        wall = wall_by_id.get(wall_id)
+        if wall is None:
+            continue
+        zone = opening_clearance_aabb(wall, window, polygon, clearance_depth=0.45, clearance_side=0.15)
+        if zone is not None:
+            ctx.window_clearance_zones.append(zone)
     return ctx

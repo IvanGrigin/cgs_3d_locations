@@ -229,6 +229,11 @@ def item_wall(item: dict[str, Any]) -> str:
 
 
 def is_soft_or_non_solid(item: dict[str, Any]) -> bool:
+    meta = item.get("meta") if isinstance(item.get("meta"), dict) else {}
+    role = str(meta.get("physical_role") or "").strip().lower()
+    if role:
+        return role != "solid_floor"
+
     category = item_category(item)
     layer = item_layer(item)
     mount = item_mount(item)

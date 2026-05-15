@@ -29,6 +29,10 @@ def collect_blend_files(search_root: Path) -> list[Path]:
     return files
 
 
+def gif_path_for_blend(blend_path: Path, gif_suffix: str) -> Path:
+    return blend_path.with_name(f"{blend_path.stem}{gif_suffix}")
+
+
 def ensure_csv_header(csv_path: Path) -> None:
     import csv
 
@@ -78,11 +82,18 @@ def run_one_blend(
     elevations: str,
     duration_ms: int,
     margin: float,
+    distance_scale: float,
     keep_frames: bool,
+    hide_room_shell: bool,
+    hide_outliers: bool,
+    no_textures: bool,
+    clay: bool,
+    isolated_frames: bool,
+    gif_suffix: str,
 ) -> dict[str, Any]:
     started = datetime.now()
 
-    gif_path = blend_path.with_suffix(".gif")
+    gif_path = gif_path_for_blend(blend_path, gif_suffix)
     stdout_log = blend_path.with_name(f"{blend_path.stem}_gif_stdout.log")
     stderr_log = blend_path.with_name(f"{blend_path.stem}_gif_stderr.log")
     meta_json = blend_path.with_name(f"{blend_path.stem}_gif_job.json")
@@ -98,11 +109,23 @@ def run_one_blend(
         "--elevations", elevations,
         "--duration-ms", str(int(duration_ms)),
         "--margin", str(float(margin)),
+        "--distance-scale", str(float(distance_scale)),
+        "--gif", str(gif_path.resolve()),
     ]
     if blender:
         cmd += ["--blender", blender]
     if keep_frames:
         cmd += ["--keep-frames"]
+    if hide_room_shell:
+        cmd += ["--hide-room-shell"]
+    if hide_outliers:
+        cmd += ["--hide-outliers"]
+    if no_textures:
+        cmd += ["--no-textures"]
+    if clay:
+        cmd += ["--clay"]
+    if isolated_frames:
+        cmd += ["--isolated-frames"]
 
     meta = {
         "blend_file": str(blend_path.resolve()),
@@ -167,7 +190,22 @@ def main() -> None:
     parser.add_argument("--elevations", default="0,35,72")
     parser.add_argument("--duration-ms", type=int, default=500)
     parser.add_argument("--margin", type=float, default=1.35)
+    parser.add_argument("--distance-scale", type=float, default=1.0)
     parser.add_argument("--keep-frames", action="store_true")
+    parser.add_argument(
+        "--hide-room-shell",
+        action="store_true",
+        help="Перед каждым GIF скрывать конструктивные стены/потолки/wallpaper, оставляя пол.",
+    )
+    parser.add_argument(
+        "--hide-outliers",
+        action="store_true",
+        help="Скрывать меши с явно сломанными bbox/transform, чтобы они не ломали камеру GIF.",
+    )
+    parser.add_argument("--no-textures", action="store_true", help="Удалять image texture nodes, сохраняя базовые материалы/цвета.")
+    parser.add_argument("--clay", action="store_true", help="Заменять материалы на простой clay-материал.")
+    parser.add_argument("--isolated-frames", action="store_true", help="Рендерить каждый кадр отдельным Blender-процессом.")
+    parser.add_argument("--gif-suffix", default=".gif", help="Суффикс итогового GIF, например .no_walls.materials_close.gif")
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument(
         "--skip-existing",
@@ -178,13 +216,16 @@ def main() -> None:
 
     search_root = Path(args.search_root).expanduser().resolve()
     single_script = Path(args.single_script).expanduser().resolve()
+    gif_suffix = str(args.gif_suffix)
+    if not gif_suffix.endswith(".gif"):
+        raise RuntimeError("--gif-suffix должен оканчиваться на .gif")
 
     if not single_script.is_file():
         raise RuntimeError(f"Не найден single GIF script: {single_script}")
 
     blend_files = collect_blend_files(search_root)
     if args.skip_existing:
-        blend_files = [p for p in blend_files if not p.with_suffix(".gif").exists()]
+        blend_files = [p for p in blend_files if not gif_path_for_blend(p, gif_suffix).exists()]
     if args.limit is not None:
         blend_files = blend_files[: max(0, int(args.limit))]
 
@@ -208,7 +249,14 @@ def main() -> None:
         "elevations": args.elevations,
         "duration_ms": args.duration_ms,
         "margin": args.margin,
+        "distance_scale": args.distance_scale,
         "keep_frames": bool(args.keep_frames),
+        "hide_room_shell": bool(args.hide_room_shell),
+        "hide_outliers": bool(args.hide_outliers),
+        "no_textures": bool(args.no_textures),
+        "clay": bool(args.clay),
+        "isolated_frames": bool(args.isolated_frames),
+        "gif_suffix": args.gif_suffix,
         "skip_existing": bool(args.skip_existing),
         "limit": args.limit,
         "blend_files": [str(p) for p in blend_files],
@@ -238,7 +286,14 @@ def main() -> None:
             elevations=str(args.elevations),
             duration_ms=int(args.duration_ms),
             margin=float(args.margin),
+            distance_scale=float(args.distance_scale),
             keep_frames=bool(args.keep_frames),
+            hide_room_shell=bool(args.hide_room_shell),
+            hide_outliers=bool(args.hide_outliers),
+            no_textures=bool(args.no_textures),
+            clay=bool(args.clay),
+            isolated_frames=bool(args.isolated_frames),
+            gif_suffix=str(args.gif_suffix),
         )
 
         append_csv_row(csv_log, row)

@@ -70,20 +70,93 @@ def collect_scene_bounds():
     }
 
 
+def shell_name_part(name):
+    low = str(name or "").strip().lower()
+    return low.rsplit("__", 1)[-1]
+
+
+def is_floor_shell_name(name):
+    part = shell_name_part(name)
+    return (
+        part.endswith(".floor")
+        or part == "floor"
+        or "room_floor" in part
+        or "preview_floor" in part
+        or part.startswith("floor_")
+    )
+
+
 def matches_room_shell_name(name):
     low = str(name or "").lower()
+    part = shell_name_part(name)
+    if is_floor_shell_name(name):
+        return False
+    if any(token in part for token in (
+        "ceilinglight",
+        "ceiling_light",
+        "lamp_ceiling",
+        "flat_ceiling_light",
+        "wall_light",
+        "wall_sconce",
+        "wall_art",
+        "wall_mounted",
+        "wall_mount",
+        "wall_cabinet",
+        "wall_shelf",
+        "wall_unit",
+    )):
+        return False
     return (
-        "room_wall" in low
-        or "room_ceiling" in low
-        or "room_exterior" in low
-        or "wallpaper" in low
-        or low.endswith(".exterior")
-        or low.endswith("/0")
-        or ".wall" in low
-        or "/wall" in low
-        or "ceiling" in low
-        or "exterior" in low
+        "room_wall" in part
+        or "room_ceiling" in part
+        or "room_exterior" in part
+        or "room_wallpaper" in part
+        or "wallpaper_supplieroverlay" in part
+        or part.endswith(".exterior")
+        or part.endswith(".ceiling")
+        or part.endswith(".wall")
+        or part.endswith(".meshed")
+        or part.endswith("/0")
+        or ".wall." in part
+        or "/wall" in part
+        or "ceiling" in part
+        or "exterior" in part
     )
+
+
+def looks_like_wall_or_ceiling_by_geometry(obj):
+    if obj.type != "MESH" or obj.hide_render:
+        return False
+    part = shell_name_part(obj.name)
+    if is_floor_shell_name(obj.name):
+        return False
+    if any(token in part for token in (
+        "ceilinglight",
+        "ceiling_light",
+        "lamp_ceiling",
+        "flat_ceiling_light",
+        "wall_light",
+        "wall_sconce",
+        "wall_art",
+        "wall_mounted",
+        "wall_mount",
+        "wall_cabinet",
+        "wall_shelf",
+        "wall_unit",
+    )):
+        return False
+    pts = world_bbox_points(obj)
+    if not pts:
+        return False
+    size_x = max(p.x for p in pts) - min(p.x for p in pts)
+    size_y = max(p.y for p in pts) - min(p.y for p in pts)
+    size_z = max(p.z for p in pts) - min(p.z for p in pts)
+    min_z = min(p.z for p in pts)
+    max_z = max(p.z for p in pts)
+    wide_xy = max(size_x, size_y)
+    is_wall_panel = size_z >= 1.6 and wide_xy >= 0.8 and min(size_x, size_y) <= 0.18
+    is_ceiling_cap = size_z <= 0.18 and wide_xy >= 0.8 and min_z >= 1.8 and max_z >= 1.9
+    return is_wall_panel or is_ceiling_cap
 
 
 def hide_object_family(root):
@@ -96,9 +169,10 @@ def hide_object_family(root):
 
 
 def hide_room_shell_objects():
+    bpy.context.view_layer.update()
     hidden = 0
     for obj in list(bpy.data.objects):
-        if matches_room_shell_name(obj.name):
+        if matches_room_shell_name(obj.name) or looks_like_wall_or_ceiling_by_geometry(obj):
             hide_object_family(obj)
             hidden += 1
     print(f"[orbit_gif] hidden_room_shell_objects={hidden}")
@@ -163,7 +237,15 @@ def ensure_target_object(scene, center):
     return target
 
 
-def setup_render(scene, width, height, samples):
+def setup_render(scene, width, height, samples, workbench_materials=False):
+    if workbench_materials:
+        scene.render.engine = 'BLENDER_WORKBENCH'
+        scene.display.shading.light = 'STUDIO'
+        scene.display.shading.color_type = 'MATERIAL'
+        scene.display.shading.show_xray = False
+        scene.display.shading.show_shadows = True
+        scene.display.shading.show_cavity = True
+
     scene.render.image_settings.file_format = "PNG"
     scene.render.resolution_x = width
     scene.render.resolution_y = height
@@ -172,9 +254,62 @@ def setup_render(scene, width, height, samples):
     if scene.render.engine == 'CYCLES':
         scene.cycles.samples = samples
         scene.cycles.use_denoising = True
-    elif scene.render.engine == 'BLENDER_EEVEE':
-        # Для EEVEE samples задаются иначе; оставляем дефолт.
-        pass
+    elif scene.render.engine in {'BLENDER_EEVEE', 'BLENDER_EEVEE_NEXT'} and hasattr(scene, "eevee"):
+        if hasattr(scene.eevee, "taa_render_samples"):
+            scene.eevee.taa_render_samples = samples
+
+
+def apply_clay_material():
+    mat = bpy.data.materials.get("OrbitGifClayMaterial")
+    if mat is None:
+        mat = bpy.data.materials.new("OrbitGifClayMaterial")
+        mat.diffuse_color = (0.72, 0.70, 0.66, 1.0)
+    mat.use_nodes = True
+    bsdf = mat.node_tree.nodes.get("Principled BSDF")
+    if bsdf is not None:
+        try:
+            bsdf.inputs["Base Color"].default_value = (0.72, 0.70, 0.66, 1.0)
+            bsdf.inputs["Roughness"].default_value = 0.82
+        except Exception:
+            pass
+
+    replaced = 0
+    for obj in bpy.data.objects:
+        if obj.type != "MESH" or obj.hide_render:
+            continue
+        obj.data.materials.clear()
+        obj.data.materials.append(mat)
+        replaced += 1
+
+    removed_images = 0
+    for image in list(bpy.data.images):
+        try:
+            bpy.data.images.remove(image)
+            removed_images += 1
+        except Exception:
+            pass
+    print(f"[orbit_gif] clay_material_meshes={replaced} removed_images={removed_images}")
+
+
+def strip_texture_nodes_keep_materials():
+    removed_nodes = 0
+    removed_images = 0
+    for mat in bpy.data.materials:
+        mat.diffuse_color = tuple(mat.diffuse_color) if mat.diffuse_color else (0.72, 0.70, 0.66, 1.0)
+        if not mat.use_nodes or mat.node_tree is None:
+            continue
+        nodes = list(mat.node_tree.nodes)
+        for node in nodes:
+            if node.bl_idname in {"ShaderNodeTexImage", "ShaderNodeTexEnvironment"}:
+                mat.node_tree.nodes.remove(node)
+                removed_nodes += 1
+    for image in list(bpy.data.images):
+        try:
+            bpy.data.images.remove(image)
+            removed_images += 1
+        except Exception:
+            pass
+    print(f"[orbit_gif] stripped_texture_nodes={removed_nodes} removed_images={removed_images}")
 
 
 def compute_camera_distance(cam_obj, bounds, pitch_deg, margin):
@@ -222,6 +357,7 @@ def render_orbit():
     height = int(args["height"])
     samples = int(args["samples"])
     margin = float(args["margin"])
+    distance_scale = float(args.get("distance_scale", 1.0))
     yaw_step = float(args["yaw_step"])
     elevations_deg = [float(x) for x in args["elevations_deg"]]
     frame_indices = args.get("frame_indices")
@@ -230,6 +366,10 @@ def render_orbit():
         hide_room_shell_objects()
     if bool(args.get("hide_outliers")):
         hide_outlier_objects()
+    if bool(args.get("clay")):
+        apply_clay_material()
+    elif bool(args.get("no_textures")):
+        strip_texture_nodes_keep_materials()
 
     os.makedirs(frames_dir, exist_ok=True)
 
@@ -244,12 +384,13 @@ def render_orbit():
     target = ensure_target_object(scene, target_center)
     ensure_track_to(cam_obj, target)
 
-    setup_render(scene, width, height, samples)
+    setup_render(scene, width, height, samples, workbench_materials=bool(args.get("workbench_materials")))
 
     frame_idx = 0
     rendered_count = 0
     for pitch_deg in elevations_deg:
         distance = compute_camera_distance(cam_obj, bounds, pitch_deg, margin)
+        distance *= max(0.05, distance_scale)
         yaw = 0.0
         while yaw < 360.0 - 1e-9:
             if frame_indices is None or frame_idx in frame_indices:
@@ -295,6 +436,7 @@ def build_cli() -> argparse.ArgumentParser:
     )
     p.add_argument("--duration-ms", type=int, default=500, help="Длительность одного кадра в GIF")
     p.add_argument("--margin", type=float, default=1.35, help="Запас дистанции камеры")
+    p.add_argument("--distance-scale", type=float, default=1.0, help="Множитель дистанции камеры после авторасчета, например 0.55 для ближнего кадра")
     p.add_argument("--gif", default=None, help="Путь итогового GIF. По умолчанию рядом с .blend")
     p.add_argument("--frames-dir", default=None, help="Каталог PNG-кадров. По умолчанию рядом с .blend")
     p.add_argument(
@@ -316,6 +458,21 @@ def build_cli() -> argparse.ArgumentParser:
         "--hide-outliers",
         action="store_true",
         help="Скрыть меши с явно сломанными bbox/transform, чтобы они не ломали камеру GIF.",
+    )
+    p.add_argument(
+        "--clay",
+        action="store_true",
+        help="Заменить материалы на простой clay-материал и удалить image textures перед рендером.",
+    )
+    p.add_argument(
+        "--no-textures",
+        action="store_true",
+        help="Удалить image texture nodes, но сохранить базовые материалы/цвета.",
+    )
+    p.add_argument(
+        "--workbench-materials",
+        action="store_true",
+        help="Рендерить через легкий Workbench material-color режим без текстур.",
     )
     return p
 
@@ -359,9 +516,13 @@ def run_blender_render(
     yaw_step: float,
     elevations_deg: list[float],
     margin: float,
+    distance_scale: float,
     frame_indices: list[int] | None = None,
     hide_room_shell: bool = False,
     hide_outliers: bool = False,
+    clay: bool = False,
+    no_textures: bool = False,
+    workbench_materials: bool = False,
 ) -> None:
     with tempfile.TemporaryDirectory(prefix="blend_orbit_") as tmpdir:
         tmpdir_path = Path(tmpdir)
@@ -379,9 +540,13 @@ def run_blender_render(
                     "yaw_step": yaw_step,
                     "elevations_deg": elevations_deg,
                     "margin": margin,
+                    "distance_scale": distance_scale,
                     "frame_indices": frame_indices,
                     "hide_room_shell": bool(hide_room_shell),
                     "hide_outliers": bool(hide_outliers),
+                    "clay": bool(clay),
+                    "no_textures": bool(no_textures),
+                    "workbench_materials": bool(workbench_materials),
                 },
                 ensure_ascii=False,
                 indent=2,
@@ -426,8 +591,12 @@ def render_frames_isolated(
     yaw_step: float,
     elevations_deg: list[float],
     margin: float,
+    distance_scale: float,
     hide_room_shell: bool,
     hide_outliers: bool,
+    clay: bool,
+    no_textures: bool,
+    workbench_materials: bool,
     frame_count: int,
 ) -> None:
     for frame_idx in range(frame_count):
@@ -441,9 +610,13 @@ def render_frames_isolated(
             yaw_step=yaw_step,
             elevations_deg=elevations_deg,
             margin=margin,
+            distance_scale=distance_scale,
             frame_indices=[frame_idx],
             hide_room_shell=hide_room_shell,
             hide_outliers=hide_outliers,
+            clay=clay,
+            no_textures=no_textures,
+            workbench_materials=workbench_materials,
         )
 
 
@@ -547,8 +720,12 @@ def main() -> None:
             yaw_step=float(args.yaw_step),
             elevations_deg=elevations_deg,
             margin=float(args.margin),
+            distance_scale=float(args.distance_scale),
             hide_room_shell=bool(args.hide_room_shell),
             hide_outliers=bool(args.hide_outliers),
+            clay=bool(args.clay),
+            no_textures=bool(args.no_textures),
+            workbench_materials=bool(args.workbench_materials),
             frame_count=frames_expected,
         )
     else:
@@ -562,8 +739,12 @@ def main() -> None:
             yaw_step=float(args.yaw_step),
             elevations_deg=elevations_deg,
             margin=float(args.margin),
+            distance_scale=float(args.distance_scale),
             hide_room_shell=bool(args.hide_room_shell),
             hide_outliers=bool(args.hide_outliers),
+            clay=bool(args.clay),
+            no_textures=bool(args.no_textures),
+            workbench_materials=bool(args.workbench_materials),
         )
 
     build_gif_from_frames(

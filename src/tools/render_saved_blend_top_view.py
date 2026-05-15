@@ -106,6 +106,75 @@ def _descendant_meshes(root: bpy.types.Object) -> list[bpy.types.Object]:
     return out
 
 
+def _bounds_for_roots(roots: list[bpy.types.Object]) -> tuple[mathutils.Vector, mathutils.Vector] | None:
+    corners: list[mathutils.Vector] = []
+    for root in roots:
+        meshes = _descendant_meshes(root)
+        if not meshes and root.type == "MESH":
+            meshes = [root]
+        for mesh in meshes:
+            for corner in mesh.bound_box:
+                corners.append(mesh.matrix_world @ mathutils.Vector(corner))
+    if not corners:
+        locs = [root.matrix_world.translation.copy() for root in roots if root is not None]
+        if not locs:
+            return None
+        corners = locs
+    return (
+        mathutils.Vector((min(v.x for v in corners), min(v.y for v in corners), min(v.z for v in corners))),
+        mathutils.Vector((max(v.x for v in corners), max(v.y for v in corners), max(v.z for v in corners))),
+    )
+
+
+def _material(name: str, color: tuple[float, float, float, float]) -> bpy.types.Material:
+    material = bpy.data.materials.get(name)
+    if material is None:
+        material = bpy.data.materials.new(name)
+    material.diffuse_color = color
+    return material
+
+
+def _add_target_label(label: str, roots: list[bpy.types.Object], scene_center: mathutils.Vector) -> bool:
+    bounds = _bounds_for_roots(roots)
+    if bounds is None:
+        return False
+    bb_min, bb_max = bounds
+    obj_center = mathutils.Vector(((bb_min.x + bb_max.x) * 0.5, (bb_min.y + bb_max.y) * 0.5, bb_max.z + 0.12))
+    label_upper = str(label).strip().upper()
+    if label_upper.startswith("T"):
+        loc = obj_center
+        plane_size = 0.34
+        font_size = 0.20
+    else:
+        direction = mathutils.Vector((obj_center.x - scene_center.x, obj_center.y - scene_center.y, 0.0))
+        if direction.length < 1e-5:
+            direction = mathutils.Vector((1.0, 0.0, 0.0))
+        direction.normalize()
+        xy_span = max(float(bb_max.x - bb_min.x), float(bb_max.y - bb_min.y), 0.2)
+        loc = obj_center + direction * (xy_span * 0.75 + 0.34)
+        plane_size = 0.46
+        font_size = 0.27
+
+    bg_mat = _material("CGS_Topview_Label_Background", (1.0, 0.92, 0.08, 1.0))
+    text_mat = _material("CGS_Topview_Label_Text", (0.0, 0.0, 0.0, 1.0))
+
+    bpy.ops.mesh.primitive_plane_add(size=plane_size, location=(loc.x, loc.y, loc.z - 0.006), rotation=(0.0, 0.0, 0.0))
+    bg = bpy.context.object
+    bg.name = f"CGS_Topview_Label_BG_{label}"
+    bg.data.materials.append(bg_mat)
+
+    text_data = bpy.data.curves.new(f"CGS_Topview_Label_{label}", "FONT")
+    text_data.body = label
+    text_data.align_x = "CENTER"
+    text_data.align_y = "CENTER"
+    text_data.size = font_size
+    text_obj = bpy.data.objects.new(f"CGS_Topview_Label_{label}", text_data)
+    text_obj.location = loc
+    text_obj.data.materials.append(text_mat)
+    bpy.context.scene.collection.objects.link(text_obj)
+    return True
+
+
 def _objects_for_scene_ref(ref) -> list[bpy.types.Object]:
     object_id = str(getattr(ref, "object_id", "") or "")
     name = str(getattr(ref, "name", "") or "")
@@ -210,7 +279,14 @@ def _apply_scene_orientations(
     return report
 
 
-def _highlight_scene_targets(scene_json: Path, target_ids: set[str], target_scope: str, include_armchairs: bool) -> int:
+def _highlight_scene_targets(
+    scene_json: Path,
+    target_ids: set[str],
+    target_scope: str,
+    include_armchairs: bool,
+    label_by_id: dict[str, str] | None = None,
+    highlight_style: str = "material",
+) -> int:
     if not target_ids or collect_scene_objects is None or filter_target_objects is None:
         return 0
     data = json.loads(scene_json.read_text(encoding="utf-8"))
@@ -219,19 +295,50 @@ def _highlight_scene_targets(scene_json: Path, target_ids: set[str], target_scop
         scope=target_scope,
         include_armchairs=include_armchairs,
     )
-    material = bpy.data.materials.get("CGS_Topview_Target_Red")
-    if material is None:
-        material = bpy.data.materials.new("CGS_Topview_Target_Red")
-        material.diffuse_color = (1.0, 0.08, 0.02, 1.0)
+    material = _material("CGS_Topview_Target_Red", (1.0, 0.08, 0.02, 1.0))
+    scene_bb_min, scene_bb_max = _visible_mesh_bounds()
+    scene_center = (scene_bb_min + scene_bb_max) * 0.5
     count = 0
     for ref in refs:
         if str(ref.object_id) not in target_ids:
             continue
-        for root in _objects_for_scene_ref(ref):
-            for mesh in _descendant_meshes(root):
-                mesh.data.materials.clear()
-                mesh.data.materials.append(material)
-                count += 1
+        roots = _objects_for_scene_ref(ref)
+        if highlight_style == "material":
+            for root in roots:
+                for mesh in _descendant_meshes(root):
+                    mesh.data.materials.clear()
+                    mesh.data.materials.append(material)
+                    count += 1
+        elif highlight_style in {"label_only", "none"}:
+            count += len(roots)
+        else:
+            raise ValueError(f"Unsupported highlight_style: {highlight_style}")
+        if label_by_id and highlight_style != "none":
+            _add_target_label(label_by_id.get(str(ref.object_id), str(ref.object_id)), roots, scene_center)
+    return count
+
+
+def _label_scene_refs(
+    scene_json: Path,
+    label_ids: set[str],
+    label_by_id: dict[str, str],
+) -> int:
+    if not label_ids or collect_scene_objects is None:
+        return 0
+    data = json.loads(scene_json.read_text(encoding="utf-8"))
+    refs = collect_scene_objects(data, max_objects=10000)
+    scene_bb_min, scene_bb_max = _visible_mesh_bounds()
+    scene_center = (scene_bb_min + scene_bb_max) * 0.5
+    count = 0
+    for ref in refs:
+        object_id = str(ref.object_id)
+        if object_id not in label_ids:
+            continue
+        roots = _objects_for_scene_ref(ref)
+        if not roots:
+            continue
+        if _add_target_label(label_by_id.get(object_id, object_id), roots, scene_center):
+            count += 1
     return count
 
 
@@ -242,14 +349,23 @@ def main() -> None:
     parser.add_argument("--elevation-deg", type=float, default=52.0)
     parser.add_argument("--radius-mult", type=float, default=1.18)
     parser.add_argument("--lens", type=float, default=24.0)
+    parser.add_argument(
+        "--view-specs-json",
+        type=Path,
+        default=None,
+        help="Optional JSON list of {name,out,azimuth_deg,elevation_deg,radius_mult,lens} views to render in one Blender process.",
+    )
     parser.add_argument("--resolution-x", type=int, default=1400)
     parser.add_argument("--resolution-y", type=int, default=1050)
     parser.add_argument("--scene-json", type=Path, default=None)
     parser.add_argument("--target-ids", default="")
+    parser.add_argument("--label-ids", default="")
+    parser.add_argument("--target-label-map", type=Path, default=None)
     parser.add_argument("--target-scope", choices=["chairs", "all"], default="chairs")
     parser.add_argument("--include-armchairs", action="store_true")
     parser.add_argument("--apply-scene-orientations", action="store_true")
     parser.add_argument("--highlight-targets", action="store_true")
+    parser.add_argument("--highlight-style", choices=["material", "label_only", "none"], default="material")
     parser.add_argument("--orientation-report", type=Path, default=None)
     parser.add_argument("--save-blend", type=Path, default=None)
     argv = sys.argv
@@ -261,6 +377,12 @@ def main() -> None:
 
     scene = bpy.context.scene
     target_ids = {item.strip() for item in str(args.target_ids or "").split(",") if item.strip()}
+    label_ids = {item.strip() for item in str(args.label_ids or "").split(",") if item.strip()}
+    label_by_id: dict[str, str] = {}
+    if args.target_label_map and args.target_label_map.is_file():
+        raw_map = json.loads(args.target_label_map.read_text(encoding="utf-8"))
+        if isinstance(raw_map, dict):
+            label_by_id = {str(object_id): str(label) for label, object_id in raw_map.items()}
     if args.scene_json and args.apply_scene_orientations:
         report = _apply_scene_orientations(
             args.scene_json.expanduser().resolve(),
@@ -276,17 +398,23 @@ def main() -> None:
             target_ids,
             str(args.target_scope),
             bool(args.include_armchairs),
+            None if label_ids else label_by_id,
+            str(args.highlight_style),
         )
         print(f"Highlighted target mesh objects: {highlighted}")
+    if args.scene_json and label_ids:
+        labeled = _label_scene_refs(
+            args.scene_json.expanduser().resolve(),
+            label_ids,
+            label_by_id,
+        )
+        print(f"Labeled scene objects: {labeled}")
     hidden_ceilings = _hide_ceiling_caps()
     print(f"Hidden ceiling/top cap objects: {hidden_ceilings}")
     bb_min, bb_max = _visible_mesh_bounds()
     center = (bb_min + bb_max) * 0.5
     dims = bb_max - bb_min
     xy_span = max(float(dims.x), float(dims.y), 1.0)
-    radius = xy_span * float(args.radius_mult)
-    az = math.radians(args.azimuth_deg)
-    elev = math.radians(args.elevation_deg)
     target = mathutils.Vector((center.x, center.y, bb_min.z + max(float(dims.z) * 0.32, 1.0)))
 
     cam = bpy.data.objects.get("CGS_TopInspectionCamera")
@@ -294,18 +422,6 @@ def main() -> None:
         cam_data = bpy.data.cameras.new("CGS_TopInspectionCamera")
         cam = bpy.data.objects.new("CGS_TopInspectionCamera", cam_data)
         scene.collection.objects.link(cam)
-    cam.location = (
-        target.x + radius * math.cos(az),
-        target.y + radius * math.sin(az),
-        target.z + math.tan(elev) * radius,
-    )
-    cam.data.type = "PERSP"
-    cam.data.lens = float(args.lens)
-    cam.data.clip_start = 0.02
-    cam.data.clip_end = 300.0
-    _look_at(cam, target)
-    scene.camera = cam
-
     try:
         scene.render.engine = "BLENDER_EEVEE_NEXT"
     except Exception:
@@ -319,9 +435,48 @@ def main() -> None:
         pass
     scene.render.image_settings.file_format = "PNG"
     scene.render.film_transparent = False
-    scene.render.filepath = str(Path(args.out).expanduser().resolve())
-    bpy.ops.render.render(write_still=True)
-    print(f"Saved render: {scene.render.filepath}")
+
+    def render_view(out_path: Path, azimuth_deg: float, elevation_deg: float, radius_mult: float, lens: float) -> None:
+        radius = xy_span * float(radius_mult)
+        az = math.radians(float(azimuth_deg))
+        elev = math.radians(float(elevation_deg))
+        cam.location = (
+            target.x + radius * math.cos(az),
+            target.y + radius * math.sin(az),
+            target.z + math.tan(elev) * radius,
+        )
+        cam.data.type = "PERSP"
+        cam.data.lens = float(lens)
+        cam.data.clip_start = 0.02
+        cam.data.clip_end = 300.0
+        _look_at(cam, target)
+        scene.camera = cam
+        scene.render.filepath = str(out_path.expanduser().resolve())
+        bpy.ops.render.render(write_still=True)
+        print(f"Saved render: {scene.render.filepath}")
+
+    if args.view_specs_json:
+        specs = json.loads(args.view_specs_json.expanduser().read_text(encoding="utf-8"))
+        if not isinstance(specs, list):
+            raise ValueError("--view-specs-json must contain a JSON list")
+        for spec in specs:
+            if not isinstance(spec, dict):
+                continue
+            render_view(
+                Path(spec.get("out") or args.out),
+                float(spec.get("azimuth_deg", args.azimuth_deg)),
+                float(spec.get("elevation_deg", args.elevation_deg)),
+                float(spec.get("radius_mult", args.radius_mult)),
+                float(spec.get("lens", args.lens)),
+            )
+    else:
+        render_view(
+            Path(args.out),
+            float(args.azimuth_deg),
+            float(args.elevation_deg),
+            float(args.radius_mult),
+            float(args.lens),
+        )
     if args.save_blend:
         save_path = args.save_blend.expanduser().resolve()
         save_path.parent.mkdir(parents=True, exist_ok=True)

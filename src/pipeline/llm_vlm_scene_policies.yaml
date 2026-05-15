@@ -1,0 +1,222 @@
+# Политики только для пайплайна llm_vlm_layout_refinement (compile_prompt_intent).
+schema_version: scene_policies/v1
+
+area_buckets:
+  micro:
+    min_sqm: 0.0
+    max_sqm: 6.0
+  compact:
+    min_sqm: 6.01
+    max_sqm: 8.5
+  standard:
+    min_sqm: 8.51
+    max_sqm: 11.0
+  large:
+    min_sqm: 11.01
+    max_sqm: 999.0
+
+room_programs:
+  Bedroom:
+    micro: &bedroom_prog
+      required_semantics: ["Bed", "Lighting"]
+      optional_semantics: ["Storage", "SideTable", "CeilingLight", "Rug"]
+      forbidden_semantics: []
+      preferred_semantics: ["CeilingLight"]
+      max_counts:
+        Bed: 1
+        Storage: 2
+        SideTable: 2
+        Lighting: 2
+        CeilingLight: 1
+        Rug: 1
+      notes: "default bedroom program"
+    compact: *bedroom_prog
+    standard: *bedroom_prog
+    large: *bedroom_prog
+  LivingRoom:
+    micro: &living_prog
+      required_semantics: ["Chair", "Table", "Lighting"]
+      optional_semantics: ["Rug", "Storage", "FloorLamp", "LargePlant"]
+      forbidden_semantics: []
+      preferred_semantics: ["Rug"]
+      max_counts:
+        Chair: 4
+        Table: 1
+        Lighting: 2
+        Rug: 1
+        Storage: 2
+        FloorLamp: 1
+        LargePlant: 1
+      notes: "default living room program"
+    compact: *living_prog
+    standard: *living_prog
+    large: *living_prog
+  Kitchen:
+    micro: &kitchen_prog
+      required_semantics: ["Sink", "KitchenCounter", "Storage"]
+      optional_semantics: ["Lighting", "Chair"]
+      forbidden_semantics: []
+      preferred_semantics: []
+      max_counts:
+        Sink: 1
+        KitchenCounter: 1
+        Storage: 3
+        Lighting: 2
+        Chair: 2
+      notes: "default kitchen program"
+    compact: *kitchen_prog
+    standard: *kitchen_prog
+    large: *kitchen_prog
+  Bathroom:
+    micro: &bath_prog
+      required_semantics: ["Toilet", "Sink"]
+      optional_semantics: ["Bathtub", "Shower", "Lighting", "Mirror"]
+      forbidden_semantics: []
+      preferred_semantics: []
+      max_counts:
+        Toilet: 1
+        Sink: 1
+        Bathtub: 1
+        Shower: 1
+        Lighting: 2
+        Mirror: 1
+      notes: "default bathroom program"
+    compact: *bath_prog
+    standard: *bath_prog
+    large: *bath_prog
+  DiningRoom:
+    micro: &dining_prog
+      required_semantics: ["Table", "Chair", "Lighting"]
+      optional_semantics: ["Storage", "Rug", "Mirror"]
+      forbidden_semantics: []
+      preferred_semantics: []
+      max_counts:
+        Table: 1
+        Chair: 6
+        Lighting: 2
+        Storage: 1
+        Rug: 1
+        Mirror: 1
+      notes: "default dining room program"
+    compact: *dining_prog
+    standard: *dining_prog
+    large: *dining_prog
+
+styles:
+  japandi:
+    density: low
+    decor_richness: low
+    acceptance_profile: bedroom_balanced
+    factory_whitelist: []
+    factory_blacklist: []
+    forbidden_semantics: []
+    preferred_semantics: []
+    palette_hint: []
+  scandinavian:
+    density: low
+    decor_richness: low
+    acceptance_profile: bedroom_balanced
+    factory_whitelist: []
+    factory_blacklist: []
+    forbidden_semantics: []
+    preferred_semantics: []
+    palette_hint: []
+  contemporary:
+    density: medium
+    decor_richness: medium
+    acceptance_profile: bedroom_balanced
+    factory_whitelist: []
+    factory_blacklist: []
+    forbidden_semantics: []
+    preferred_semantics: []
+    palette_hint: []
+  baroque_inspired:
+    density: medium
+    decor_richness: high
+    acceptance_profile: bedroom_balanced
+    factory_whitelist: []
+    factory_blacklist: []
+    forbidden_semantics: []
+    preferred_semantics: []
+    palette_hint: []
+
+acceptance_profiles:
+  bedroom_balanced:
+    min_real_objects: 1
+    max_repeated_factory_count: 8
+    reject_on_solver_violation: false
+    allowed_solver_violations: []
+    min_rule_score: 0.0
+    min_judge_score: 0.0
+
+solver_profiles:
+  bedroom_micro_low_density: &solver_low
+    screening_seeds: [0, 1, 2, 3]
+    final_seeds: [11, 12]
+    monkeypatch_params:
+      furniture_fullness_pct: 0.48
+      obj_interior_obj_pct: 0.22
+      obj_on_storage_pct: 0.10
+      obj_on_nonstorage_pct: 0.08
+    stage_flags:
+      solve_large_enabled: true
+      solve_medium_enabled: true
+      solve_small_enabled: false
+    solve_steps_large: 150
+    solve_steps_medium: 35
+    solve_steps_small: 0
+  bedroom_compact_low_density: *solver_low
+  bedroom_standard_low_density: *solver_low
+  bedroom_large_low_density: *solver_low
+  livingroom_micro_low_density: *solver_low
+  livingroom_compact_low_density: *solver_low
+  livingroom_standard_low_density: *solver_low
+  livingroom_large_low_density: *solver_low
+  kitchen_micro_low_density: *solver_low
+  kitchen_compact_low_density: *solver_low
+  kitchen_standard_low_density: *solver_low
+  kitchen_large_low_density: *solver_low
+  bathroom_micro_low_density: *solver_low
+  bathroom_compact_low_density: *solver_low
+  bathroom_standard_low_density: *solver_low
+  bathroom_large_low_density: *solver_low
+  diningroom_micro_low_density: *solver_low
+  diningroom_compact_low_density: *solver_low
+  diningroom_standard_low_density: *solver_low
+  diningroom_large_low_density: *solver_low
+
+  # medium_density: те же monkeypatch, что раньше у solver_med; шаги солвера как у solver_low (быстрее Infinigen).
+  bedroom_micro_medium_density: &solver_med
+    screening_seeds: [0, 1, 2, 3]
+    final_seeds: [11, 12]
+    monkeypatch_params:
+      furniture_fullness_pct: 0.55
+      obj_interior_obj_pct: 0.28
+      obj_on_storage_pct: 0.12
+      obj_on_nonstorage_pct: 0.10
+    stage_flags:
+      solve_large_enabled: true
+      solve_medium_enabled: true
+      solve_small_enabled: false
+    solve_steps_large: 150
+    solve_steps_medium: 35
+    solve_steps_small: 0
+  bedroom_compact_medium_density: *solver_med
+  bedroom_standard_medium_density: *solver_med
+  bedroom_large_medium_density: *solver_med
+  livingroom_micro_medium_density: *solver_med
+  livingroom_compact_medium_density: *solver_med
+  livingroom_standard_medium_density: *solver_med
+  livingroom_large_medium_density: *solver_med
+  kitchen_micro_medium_density: *solver_med
+  kitchen_compact_medium_density: *solver_med
+  kitchen_standard_medium_density: *solver_med
+  kitchen_large_medium_density: *solver_med
+  bathroom_micro_medium_density: *solver_med
+  bathroom_compact_medium_density: *solver_med
+  bathroom_standard_medium_density: *solver_med
+  bathroom_large_medium_density: *solver_med
+  diningroom_micro_medium_density: *solver_med
+  diningroom_compact_medium_density: *solver_med
+  diningroom_standard_medium_density: *solver_med
+  diningroom_large_medium_density: *solver_med

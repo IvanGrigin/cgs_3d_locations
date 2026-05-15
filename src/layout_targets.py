@@ -23,6 +23,7 @@ _SEMANTIC_ALIASES: dict[str, tuple[str, ...]] = {
     "computer": ("computer", "monitor", "laptop", "keyboard", "macbook", "imac"),
     "armchair": ("armchair", "easy chair"),
     "chair": ("chair", "dining chair", "office chair", "lounge chair"),
+    "stool": ("stool", "pouf", "pouffe", "ottoman", "пуф", "табурет"),
     "dining_table": ("dining table", "dining_table", "обеденный стол"),
     "sofa": ("sofa", "loveseat", "chaise longue sofa"),
     "coffee_table": ("coffee table",),
@@ -54,6 +55,7 @@ _SUPPLIER_REPLACE_GROUPS = {
     "computer",
     "armchair",
     "chair",
+    "stool",
     "dining_table",
     "sofa",
     "coffee_table",
@@ -77,6 +79,31 @@ _KEEP_GENERATED_GROUPS = {
     "rug",
     "plant",
 }
+
+_CATEGORY_TO_SEMANTIC_GROUP = {
+    "bookshelf": "shelf",
+    "ceiling_light": "lamp_ceiling",
+    "chandelier": "lamp_ceiling",
+    "floor_lamp": "lamp_floor",
+    "table_lamp": "lamp_table",
+    "wall_light": "lamp_wall",
+    "runner_rug": "rug",
+}
+
+_PROCEDURAL_KEEP_CATEGORIES = {
+    "decor_books",
+    "decor_box",
+    "decor_tray",
+    "decor_vase",
+    "pillow",
+    "blanket",
+    "rug",
+    "runner_rug",
+    "wall_art",
+    "tv_accessory",
+}
+
+_WALL_REPLACE_CATEGORIES = {"mirror", "wall_light", "tv"}
 
 
 def _read_json(path: Path) -> Any:
@@ -110,6 +137,75 @@ def _semantic_group(name: Any, category: Any = None, constraints: dict[str, Any]
     if mount_type == "wall":
         return "lamp_wall"
     return text or "unknown"
+
+
+def _physical_role(item: dict[str, Any]) -> str:
+    meta = item.get("meta") if isinstance(item.get("meta"), dict) else {}
+    return str(meta.get("physical_role") or "").strip().lower()
+
+
+def _category_key(item: dict[str, Any]) -> str:
+    return str(item.get("category") or item.get("name") or "").strip().lower()
+
+
+def _semantic_group_for_item(item: dict[str, Any], constraints: dict[str, Any]) -> str:
+    category = _category_key(item)
+    meta = item.get("meta") if isinstance(item.get("meta"), dict) else {}
+    source = item.get("source") if isinstance(item.get("source"), dict) else {}
+    is_procedural = bool(_physical_role(item)) or bool(meta.get("procedural")) or str(source.get("placement_source") or "").startswith(
+        "procedural_room_stage"
+    )
+    explicit = str(item.get("semantic_group") or "").strip().lower()
+    if explicit in _CATEGORY_TO_SEMANTIC_GROUP:
+        return _CATEGORY_TO_SEMANTIC_GROUP[explicit]
+    if category in _CATEGORY_TO_SEMANTIC_GROUP:
+        return _CATEGORY_TO_SEMANTIC_GROUP[category]
+    if explicit and explicit not in {"bed", "wardrobe", "nightstand"}:
+        return explicit
+    if is_procedural and category:
+        return category
+    return _semantic_group(item.get("name"), item.get("category"), constraints)
+
+
+def _replacement_policy_for_item(item: dict[str, Any], *, placeholder_bbox: bool) -> tuple[str, str]:
+    category = _category_key(item)
+    role = _physical_role(item)
+
+    if placeholder_bbox:
+        return "replace_with_supplier", "placeholder_bbox_requires_real_asset"
+    if category in {"nightstand", "side_table", "floor_lamp"}:
+        return "replace_with_supplier", f"{category}_always_replace_with_supplier"
+    if category in {"rug", "runner_rug"}:
+        return "keep_generated", "rug_kept_generated_until_carpet_catalog"
+    if role == "solid_floor":
+        return "replace_with_supplier", "solid_floor_furniture_or_floor_item"
+    if role == "ceiling_mounted":
+        return "replace_with_supplier", "ceiling_mounted_lighting"
+    if role == "wall_mounted" and category in _WALL_REPLACE_CATEGORIES:
+        return "replace_with_supplier", "wall_mounted_replaceable_item"
+    if role == "wall_mounted" and category == "wall_art":
+        return "keep_generated", "wall_art_generated_placeholder"
+    if role in {"on_top", "soft_on_object", "soft_floor", "decorative_soft"}:
+        return "keep_generated", f"{role}_kept_generated"
+    if category in _PROCEDURAL_KEEP_CATEGORIES:
+        return "keep_generated", "procedural_decor_kept_generated"
+    return _default_replacement_policy(
+        semantic_group=_semantic_group_for_item(item, item.get("constraints") if isinstance(item.get("constraints"), dict) else {}),
+        placeholder_bbox=placeholder_bbox,
+    )
+
+
+def _layout_source_for_item(item: dict[str, Any], scene: dict[str, Any]) -> str:
+    source = item.get("source") if isinstance(item.get("source"), dict) else {}
+    scene_meta = scene.get("meta") if isinstance(scene.get("meta"), dict) else {}
+    value = (
+        source.get("placement_source")
+        or source.get("generator")
+        or scene_meta.get("placer")
+        or scene_meta.get("mode")
+        or "unknown_layout"
+    )
+    return str(value or "unknown_layout")
 
 
 def _extract_position_m(item: dict[str, Any], aabb: dict[str, Any]) -> list[float]:
@@ -175,11 +271,9 @@ def extract_layout_targets(scene_or_placement_path: str | Path, out_path: str | 
         name = str(item.get("name") or item.get("category") or f"object_{idx}")
 
         placeholder_bbox = bool(meta.get("placeholder_bbox") or source.get("placeholder_bbox"))
-        semantic_group = _semantic_group(name, category, constraints)
-        replacement_policy, replacement_reason = _default_replacement_policy(
-            semantic_group=semantic_group,
-            placeholder_bbox=placeholder_bbox,
-        )
+        semantic_group = _semantic_group_for_item(item, constraints)
+        replacement_policy, replacement_reason = _replacement_policy_for_item(item, placeholder_bbox=placeholder_bbox)
+        layout_source = _layout_source_for_item(item, data)
         target = {
             "target_id": str(item.get("id") or f"target_{idx:04d}"),
             "name": name,
@@ -195,9 +289,12 @@ def extract_layout_targets(scene_or_placement_path: str | Path, out_path: str | 
             "placeholder_bbox": placeholder_bbox,
             "replacement_policy": replacement_policy,
             "replacement_reason": replacement_reason,
+            "layout_source": layout_source,
             "source": source,
             "meta": {
                 "placement_meta": meta,
+                "physical_role": meta.get("physical_role"),
+                "layout_source": layout_source,
                 "room_id": ((data.get("room") or {}).get("id") if isinstance(data.get("room"), dict) else None),
                 "placement_index": idx,
             },
@@ -241,7 +338,7 @@ def build_supplier_bindings_stub(targets_path: str | Path, out_path: str | Path)
                 "replacement_policy": target.get("replacement_policy") or "keep_generated",
                 "replacement_reason": target.get("replacement_reason"),
                 "provenance": {
-                    "layout_source": "infinigen_layout",
+                    "layout_source": target.get("layout_source") or (target.get("meta") or {}).get("layout_source") or "unknown_layout",
                     "final_asset_source": "pending",
                     "allowed_asset_sources": ["generated_native", "supplier_catalog"],
                 },

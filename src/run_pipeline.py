@@ -20,7 +20,10 @@ from typing import Any, Optional
 
 try:
     from .acquire_supplier_bindings_assets import acquire_assets_for_bindings_json
-    from .apply_supplier_bindings import apply_supplier_bindings_to_json
+    from .apply_supplier_bindings import (
+        ASSET_FALLBACK_MODE_NONE,
+        apply_supplier_bindings_to_json,
+    )
     from .layout_targets import create_layout_selection_stub_artifacts
     from .supplier_layout_matcher import (
         build_bindings_with_candidates,
@@ -59,6 +62,10 @@ try:
         add_procedural_room_arguments,
         maybe_apply_procedural_room_stage,
     )
+    from .pipeline.semantic_room_planner_stage import (
+        add_semantic_room_planner_arguments,
+        maybe_run_semantic_room_planner_stage,
+    )
     from .pipeline.flooring_stage import apply_flooring_to_scene, run_flooring_selection, write_json as write_flooring_json
     from .pipeline.wall_stage import apply_wall_material_to_scene_with_catalog, run_wall_selection, write_json as write_wall_json
     from .supplier_replacement_report import write_supplier_replacement_reports
@@ -87,7 +94,10 @@ try:
     from .style_prompt_analyzer import analyze_prompt_to_style_profile
 except ImportError:
     from acquire_supplier_bindings_assets import acquire_assets_for_bindings_json
-    from apply_supplier_bindings import apply_supplier_bindings_to_json
+    from apply_supplier_bindings import (
+        ASSET_FALLBACK_MODE_NONE,
+        apply_supplier_bindings_to_json,
+    )
     from layout_targets import create_layout_selection_stub_artifacts
     from supplier_layout_matcher import (
         build_bindings_with_candidates,
@@ -125,6 +135,10 @@ except ImportError:
     from pipeline.procedural_room_stage import (
         add_procedural_room_arguments,
         maybe_apply_procedural_room_stage,
+    )
+    from pipeline.semantic_room_planner_stage import (
+        add_semantic_room_planner_arguments,
+        maybe_run_semantic_room_planner_stage,
     )
     from pipeline.flooring_stage import apply_flooring_to_scene, run_flooring_selection, write_json as write_flooring_json
     from pipeline.wall_stage import apply_wall_material_to_scene_with_catalog, run_wall_selection, write_json as write_wall_json
@@ -549,6 +563,7 @@ def _apply_supplier_bindings_for_artifacts(
     run_dir: Path,
     bindings_json_path: Path,
     require_local_asset: bool,
+    supplier_asset_fallback_mode: str,
     variant_suffix: str = "",
 ) -> dict[str, Any]:
     suffix = f".{variant_suffix.strip('.')}" if str(variant_suffix or "").strip() else ""
@@ -558,6 +573,7 @@ def _apply_supplier_bindings_for_artifacts(
         bindings_json_path=bindings_json_path,
         output_json_path=supplier_placement_v1,
         require_local_asset=require_local_asset,
+        fallback_mode=supplier_asset_fallback_mode,
     )
 
     supplier_scene_v1 = None
@@ -568,6 +584,7 @@ def _apply_supplier_bindings_for_artifacts(
             bindings_json_path=bindings_json_path,
             output_json_path=supplier_scene_v1,
             require_local_asset=require_local_asset,
+            fallback_mode=supplier_asset_fallback_mode,
         )
 
     supplier_data = json.loads(supplier_placement_v1.read_text(encoding="utf-8"))
@@ -577,6 +594,7 @@ def _apply_supplier_bindings_for_artifacts(
         "placement_v1": str(supplier_placement_v1.resolve()),
         "scene_v1": str(supplier_scene_v1.resolve()) if supplier_scene_v1 else None,
         "require_local_asset": bool(require_local_asset),
+        "supplier_asset_fallback_mode": str(supplier_asset_fallback_mode).strip() or "none",
         "summary": supplier_summary,
     }
 
@@ -1373,11 +1391,19 @@ def _parse_supplier_selection_modes(raw: str | None) -> list[str]:
         "balanced": "optimal",
         "style": "best_match",
         "cheap_style": "optimal",
+        "min_price": "cheapest",
+        "minimal_price": "cheapest",
+        "minimum_price": "cheapest",
+        "lowest_price": "cheapest",
+        "cheap_top20": "cheapest_top20",
+        "cheapest_top_20": "cheapest_top20",
+        "best_suitable": "best_match",
+        "most_suitable": "best_match",
     }
     out: list[str] = []
     for part in re.split(r"[,;\\s]+", text):
         mode = aliases.get(part.strip().lower(), part.strip().lower())
-        if mode not in {"cheapest", "optimal", "best_match"}:
+        if mode not in {"cheapest", "cheapest_top20", "optimal", "best_match"}:
             continue
         if mode not in out:
             out.append(mode)
@@ -1418,6 +1444,12 @@ def _run_supplier_modes_for_artifacts(
     manifest_path: Path,
     manifest_key: str = "supplier_variants",
 ) -> tuple[Path | None, dict[str, Any] | None, dict[str, Any] | None, dict[str, Any] | None, dict[str, Any]]:
+    requested_fallback_mode = str(getattr(args, "supplier_asset_fallback_mode", "")).strip() or ASSET_FALLBACK_MODE_NONE
+    placer_name = str(getattr(args, "placer", "") or "").strip().lower()
+    supplier_asset_fallback_mode = requested_fallback_mode
+    if placer_name == "infinigen_clean" and requested_fallback_mode != ASSET_FALLBACK_MODE_NONE:
+        supplier_asset_fallback_mode = ASSET_FALLBACK_MODE_NONE
+
     modes = _parse_supplier_selection_modes(getattr(args, "supplier_selection_modes", None))
     if not modes:
         modes = [str(getattr(args, "supplier_selection_mode", "") or "").strip() or None]  # type: ignore[list-item]
@@ -1473,6 +1505,7 @@ def _run_supplier_modes_for_artifacts(
             run_dir=run_dir,
             bindings_json_path=assets_bindings_path,
             require_local_asset=bool(args.supplier_require_local_asset),
+            supplier_asset_fallback_mode=supplier_asset_fallback_mode,
             variant_suffix=mode_name,
         )
         report_info = _write_supplier_replacement_reports_for_artifacts(
@@ -2108,6 +2141,14 @@ def run_pipeline_for_mode(
     }
     manifest_path = run_dir / "run_manifest.json"
     write_json(manifest_path, run_manifest)
+
+    maybe_run_semantic_room_planner_stage(
+        args=args,
+        room_path=effective_room_path,
+        prompt_text=effective_prompt_text,
+        run_dir=run_dir,
+        manifest_path=manifest_path,
+    )
 
     if args.placer == "lego_gen":
         if normalized_objects_path is None:
@@ -2836,6 +2877,12 @@ def build_cli() -> argparse.ArgumentParser:
         default=["data/sourse/suppliers/supplier_catalog_canonical.json"],
         help="Supplier catalog export JSON for automatic binding search; can be repeated",
     )
+    p.add_argument(
+        "--supplier-asset-fallback-mode",
+        choices=["none", "fbx_obj_proxy", "fbx_obj_trellis_proxy"],
+        default="none",
+        help="Fallback policy for missing local FBX/OBJ assets when applying supplier replacements.",
+    )
     p.add_argument("--supplier-site", action="append", default=None, help="Optional supplier source_site filter for automatic binding search")
     p.add_argument("--supplier-top-k", type=int, default=5, help="Top-K candidates for automatic supplier matcher")
     p.add_argument(
@@ -2844,8 +2891,8 @@ def build_cli() -> argparse.ArgumentParser:
         default="balanced",
         help="Automatic supplier ranking strategy: cheapest, cheap_style, style, or balanced.",
     )
-    p.add_argument("--supplier-selection-mode", choices=["cheapest", "optimal", "best_match"], default=None, help="Design-aware supplier selection mode for single bindings output")
-    p.add_argument("--supplier-selection-modes", default=None, help="Comma-separated design-aware modes to build, e.g. cheapest,optimal,best_match")
+    p.add_argument("--supplier-selection-mode", choices=["cheapest", "min_price", "lowest_price", "cheapest_top20", "cheap_top20", "optimal", "best_match"], default=None, help="Design-aware supplier selection mode for single bindings output")
+    p.add_argument("--supplier-selection-modes", default=None, help="Comma-separated design-aware modes to build, e.g. cheapest,cheapest_top20,optimal,best_match")
     p.add_argument("--supplier-build-modes", default=None, help="Comma-separated supplier modes to build in Blender. Defaults to all selection modes.")
     p.add_argument("--build-supplier-blend", action="store_true", help="Compat flag: supplier blends are built when Blender is not skipped.")
     p.add_argument("--validate-supplier-variants", action="store_true", help="Validate multi-mode supplier bindings and write supplier_variants.validation.json")
@@ -2884,6 +2931,7 @@ def build_cli() -> argparse.ArgumentParser:
     p.add_argument("--kitchen-accessory-ollama-think", default="low")
 
     add_procedural_room_arguments(p)
+    add_semantic_room_planner_arguments(p)
 
     p.add_argument("--no-flooring", action="store_true", help="Disable supplier floor covering selection and Blender floor texture application")
     p.add_argument("--flooring-materials", default="data/floor_materials")

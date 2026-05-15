@@ -55,26 +55,105 @@ def hide_object_family(root: bpy.types.Object) -> None:
         stack.extend(list(obj.children))
 
 
-def matches_room_shell_name(name: str) -> bool:
-    low = str(name or "").lower()
+def shell_name_part(name: str) -> str:
+    low = str(name or "").strip().lower()
+    return low.rsplit("__", 1)[-1]
+
+
+def is_floor_shell_name(name: str) -> bool:
+    part = shell_name_part(name)
     return (
-        "room_wall" in low
-        or "room_ceiling" in low
-        or "room_exterior" in low
-        or "wallpaper" in low
-        or low.endswith(".exterior")
-        or low.endswith("/0")
-        or ".wall" in low
-        or "/wall" in low
-        or "ceiling" in low
-        or "exterior" in low
+        part.endswith(".floor")
+        or part == "floor"
+        or "room_floor" in part
+        or "preview_floor" in part
+        or part.startswith("floor_")
     )
 
 
+def matches_room_shell_name(name: str) -> bool:
+    part = shell_name_part(name)
+    if is_floor_shell_name(name):
+        return False
+    if any(
+        token in part
+        for token in (
+            "ceilinglight",
+            "ceiling_light",
+            "lamp_ceiling",
+            "flat_ceiling_light",
+            "wall_light",
+            "wall_sconce",
+            "wall_art",
+            "wall_mounted",
+            "wall_mount",
+            "wall_cabinet",
+            "wall_shelf",
+            "wall_unit",
+        )
+    ):
+        return False
+    return (
+        "room_wall" in part
+        or "room_ceiling" in part
+        or "room_exterior" in part
+        or "room_wallpaper" in part
+        or "wallpaper_supplieroverlay" in part
+        or part.endswith(".exterior")
+        or part.endswith(".ceiling")
+        or part.endswith(".wall")
+        or part.endswith(".meshed")
+        or part.endswith("/0")
+        or ".wall." in part
+        or "/wall" in part
+        or "ceiling" in part
+        or "exterior" in part
+    )
+
+
+def looks_like_wall_or_ceiling_by_geometry(obj: bpy.types.Object) -> bool:
+    if obj.type != "MESH" or obj.hide_render:
+        return False
+    part = shell_name_part(obj.name)
+    if is_floor_shell_name(obj.name):
+        return False
+    if any(
+        token in part
+        for token in (
+            "ceilinglight",
+            "ceiling_light",
+            "lamp_ceiling",
+            "flat_ceiling_light",
+            "wall_light",
+            "wall_sconce",
+            "wall_art",
+            "wall_mounted",
+            "wall_mount",
+            "wall_cabinet",
+            "wall_shelf",
+            "wall_unit",
+        )
+    ):
+        return False
+    pts = world_bbox_points(obj)
+    if not pts:
+        return False
+    size_x = max(p.x for p in pts) - min(p.x for p in pts)
+    size_y = max(p.y for p in pts) - min(p.y for p in pts)
+    size_z = max(p.z for p in pts) - min(p.z for p in pts)
+    min_z = min(p.z for p in pts)
+    max_z = max(p.z for p in pts)
+    wide_xy = max(size_x, size_y)
+    is_wall_panel = size_z >= 1.6 and wide_xy >= 0.8 and min(size_x, size_y) <= 0.18
+    is_ceiling_cap = size_z <= 0.18 and wide_xy >= 0.8 and min_z >= 1.8 and max_z >= 1.9
+    return is_wall_panel or is_ceiling_cap
+
+
 def hide_room_shell_objects() -> int:
+    bpy.context.view_layer.update()
     hidden = 0
     for obj in list(bpy.data.objects):
-        if matches_room_shell_name(obj.name):
+        if matches_room_shell_name(obj.name) or looks_like_wall_or_ceiling_by_geometry(obj):
             hide_object_family(obj)
             hidden += 1
     print(f"[orbit_render] hidden_room_shell_objects={hidden}")
@@ -176,6 +255,9 @@ def setup_render(scene: bpy.types.Scene, width: int, height: int, samples: int) 
     if scene.render.engine == "CYCLES":
         scene.cycles.samples = int(samples)
         scene.cycles.use_denoising = True
+    elif scene.render.engine in {"BLENDER_EEVEE", "BLENDER_EEVEE_NEXT"} and hasattr(scene, "eevee"):
+        if hasattr(scene.eevee, "taa_render_samples"):
+            scene.eevee.taa_render_samples = int(samples)
 
 
 def camera_distance(camera: bpy.types.Object, bounds: dict, pitch_deg: float, margin: float) -> float:

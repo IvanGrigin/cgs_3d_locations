@@ -22,7 +22,21 @@ from typing import Any, Iterable
 SUPPORTED_PROVIDERS = {"openai", "openrouter", "ollama", "none"}
 DEFAULT_OPENAI_MODEL = "gpt-4.1-mini"
 DEFAULT_OPENROUTER_MODEL = "openai/gpt-4.1-mini"
-DEFAULT_OLLAMA_MODEL = "qwen2.5vl:7b"
+DEFAULT_OLLAMA_MODEL = "llama3.2-vision:11b"
+
+VALID_JUDGE_STATUSES = {"ok", "keep", "wrong", "wrong_orientation", "unclear"}
+FORBIDDEN_RELATIVE_ACTIONS = {
+    "rotate_clockwise",
+    "rotate_counterclockwise",
+    "rotate_left",
+    "rotate_right",
+    "rotate_90",
+    "rotate_180",
+    "turn_left",
+    "turn_right",
+    "clockwise",
+    "counterclockwise",
+}
 
 
 @dataclass(frozen=True)
@@ -46,6 +60,10 @@ class OrientationDecision:
     target_yaw_deg: float | None
     confidence: float
     reason: str
+    label_id: str = ""
+    status: str = ""
+    relation: str = ""
+    problem: str = ""
 
 
 @dataclass(frozen=True)
@@ -91,6 +109,10 @@ def _norm_angle_deg(angle: float) -> float:
     if angle < 0:
         angle += 360.0
     return round(angle, 6)
+
+
+def norm_angle_deg(angle: float) -> float:
+    return _norm_angle_deg(angle)
 
 
 def _angle_delta_deg(a: float, b: float) -> float:
@@ -360,6 +382,21 @@ def is_chair_like(ref: SceneObjectRef, *, include_armchairs: bool = False) -> bo
     return False
 
 
+def is_table_like(ref: SceneObjectRef) -> bool:
+    blob = _semantic_blob(ref)
+    compact = re.sub(r"[^a-zа-я0-9]+", " ", blob)
+    words = set(compact.split())
+    if "deskfactory" in blob or "simpledeskfactory" in blob:
+        return True
+    if {"table", "desk", "dining_table", "dining"}.intersection(words):
+        return True
+    if "dining table" in blob or "coffee table" in blob or "work desk" in blob:
+        return True
+    if "стол" in words or "стола" in words or "столик" in words or "письменн" in blob:
+        return True
+    return False
+
+
 def _is_context_ref(ref: SceneObjectRef) -> bool:
     blob = _semantic_blob(ref)
     tokens = (
@@ -402,6 +439,35 @@ def _get_by_path(root: Any, path: tuple[Any, ...]) -> Any:
     return cur
 
 
+def set_scene_object_yaws(scene: dict[str, Any], target_yaws_deg: dict[str, float]) -> tuple[dict[str, Any], dict[str, Any]]:
+    result = copy.deepcopy(scene)
+    refs = collect_scene_objects(result, max_objects=10000)
+    by_id = {ref.object_id: ref for ref in refs}
+    applied: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
+    for object_id, yaw_deg in target_yaws_deg.items():
+        ref = by_id.get(str(object_id))
+        if ref is None:
+            skipped.append({"object_id": object_id, "reason": "object_id_not_found"})
+            continue
+        obj = _get_by_path(result, ref.path)
+        if not isinstance(obj, dict):
+            skipped.append({"object_id": object_id, "reason": "path_does_not_resolve_to_object"})
+            continue
+        target_yaw = _norm_angle_deg(float(yaw_deg))
+        field = _set_yaw_deg(obj, target_yaw)
+        applied.append(
+            {
+                "object_id": object_id,
+                "name": ref.name,
+                "field": field,
+                "current_yaw_deg": ref.yaw_deg,
+                "target_yaw_deg": target_yaw,
+            }
+        )
+    return result, {"applied": applied, "skipped": skipped}
+
+
 def image_to_data_url(image_path: Path) -> str:
     ext = image_path.suffix.lower().lstrip(".")
     mime = "image/png" if ext == "png" else "image/jpeg"
@@ -430,25 +496,70 @@ def build_vlm_prompt(
     context_objects: list[SceneObjectRef],
     *,
     scope: str,
+    label_by_object_id: dict[str, str] | None = None,
 ) -> str:
     room = scene.get("room", {}) if isinstance(scene.get("room"), dict) else {}
     room_type = room.get("type") or room.get("room_type") or room.get("name") or scene.get("room_type") or "unknown"
 
-    target_payload = [_compact_ref(obj) for obj in target_objects]
+    label_by_object_id = label_by_object_id or {obj.object_id: f"C{i + 1}" for i, obj in enumerate(target_objects)}
+    target_payload = []
+    for obj in target_objects:
+        row = _compact_ref(obj)
+        row["label_id"] = label_by_object_id.get(obj.object_id, obj.object_id)
+        target_payload.append(row)
     context_payload = [_compact_ref(obj) for obj in context_objects[:80]]
-    target_ids = [obj.object_id for obj in target_objects]
+    label_ids = [label_by_object_id.get(obj.object_id, obj.object_id) for obj in target_objects]
+
+    if str(scope or "").strip().lower() == "all":
+        return (
+            "You are checking a top-view render of an automatically generated interior layout.\n"
+            "Task: orientation-only review for the labeled target objects. Do not move, delete, add, resize, or replace anything.\n"
+            "TRELLIS-generated assets may share the same intrinsic front direction, so judge whether each placed object is facing the correct functional direction in the room.\n"
+            "Use the visual top-view labels together with the target geometry below. If an object is symmetric or unclear, keep it.\n"
+            "Return strict JSON only. No markdown. No comments outside JSON.\n"
+            "JSON schema:\n"
+            "{\n"
+            "  \"summary\": \"short diagnosis\",\n"
+            "  \"objects\": [\n"
+            "    {\n"
+            "      \"object_id\": \"scene object id from the target geometry\",\n"
+            "      \"label_id\": \"C1\",\n"
+            "      \"action\": \"keep|set_yaw\",\n"
+            "      \"target_yaw_deg\": 0,\n"
+            "      \"confidence\": 0.0,\n"
+            "      \"reason\": \"short reason\"\n"
+            "    }\n"
+            "  ]\n"
+            "}\n"
+            "Rules:\n"
+            "- Include exactly one object entry for every label_id: "
+            f"{json.dumps(label_ids, ensure_ascii=False)}\n"
+            "- For action=keep, omit target_yaw_deg or set it to the current yaw.\n"
+            "- For action=set_yaw, target_yaw_deg must be an absolute scene yaw, preferably one of 0, 90, 180, 270.\n"
+            "- Only set_yaw when the functional front is clearly wrong. Beds should align with the headboard/wall, chairs face their table/desk, lamps stay plausible, and symmetric decor should keep.\n"
+            "- Do not output relative rotations such as rotate_90 or rotate_180.\n"
+            "- confidence must be between 0 and 1; use keep with low confidence when uncertain.\n"
+            f"Room type: {room_type}\n"
+            f"Scope: {scope}\n"
+            "Target label mapping and geometry:\n"
+            f"{json.dumps(target_payload, ensure_ascii=False, indent=2)}\n"
+            "Context objects for orientation reasoning:\n"
+            f"{json.dumps(context_payload, ensure_ascii=False, indent=2)}\n"
+        )
 
     return (
         "You are checking a top-view render of an automatically generated interior layout.\n"
-        "Task: find only orientation problems of the allowed target objects. Do not propose moving, deleting, adding, or resizing objects.\n"
-        "This first repair pass is chair-only. Return decisions only for the target chair objects listed below.\n"
-        "In the top-view image, target chairs may be highlighted, labeled by object_id, and drawn with an arrow showing current facing direction.\n"
+        "Task: judge only whether the labeled target chairs are correctly oriented. Do not propose moving, deleting, adding, resizing, or rotating by a relative amount.\n"
+        "This pass is chair-only. The top-view image labels target chairs as C1, C2, etc. Return decisions only for those label_id values.\n"
         "Chair rules:\n"
         "- A desk chair should face the desk/table, not the wall or open walkway.\n"
         "- A dining or side chair should face the matching table edge.\n"
+        "- In these top-view renders, the visible curved/solid colored part of a dining chair is usually the backrest.\n"
+        "- A chair is correct when its backrest is farther from the table and the open/seat front points toward the table.\n"
+        "- If the curved/solid backrest is between the chair and the table, mark that chair wrong.\n"
         "- If a chair is already plausible, keep it.\n"
-        "- If a chair is wrong, first describe what is wrong, then provide how many degrees it should rotate clockwise.\n"
-        "- If you cannot infer the global yaw confidently, use rotate_clockwise with rotate_clockwise_deg=90, 180, or 270.\n"
+        "- If a chair is wrong, say it is wrong and describe the relation, for example face_table.\n"
+        "- Do not output rotate_clockwise, rotate_counterclockwise, rotate_90, rotate_180, or any other relative rotation command.\n"
         "Return strict JSON only. No markdown. No comments outside JSON.\n"
         "JSON schema:\n"
         "{\n"
@@ -456,27 +567,23 @@ def build_vlm_prompt(
         "  \"problems\": [\"short human-readable issues\"],\n"
         "  \"objects\": [\n"
         "    {\n"
-        "      \"object_id\": \"id from target list\",\n"
-        "      \"object_name\": \"name from target list\",\n"
-        "      \"problem\": \"what is wrong with this object orientation, or empty for keep\",\n"
-        "      \"action\": \"keep|rotate_clockwise|set_yaw\",\n"
-        "      \"rotate_clockwise_deg\": 0,\n"
-        "      \"target_yaw_deg\": 0,\n"
+        "      \"label_id\": \"C1\",\n"
+        "      \"status\": \"ok|wrong|unclear\",\n"
+        "      \"relation\": \"face_table|face_desk|other|unclear\",\n"
         "      \"confidence\": 0.0,\n"
-        "      \"reason\": \"why this orientation should be changed or kept\"\n"
+        "      \"reason\": \"why this labeled chair is ok, wrong, or unclear\"\n"
         "    }\n"
         "  ]\n"
         "}\n"
         "Rules:\n"
-        "- Include only these target IDs: "
-        f"{json.dumps(target_ids, ensure_ascii=False)}\n"
-        "- rotate_clockwise_deg must be one of 0, 90, 180, 270. Use 0 for keep.\n"
-        "- target_yaw_deg may be null unless action=set_yaw.\n"
-        "- Use target_yaw_deg in [0, 360) only when action=set_yaw and you are confident about global axes.\n"
-        "- Prefer keep when unsure. confidence must be between 0 and 1.\n"
+        "- Include exactly one object entry for every label_id: "
+        f"{json.dumps(label_ids, ensure_ascii=False)}\n"
+        "- Do not return object_id. Use label_id only.\n"
+        "- Valid status values are ok, wrong, unclear.\n"
+        "- Prefer unclear when you cannot judge from the image. confidence must be between 0 and 1.\n"
         f"Room type: {room_type}\n"
         f"Scope: {scope}\n"
-        "Target objects allowed to modify:\n"
+        "Target label mapping and geometry:\n"
         f"{json.dumps(target_payload, ensure_ascii=False, indent=2)}\n"
         "Context objects for orientation reasoning:\n"
         f"{json.dumps(context_payload, ensure_ascii=False, indent=2)}\n"
@@ -676,6 +783,60 @@ def call_ollama_vlm(
     }
 
 
+def call_ollama_vlm_multi(
+    *,
+    model: str | None,
+    prompt: str,
+    image_paths: list[Path],
+    temperature: float = 0.0,
+    timeout_sec: int = 240,
+) -> dict[str, Any]:
+    _load_dotenv_once()
+    if not image_paths:
+        raise ValueError("image_paths must not be empty")
+    base_url = (
+        os.environ.get("TOPVIEW_VLM_OLLAMA_URL")
+        or os.environ.get("OLLAMA_URL")
+        or "http://127.0.0.1:11435"
+    ).rstrip("/")
+    payload = {
+        "model": model or DEFAULT_OLLAMA_MODEL,
+        "stream": False,
+        "format": "json",
+        "options": {"temperature": temperature},
+        "messages": [
+            {
+                "role": "user",
+                "content": prompt,
+                "images": [image_to_base64(path) for path in image_paths],
+            }
+        ],
+    }
+    request = urllib.request.Request(
+        f"{base_url}/api/chat",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout_sec) as response:
+            raw = response.read().decode("utf-8")
+    except urllib.error.HTTPError as e:
+        detail = e.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"Ollama VLM request failed: HTTP {e.code}: {detail}") from e
+    except urllib.error.URLError as e:
+        raise RuntimeError(f"Ollama VLM request failed: {e}") from e
+    data = json.loads(raw)
+    content = ""
+    message = data.get("message")
+    if isinstance(message, dict):
+        content = str(message.get("content") or "")
+    return {
+        "choices": [{"message": {"content": content}}],
+        "ollama_response": data,
+    }
+
+
 def _extract_json_text(text: str) -> str:
     text = text.strip()
     if text.startswith("```"):
@@ -691,7 +852,7 @@ def _extract_json_text(text: str) -> str:
     raise ValueError("VLM response does not contain a JSON object")
 
 
-def parse_vlm_response(api_response: dict[str, Any]) -> VlmReviewResult:
+def parse_vlm_response(api_response: dict[str, Any], *, label_map: dict[str, str] | None = None) -> VlmReviewResult:
     choices = api_response.get("choices")
     if not isinstance(choices, list) or not choices:
         raise ValueError("VLM response has no choices")
@@ -716,7 +877,10 @@ def parse_vlm_response(api_response: dict[str, Any]) -> VlmReviewResult:
     for item in items:
         if not isinstance(item, dict):
             continue
+        label_id = str(item.get("label_id", "")).strip()
         object_id = str(item.get("object_id", "")).strip()
+        if not object_id and label_id and label_map:
+            object_id = str(label_map.get(label_id) or "").strip()
         if not object_id:
             continue
         target_yaw_deg = _as_float(item.get("target_yaw_deg"))
@@ -730,9 +894,416 @@ def parse_vlm_response(api_response: dict[str, Any]) -> VlmReviewResult:
                 target_yaw_deg=_norm_angle_deg(target_yaw_deg) if target_yaw_deg is not None else None,
                 confidence=max(0.0, min(1.0, _as_float(item.get("confidence")) or 0.0)),
                 reason=str(item.get("reason") or item.get("problem") or ""),
+                label_id=label_id,
             )
         )
     return VlmReviewResult(summary=summary, decisions=decisions, raw_response=parsed)
+
+
+def parse_vlm_judge_response(
+    api_response: dict[str, Any],
+    *,
+    label_map: dict[str, str],
+    target_by_id: dict[str, SceneObjectRef],
+) -> tuple[VlmReviewResult, list[dict[str, Any]]]:
+    choices = api_response.get("choices")
+    if not isinstance(choices, list) or not choices:
+        raise ValueError("VLM response has no choices")
+    message = choices[0].get("message") if isinstance(choices[0], dict) else None
+    content = message.get("content") if isinstance(message, dict) else None
+    if isinstance(content, list):
+        content_text = "\n".join(
+            str(part.get("text", ""))
+            for part in content
+            if isinstance(part, dict) and part.get("type") == "text"
+        )
+    else:
+        content_text = str(content or "")
+
+    parsed = json.loads(_extract_json_text(content_text))
+    summary = str(parsed.get("summary", ""))
+    items = parsed.get("objects", [])
+    errors: list[dict[str, Any]] = []
+    if not isinstance(items, list):
+        errors.append({"reason": "objects_not_list", "value_type": type(items).__name__})
+        items = []
+
+    allowed_labels = set(label_map)
+    seen_labels: set[str] = set()
+    decisions: list[OrientationDecision] = []
+
+    for index, item in enumerate(items):
+        if not isinstance(item, dict):
+            errors.append({"reason": "object_entry_not_dict", "index": index})
+            continue
+
+        raw_action = str(item.get("action", "")).strip().lower()
+        if raw_action in FORBIDDEN_RELATIVE_ACTIONS:
+            errors.append({"reason": "forbidden_relative_action", "index": index, "action": raw_action, "item": item})
+            continue
+        if raw_action and raw_action not in {"keep", "wrong_orientation", "unclear", "set_yaw"}:
+            errors.append({"reason": "invalid_action", "index": index, "action": raw_action, "item": item})
+            continue
+
+        label_id = str(item.get("label_id", "")).strip()
+        if not label_id:
+            object_id = str(item.get("object_id", "")).strip()
+            errors.append({"reason": "missing_label_id", "index": index, "object_id": object_id, "item": item})
+            continue
+        if label_id not in allowed_labels:
+            errors.append({"reason": "label_id_not_allowed", "index": index, "label_id": label_id, "allowed": sorted(allowed_labels), "item": item})
+            continue
+        if label_id in seen_labels:
+            errors.append({"reason": "duplicate_label_id", "index": index, "label_id": label_id, "item": item})
+            continue
+        seen_labels.add(label_id)
+
+        explicit_object_id = str(item.get("object_id", "")).strip()
+        if explicit_object_id and explicit_object_id != label_map[label_id]:
+            errors.append(
+                {
+                    "reason": "object_id_mismatch_for_label",
+                    "index": index,
+                    "label_id": label_id,
+                    "object_id": explicit_object_id,
+                    "expected_object_id": label_map[label_id],
+                    "item": item,
+                }
+            )
+            continue
+
+        status = str(item.get("status", "") or raw_action or "unclear").strip().lower()
+        if status == "keep":
+            status = "ok"
+        elif status == "wrong_orientation" or status == "set_yaw":
+            status = "wrong"
+        if status not in VALID_JUDGE_STATUSES:
+            errors.append({"reason": "invalid_status", "index": index, "label_id": label_id, "status": status, "item": item})
+            continue
+
+        target_yaw_deg = _as_float(item.get("target_yaw_deg"))
+        if raw_action == "keep" and target_yaw_deg is not None:
+            errors.append({"reason": "keep_with_target_yaw", "index": index, "label_id": label_id, "item": item})
+            continue
+        if raw_action == "set_yaw" and target_yaw_deg is None:
+            errors.append({"reason": "set_yaw_missing_target_yaw", "index": index, "label_id": label_id, "item": item})
+            continue
+
+        object_id = label_map[label_id]
+        ref = target_by_id.get(object_id)
+        decisions.append(
+            OrientationDecision(
+                object_id=object_id,
+                object_name=ref.name if ref is not None else "",
+                action="keep" if status in {"ok", "keep"} else status,
+                clockwise_delta_deg=None,
+                target_yaw_deg=_norm_angle_deg(target_yaw_deg) if target_yaw_deg is not None else None,
+                confidence=max(0.0, min(1.0, _as_float(item.get("confidence")) or 0.0)),
+                reason=str(item.get("reason") or item.get("problem") or ""),
+                label_id=label_id,
+                status=status,
+                relation=str(item.get("relation") or ""),
+                problem=str(item.get("problem") or ""),
+            )
+        )
+
+    missing = sorted(allowed_labels - seen_labels)
+    if missing:
+        errors.append({"reason": "missing_label_decisions", "missing_label_ids": missing})
+
+    return VlmReviewResult(summary=summary, decisions=decisions, raw_response=parsed), errors
+
+
+def build_variant_selection_prompt(
+    *,
+    label_map: dict[str, str],
+    variants: list[dict[str, Any]],
+) -> str:
+    variant_payload = [
+        {
+            "variant_id": row["variant_id"],
+            "offset_deg": row.get("offset_deg"),
+            "target_yaws_deg": row.get("target_yaws_deg", {}),
+        }
+        for row in variants
+    ]
+    return (
+        "You are selecting the best chair orientation variant from a 2x2 top-view contact sheet.\n"
+        "Each panel is labeled with a variant_id. Target chairs are labeled C1, C2, etc.\n"
+        "Task: for every target label, choose the variant where that chair most clearly faces its nearest table or desk.\n"
+        "Important visual rule: the visible curved/solid colored part of a dining chair is usually the backrest.\n"
+        "Choose the panel where the backrest is farther from the table and the open/seat front points toward the table.\n"
+        "Reject panels where the curved/solid backrest is between the chair and the table.\n"
+        "For two chairs on opposite sides of one table, the two backrests should be on the outside, away from the table center.\n"
+        "Do not propose new rotations. Choose only one of the provided variant_id values.\n"
+        "Return strict JSON only. No markdown.\n"
+        "JSON schema:\n"
+        "{\n"
+        "  \"summary\": \"short diagnosis\",\n"
+        "  \"objects\": [\n"
+        "    {\n"
+        "      \"label_id\": \"C1\",\n"
+        "      \"best_variant_id\": \"offset_000\",\n"
+        "      \"status\": \"selected|unclear\",\n"
+        "      \"confidence\": 0.0,\n"
+        "      \"reason\": \"why this variant is best\"\n"
+        "    }\n"
+        "  ]\n"
+        "}\n"
+        "Rules:\n"
+        f"- Include exactly one object entry for every label_id: {json.dumps(sorted(label_map), ensure_ascii=False)}\n"
+        f"- Valid variant_id values: {json.dumps([row['variant_id'] for row in variants], ensure_ascii=False)}\n"
+        "- If no panel is readable, use status=unclear and best_variant_id=null.\n"
+        "- confidence must be between 0 and 1.\n"
+        "Target label map:\n"
+        f"{json.dumps(label_map, ensure_ascii=False, indent=2)}\n"
+        "Variant geometry:\n"
+        f"{json.dumps(variant_payload, ensure_ascii=False, indent=2)}\n"
+    )
+
+
+def parse_variant_selection_response(
+    api_response: dict[str, Any],
+    *,
+    label_map: dict[str, str],
+    variant_ids: set[str],
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    choices = api_response.get("choices")
+    if not isinstance(choices, list) or not choices:
+        raise ValueError("VLM response has no choices")
+    message = choices[0].get("message") if isinstance(choices[0], dict) else None
+    content = message.get("content") if isinstance(message, dict) else None
+    if isinstance(content, list):
+        content_text = "\n".join(
+            str(part.get("text", ""))
+            for part in content
+            if isinstance(part, dict) and part.get("type") == "text"
+        )
+    else:
+        content_text = str(content or "")
+
+    parsed = json.loads(_extract_json_text(content_text))
+    errors: list[dict[str, Any]] = []
+    items = parsed.get("objects", [])
+    if not isinstance(items, list):
+        errors.append({"reason": "objects_not_list", "value_type": type(items).__name__})
+        items = []
+
+    allowed_labels = set(label_map)
+    sorted_labels = sorted(allowed_labels)
+    sorted_variants = sorted(variant_ids)
+
+    def normalize_label_id(raw: Any) -> str:
+        value = str(raw or "").strip()
+        if value in allowed_labels:
+            return value
+        match = re.search(r"(?:^|[_\-\s])(?:c|k|chair)?[_\-\s]?([1-9]\d*)$", value, flags=re.IGNORECASE)
+        if match:
+            index = int(match.group(1)) - 1
+            if 0 <= index < len(sorted_labels):
+                return sorted_labels[index]
+        match = re.search(r"([1-9]\d*)", value)
+        if match:
+            index = int(match.group(1)) - 1
+            if 0 <= index < len(sorted_labels):
+                return sorted_labels[index]
+        return value
+
+    def normalize_variant_id(raw: Any) -> str | None:
+        if raw is None:
+            return None
+        value = str(raw).strip()
+        if value in variant_ids:
+            return value
+        match = re.search(r"(\d{1,3})", value)
+        if match:
+            number = int(match.group(1)) % 360
+            candidate = f"offset_{number:03d}"
+            if candidate in variant_ids:
+                return candidate
+        lower = value.lower()
+        for candidate in sorted_variants:
+            if candidate.lower() in lower:
+                return candidate
+        return value
+
+    seen_labels: set[str] = set()
+    selections: list[dict[str, Any]] = []
+    for index, item in enumerate(items):
+        if not isinstance(item, dict):
+            errors.append({"reason": "object_entry_not_dict", "index": index})
+            continue
+        raw_label_id = str(item.get("label_id", "")).strip()
+        label_id = normalize_label_id(raw_label_id)
+        if label_id not in allowed_labels:
+            errors.append({"reason": "label_id_not_allowed", "index": index, "label_id": raw_label_id, "normalized_label_id": label_id, "item": item})
+            continue
+        if label_id in seen_labels:
+            errors.append({"reason": "duplicate_label_id", "index": index, "label_id": label_id, "item": item})
+            continue
+        seen_labels.add(label_id)
+        status = str(item.get("status", "selected")).strip().lower()
+        raw_best_variant_id = item.get("best_variant_id")
+        best_variant_id = normalize_variant_id(raw_best_variant_id)
+        if status == "unclear":
+            selections.append(
+                {
+                    "label_id": label_id,
+                    "object_id": label_map[label_id],
+                    "best_variant_id": None,
+                    "status": status,
+                    "confidence": max(0.0, min(1.0, _as_float(item.get("confidence")) or 0.0)),
+                    "reason": str(item.get("reason") or ""),
+                    "raw_label_id": raw_label_id,
+                    "raw_best_variant_id": raw_best_variant_id,
+                }
+            )
+            continue
+        if best_variant_id not in variant_ids:
+            errors.append(
+                {
+                    "reason": "variant_id_not_allowed",
+                    "index": index,
+                    "label_id": label_id,
+                    "raw_label_id": raw_label_id,
+                    "raw_best_variant_id": raw_best_variant_id,
+                    "best_variant_id": best_variant_id,
+                    "allowed": sorted(variant_ids),
+                    "item": item,
+                }
+            )
+            continue
+        selections.append(
+            {
+                "label_id": label_id,
+                "object_id": label_map[label_id],
+                "best_variant_id": best_variant_id,
+                "status": "selected",
+                "confidence": max(0.0, min(1.0, _as_float(item.get("confidence")) or 0.0)),
+                "reason": str(item.get("reason") or ""),
+                "raw_label_id": raw_label_id,
+                "raw_best_variant_id": raw_best_variant_id,
+            }
+        )
+
+    missing = sorted(allowed_labels - seen_labels)
+    if missing:
+        errors.append({"reason": "missing_label_selections", "missing_label_ids": missing})
+
+    return {
+        "summary": str(parsed.get("summary", "")),
+        "objects": selections,
+        "raw_response": parsed,
+    }, errors
+
+
+def call_vlm_json(
+    *,
+    provider: str,
+    model: str | None,
+    prompt: str,
+    image_path: Path,
+) -> dict[str, Any]:
+    provider = provider.lower().strip()
+    if provider == "ollama":
+        return call_ollama_vlm(model=model, prompt=prompt, image_path=image_path)
+    if provider in {"openai", "openrouter"}:
+        return call_openai_compatible_vlm(provider=provider, model=model, prompt=prompt, image_path=image_path)
+    raise ValueError(f"Unsupported VLM provider for image JSON call: {provider}")
+
+
+def call_vlm_json_multi(
+    *,
+    provider: str,
+    model: str | None,
+    prompt: str,
+    image_paths: list[Path],
+) -> dict[str, Any]:
+    provider = provider.lower().strip()
+    if provider == "ollama":
+        return call_ollama_vlm_multi(model=model, prompt=prompt, image_paths=image_paths)
+    if len(image_paths) == 1:
+        return call_vlm_json(provider=provider, model=model, prompt=prompt, image_path=image_paths[0])
+    raise ValueError(f"Multi-image JSON calls are only implemented for Ollama provider, got: {provider}")
+
+
+def run_topview_vlm_variant_selection(
+    *,
+    contact_sheet_path: Path,
+    label_map: dict[str, str],
+    variants: list[dict[str, Any]],
+    out_prompt_path: Path,
+    out_review_path: Path,
+    out_report_path: Path,
+    provider: str,
+    model: str | None,
+    min_confidence: float,
+) -> dict[str, Any]:
+    prompt = build_variant_selection_prompt(label_map=label_map, variants=variants)
+    out_prompt_path.parent.mkdir(parents=True, exist_ok=True)
+    out_prompt_path.write_text(prompt, encoding="utf-8")
+
+    if provider == "none":
+        raw_response = {
+            "summary": "provider=none; variant selection skipped",
+            "objects": [
+                {
+                    "label_id": label_id,
+                    "best_variant_id": variants[0]["variant_id"] if variants else None,
+                    "status": "unclear",
+                    "confidence": 0.0,
+                    "reason": "provider=none",
+                }
+                for label_id in sorted(label_map)
+            ],
+        }
+        api_response = {"choices": [{"message": {"content": json.dumps(raw_response, ensure_ascii=False)}}]}
+    else:
+        api_response = call_vlm_json(
+            provider=provider,
+            model=model,
+            prompt=prompt,
+            image_path=contact_sheet_path,
+        )
+
+    selection, validation_errors = parse_variant_selection_response(
+        api_response,
+        label_map=label_map,
+        variant_ids={row["variant_id"] for row in variants},
+    )
+    out_review_path.parent.mkdir(parents=True, exist_ok=True)
+    write_json(out_review_path, selection["raw_response"])
+
+    low_confidence = [
+        row
+        for row in selection["objects"]
+        if row.get("status") != "selected" or float(row.get("confidence") or 0.0) < min_confidence
+    ]
+    stop_reason = "variant_selected"
+    if validation_errors:
+        stop_reason = "invalid_vlm_response"
+    elif low_confidence:
+        stop_reason = "unclear_vlm_response"
+
+    report = {
+        "stage": "topview_vlm_variant_selection",
+        "created_at_unix": int(time.time()),
+        "stop_reason": stop_reason,
+        "contact_sheet": str(contact_sheet_path),
+        "target_label_map": label_map,
+        "variants": variants,
+        "selection": selection,
+        "validation_errors": validation_errors,
+        "low_confidence": low_confidence,
+        "provider": provider,
+        "model": model,
+        "policy": {
+            "min_confidence": min_confidence,
+            "vlm_role": "variant_selector",
+        },
+    }
+    write_json(out_report_path, report)
+    return report
 
 
 def load_review_from_file(path: Path) -> VlmReviewResult:
@@ -912,6 +1483,274 @@ def apply_orientation_decisions(
     return result, report
 
 
+def quantize_yaw(yaw_deg: float | None, step_deg: float = 90.0) -> int | None:
+    if yaw_deg is None:
+        return None
+    step = float(step_deg or 90.0)
+    bins = max(int(round(360.0 / step)), 1)
+    return int(round((_norm_angle_deg(yaw_deg) / step))) % bins
+
+
+def _room_state_key(refs: list[SceneObjectRef], step_deg: float) -> list[list[Any]]:
+    return [[ref.object_id, quantize_yaw(ref.yaw_deg, step_deg)] for ref in sorted(refs, key=lambda item: item.object_id)]
+
+
+def _state_in_history(state: list[list[Any]], history: list[Any]) -> bool:
+    return any(previous == state for previous in history)
+
+
+def _append_yaw_history(yaw_history: dict[str, list[float]], object_id: str, yaw_deg: float | None) -> None:
+    if yaw_deg is None:
+        return
+    values = yaw_history.setdefault(object_id, [])
+    value = _norm_angle_deg(yaw_deg)
+    if not any(_angle_delta_deg(value, old) < 0.001 for old in values):
+        values.append(value)
+
+
+def _meta_value(ref: SceneObjectRef, key: str) -> str:
+    meta = ref.data.get("meta")
+    if isinstance(meta, dict):
+        value = meta.get(key)
+        if value is not None:
+            return str(value)
+    return ""
+
+
+def _nearest_table_for_chair(chair: SceneObjectRef, all_objects: list[SceneObjectRef]) -> tuple[SceneObjectRef | None, float | None]:
+    cx, cy = chair.position_xy
+    if cx is None or cy is None:
+        return None, None
+    chair_group = _meta_value(chair, "support_group")
+    best: tuple[float, SceneObjectRef] | None = None
+    for candidate in all_objects:
+        if candidate.object_id == chair.object_id or not is_table_like(candidate):
+            continue
+        tx, ty = candidate.position_xy
+        if tx is None or ty is None:
+            continue
+        dist = math.hypot(tx - cx, ty - cy)
+        penalty = 0.0
+        if chair_group and _meta_value(candidate, "support_group") != chair_group:
+            penalty += 4.0
+        score = dist + penalty
+        if best is None or score < best[0]:
+            best = (score, candidate)
+    if best is None:
+        return None, None
+    return best[1], best[0]
+
+
+def _angle_deg_from_a_to_b(ax: float, ay: float, bx: float, by: float) -> float:
+    return _norm_angle_deg(math.degrees(math.atan2(by - ay, bx - ax)))
+
+
+def _geometry_yaw_for_chair(
+    chair: SceneObjectRef,
+    all_objects: list[SceneObjectRef],
+    *,
+    visual_front_offset_deg: float,
+    snap_step_deg: float,
+) -> tuple[float | None, dict[str, Any]]:
+    table, score = _nearest_table_for_chair(chair, all_objects)
+    if table is None:
+        return None, {"reason": "nearest_table_not_found", "object_id": chair.object_id}
+    cx, cy = chair.position_xy
+    tx, ty = table.position_xy
+    if None in (cx, cy, tx, ty):
+        return None, {"reason": "missing_position_xy", "object_id": chair.object_id, "table_object_id": table.object_id}
+    target_yaw = _snap_yaw(
+        _angle_deg_from_a_to_b(float(cx), float(cy), float(tx), float(ty)) + float(visual_front_offset_deg),
+        snap_step_deg,
+    )
+    return target_yaw, {
+        "reason": "nearest_table_geometry",
+        "object_id": chair.object_id,
+        "table_object_id": table.object_id,
+        "table_name": table.name,
+        "distance_score": score,
+        "visual_front_offset_deg": visual_front_offset_deg,
+    }
+
+
+def apply_chair_judge_geometry_decisions(
+    scene: dict[str, Any],
+    decisions: list[OrientationDecision],
+    *,
+    target_scope: str,
+    include_armchairs: bool,
+    min_confidence: float,
+    snap_step_deg: float,
+    label_map: dict[str, str],
+    yaw_history: dict[str, list[float]] | None = None,
+    room_state_history: list[Any] | None = None,
+    repair_counts: dict[str, int] | None = None,
+    max_repairs_per_object: int = 1,
+    visual_front_offset_deg: float = 0.0,
+    apply: bool = True,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    result = copy.deepcopy(scene)
+    all_objects = collect_scene_objects(result, max_objects=10000)
+    target_refs = filter_target_objects(all_objects, scope=target_scope, include_armchairs=include_armchairs)
+    target_by_id = {ref.object_id: ref for ref in target_refs}
+    allowed_ids = set(label_map.values())
+    target_refs = [ref for ref in target_refs if ref.object_id in allowed_ids]
+    target_by_id = {ref.object_id: ref for ref in target_refs}
+
+    yaw_history = {str(k): list(v) for k, v in (yaw_history or {}).items()}
+    room_state_history = list(room_state_history or [])
+    repair_counts = {str(k): int(v) for k, v in (repair_counts or {}).items()}
+
+    current_state = _room_state_key(target_refs, snap_step_deg)
+    if not _state_in_history(current_state, room_state_history):
+        room_state_history.append(current_state)
+    for ref in target_refs:
+        _append_yaw_history(yaw_history, ref.object_id, ref.yaw_deg)
+
+    applied: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
+    wrong_decisions: list[OrientationDecision] = []
+    unclear: list[dict[str, Any]] = []
+
+    for decision in decisions:
+        if decision.object_id not in target_by_id:
+            skipped.append({"object_id": decision.object_id, "label_id": decision.label_id, "reason": "object_id_not_allowed_or_not_found", "decision": asdict(decision)})
+            continue
+        status = (decision.status or decision.action or "").strip().lower()
+        if status in {"ok", "keep"}:
+            skipped.append({"object_id": decision.object_id, "label_id": decision.label_id, "reason": "status_ok", "decision": asdict(decision)})
+            continue
+        if decision.confidence < min_confidence:
+            unclear.append(
+                {
+                    "object_id": decision.object_id,
+                    "label_id": decision.label_id,
+                    "reason": "low_confidence",
+                    "confidence": decision.confidence,
+                    "min_confidence": min_confidence,
+                    "decision": asdict(decision),
+                }
+            )
+            continue
+        if status == "unclear":
+            unclear.append({"object_id": decision.object_id, "label_id": decision.label_id, "reason": "status_unclear", "decision": asdict(decision)})
+            continue
+        if status in {"wrong", "wrong_orientation", "set_yaw"}:
+            wrong_decisions.append(decision)
+            continue
+        unclear.append({"object_id": decision.object_id, "label_id": decision.label_id, "reason": "unsupported_status", "status": status, "decision": asdict(decision)})
+
+    stop_reason = ""
+    target_plan: list[dict[str, Any]] = []
+    if unclear:
+        stop_reason = "unclear_vlm_response"
+    elif not wrong_decisions:
+        stop_reason = "converged_keep"
+    else:
+        proposed_q_by_id = {ref.object_id: quantize_yaw(ref.yaw_deg, snap_step_deg) for ref in target_refs}
+        for decision in wrong_decisions:
+            if repair_counts.get(decision.object_id, 0) >= max_repairs_per_object:
+                skipped.append({"object_id": decision.object_id, "label_id": decision.label_id, "reason": "object_repair_limit_reached", "decision": asdict(decision)})
+                stop_reason = "object_repair_limit_reached"
+                break
+            ref = target_by_id[decision.object_id]
+            target_yaw, solver_info = _geometry_yaw_for_chair(
+                ref,
+                all_objects,
+                visual_front_offset_deg=visual_front_offset_deg,
+                snap_step_deg=snap_step_deg,
+            )
+            if target_yaw is None:
+                skipped.append({"object_id": decision.object_id, "label_id": decision.label_id, "reason": "geometry_solver_failed", "solver": solver_info, "decision": asdict(decision)})
+                stop_reason = "invalid_vlm_response"
+                break
+            target_q = quantize_yaw(target_yaw, snap_step_deg)
+            previous_q = [quantize_yaw(value, snap_step_deg) for value in yaw_history.get(decision.object_id, [])]
+            if target_q in previous_q:
+                skipped.append(
+                    {
+                        "object_id": decision.object_id,
+                        "label_id": decision.label_id,
+                        "reason": "yaw_cycle_detected",
+                        "target_yaw_deg": target_yaw,
+                        "target_yaw_quantized": target_q,
+                        "yaw_history": yaw_history.get(decision.object_id, []),
+                        "decision": asdict(decision),
+                    }
+                )
+                stop_reason = "yaw_cycle_detected"
+                break
+            proposed_q_by_id[decision.object_id] = target_q
+            target_plan.append(
+                {
+                    "object_id": decision.object_id,
+                    "label_id": decision.label_id,
+                    "current_yaw_deg": ref.yaw_deg,
+                    "target_yaw_deg": target_yaw,
+                    "solver": solver_info,
+                    "decision": asdict(decision),
+                }
+            )
+
+        if not stop_reason:
+            proposed_state = [[object_id, proposed_q_by_id.get(object_id)] for object_id in sorted(proposed_q_by_id)]
+            if _state_in_history(proposed_state, room_state_history):
+                stop_reason = "yaw_cycle_detected"
+                skipped.append({"reason": "room_state_cycle_detected", "proposed_state": proposed_state, "room_state_history": room_state_history})
+            elif not apply:
+                stop_reason = "geometry_applied"
+                skipped.extend({"object_id": row["object_id"], "label_id": row["label_id"], "reason": "apply_disabled", "plan": row} for row in target_plan)
+            else:
+                for row in target_plan:
+                    ref = target_by_id[row["object_id"]]
+                    obj = _get_by_path(result, ref.path)
+                    if not isinstance(obj, dict):
+                        skipped.append({"object_id": row["object_id"], "label_id": row["label_id"], "reason": "path_does_not_resolve_to_object", "plan": row})
+                        stop_reason = "blend_apply_failed"
+                        break
+                    field = _set_yaw_deg(obj, float(row["target_yaw_deg"]))
+                    _append_yaw_history(yaw_history, row["object_id"], float(row["target_yaw_deg"]))
+                    repair_counts[row["object_id"]] = repair_counts.get(row["object_id"], 0) + 1
+                    applied.append({**row, "field": field})
+                if not stop_reason:
+                    room_state_history.append(proposed_state)
+                    stop_reason = "geometry_applied"
+
+    report = {
+        "stage": "topview_vlm_orientation_repair",
+        "created_at_unix": int(time.time()),
+        "stop_reason": stop_reason,
+        "policy": {
+            "target_scope": target_scope,
+            "include_armchairs": include_armchairs,
+            "min_confidence": min_confidence,
+            "snap_step_deg": snap_step_deg,
+            "orientation_only": True,
+            "vlm_role": "judge_only",
+            "solver": "nearest_table_geometry_for_chairs",
+            "max_repairs_per_object": max_repairs_per_object,
+            "visual_front_offset_deg": visual_front_offset_deg,
+        },
+        "counts": {
+            "target_objects": len(target_refs),
+            "decisions": len(decisions),
+            "applied": len(applied),
+            "skipped": len(skipped),
+            "unclear": len(unclear),
+        },
+        "target_label_map": label_map,
+        "target_object_ids": [ref.object_id for ref in target_refs],
+        "current_state": current_state,
+        "yaw_history": yaw_history,
+        "room_state_history": room_state_history,
+        "repair_counts": repair_counts,
+        "applied": applied,
+        "skipped": skipped,
+        "unclear": unclear,
+    }
+    return result, report
+
+
 def run_topview_vlm_orientation_repair(
     *,
     scene_path: Path,
@@ -928,7 +1767,13 @@ def run_topview_vlm_orientation_repair(
     max_delta_deg: float,
     snap_step_deg: float,
     out_prompt_path: Path | None = None,
+    target_label_map_path: Path | None = None,
     review_json_path: Path | None = None,
+    yaw_history: dict[str, list[float]] | None = None,
+    room_state_history: list[Any] | None = None,
+    repair_counts: dict[str, int] | None = None,
+    max_repairs_per_object: int = 1,
+    visual_front_offset_deg: float = 0.0,
     apply: bool = True,
 ) -> dict[str, Any]:
     scene = load_json(scene_path)
@@ -937,12 +1782,30 @@ def run_topview_vlm_orientation_repair(
 
     all_objects = collect_scene_objects(scene, max_objects=max_objects)
     target_objects = filter_target_objects(all_objects, scope=target_scope, include_armchairs=include_armchairs)
+    target_by_id = {obj.object_id: obj for obj in target_objects}
     context_objects = [obj for obj in all_objects if obj.object_id not in {t.object_id for t in target_objects} and _is_context_ref(obj)]
-    prompt = build_vlm_prompt(scene, target_objects, context_objects, scope=target_scope) if target_objects else ""
+    if target_label_map_path is not None and target_label_map_path.is_file():
+        raw_label_map = load_json(target_label_map_path)
+        if not isinstance(raw_label_map, dict):
+            raise ValueError(f"target label map must be an object: {target_label_map_path}")
+        label_map = {str(label): str(object_id) for label, object_id in raw_label_map.items()}
+    else:
+        label_map = {f"C{i + 1}": obj.object_id for i, obj in enumerate(target_objects)}
+    allowed_target_ids = set(target_by_id)
+    label_map = {label: object_id for label, object_id in label_map.items() if object_id in allowed_target_ids}
+    if target_objects and not label_map:
+        label_map = {f"C{i + 1}": obj.object_id for i, obj in enumerate(target_objects)}
+    label_by_object_id = {object_id: label for label, object_id in label_map.items()}
+    prompt = (
+        build_vlm_prompt(scene, target_objects, context_objects, scope=target_scope, label_by_object_id=label_by_object_id)
+        if target_objects
+        else ""
+    )
     if out_prompt_path is not None:
         out_prompt_path.parent.mkdir(parents=True, exist_ok=True)
         out_prompt_path.write_text(prompt, encoding="utf-8")
 
+    validation_errors: list[dict[str, Any]] = []
     if not target_objects:
         review = VlmReviewResult(
             summary=f"no target objects for scope={target_scope}",
@@ -951,7 +1814,12 @@ def run_topview_vlm_orientation_repair(
         )
         write_json(out_review_path, review.raw_response)
     elif review_json_path is not None:
-        review = load_review_from_file(review_json_path)
+        raw = load_json(review_json_path)
+        if target_scope == "chairs":
+            api_response = raw if isinstance(raw, dict) and "choices" in raw else {"choices": [{"message": {"content": json.dumps(raw, ensure_ascii=False)}}]}
+            review, validation_errors = parse_vlm_judge_response(api_response, label_map=label_map, target_by_id=target_by_id)
+        else:
+            review = load_review_from_file(review_json_path)
         write_json(out_review_path, review.raw_response)
     elif provider == "none":
         review = VlmReviewResult(
@@ -966,7 +1834,10 @@ def run_topview_vlm_orientation_repair(
             prompt=prompt,
             image_path=image_path,
         )
-        review = parse_vlm_response(api_response)
+        if target_scope == "chairs":
+            review, validation_errors = parse_vlm_judge_response(api_response, label_map=label_map, target_by_id=target_by_id)
+        else:
+            review = parse_vlm_response(api_response, label_map=label_map)
         write_json(out_review_path, review.raw_response)
     else:
         api_response = call_openai_compatible_vlm(
@@ -975,10 +1846,76 @@ def run_topview_vlm_orientation_repair(
             prompt=prompt,
             image_path=image_path,
         )
-        review = parse_vlm_response(api_response)
+        if target_scope == "chairs":
+            review, validation_errors = parse_vlm_judge_response(api_response, label_map=label_map, target_by_id=target_by_id)
+        else:
+            review = parse_vlm_response(api_response, label_map=label_map)
         write_json(out_review_path, review.raw_response)
 
-    if apply:
+    if not target_objects:
+        repaired_scene = scene
+        report = {
+            "stage": "topview_vlm_orientation_repair",
+            "created_at_unix": int(time.time()),
+            "stop_reason": "no_target_objects",
+            "policy": {
+                "target_scope": target_scope,
+                "include_armchairs": include_armchairs,
+                "orientation_only": True,
+            },
+            "counts": {
+                "target_objects": 0,
+                "decisions": 0,
+                "applied": 0,
+                "skipped": 0,
+            },
+            "target_label_map": label_map,
+            "target_object_ids": [],
+        }
+    elif validation_errors:
+        repaired_scene = scene
+        report = {
+            "stage": "topview_vlm_orientation_repair",
+            "created_at_unix": int(time.time()),
+            "stop_reason": "invalid_vlm_response",
+            "policy": {
+                "target_scope": target_scope,
+                "include_armchairs": include_armchairs,
+                "orientation_only": True,
+                "vlm_role": "judge_only",
+            },
+            "counts": {
+                "target_objects": len(target_objects),
+                "decisions": len(review.decisions),
+                "applied": 0,
+                "skipped": len(review.decisions),
+                "validation_errors": len(validation_errors),
+            },
+            "target_label_map": label_map,
+            "target_object_ids": [ref.object_id for ref in target_objects],
+            "validation_errors": validation_errors,
+            "skipped": [asdict(d) for d in review.decisions],
+            "yaw_history": yaw_history or {},
+            "room_state_history": room_state_history or [],
+            "repair_counts": repair_counts or {},
+        }
+    elif apply and target_scope == "chairs":
+        repaired_scene, report = apply_chair_judge_geometry_decisions(
+            scene,
+            review.decisions,
+            target_scope=target_scope,
+            include_armchairs=include_armchairs,
+            min_confidence=min_confidence,
+            snap_step_deg=snap_step_deg,
+            label_map=label_map,
+            yaw_history=yaw_history,
+            room_state_history=room_state_history,
+            repair_counts=repair_counts,
+            max_repairs_per_object=max_repairs_per_object,
+            visual_front_offset_deg=visual_front_offset_deg,
+            apply=True,
+        )
+    elif apply:
         repaired_scene, report = apply_orientation_decisions(
             scene,
             review.decisions,
@@ -988,28 +1925,49 @@ def run_topview_vlm_orientation_repair(
             max_delta_deg=max_delta_deg,
             snap_step_deg=snap_step_deg,
         )
+        report.setdefault("stop_reason", "geometry_applied" if report.get("counts", {}).get("applied") else "converged_keep")
     else:
-        repaired_scene = scene
-        report = {
-            "stage": "topview_vlm_orientation_repair",
-            "created_at_unix": int(time.time()),
-            "apply": False,
-            "policy": {
-                "target_scope": target_scope,
-                "include_armchairs": include_armchairs,
-                "orientation_only": True,
-            },
-            "counts": {
-                "target_objects": len(target_objects),
-                "decisions": len(review.decisions),
-                "applied": 0,
-                "skipped": len(review.decisions),
-            },
-            "target_object_ids": [ref.object_id for ref in target_objects],
-            "skipped": [asdict(d) for d in review.decisions],
-        }
+        if target_scope == "chairs":
+            repaired_scene, report = apply_chair_judge_geometry_decisions(
+                scene,
+                review.decisions,
+                target_scope=target_scope,
+                include_armchairs=include_armchairs,
+                min_confidence=min_confidence,
+                snap_step_deg=snap_step_deg,
+                label_map=label_map,
+                yaw_history=yaw_history,
+                room_state_history=room_state_history,
+                repair_counts=repair_counts,
+                max_repairs_per_object=max_repairs_per_object,
+                visual_front_offset_deg=visual_front_offset_deg,
+                apply=False,
+            )
+            report["apply"] = False
+        else:
+            repaired_scene = scene
+            report = {
+                "stage": "topview_vlm_orientation_repair",
+                "created_at_unix": int(time.time()),
+                "apply": False,
+                "stop_reason": "apply_disabled",
+                "policy": {
+                    "target_scope": target_scope,
+                    "include_armchairs": include_armchairs,
+                    "orientation_only": True,
+                },
+                "counts": {
+                    "target_objects": len(target_objects),
+                    "decisions": len(review.decisions),
+                    "applied": 0,
+                    "skipped": len(review.decisions),
+                },
+                "target_object_ids": [ref.object_id for ref in target_objects],
+                "skipped": [asdict(d) for d in review.decisions],
+            }
 
     report["summary"] = review.summary
+    report["review_decisions"] = [asdict(decision) for decision in review.decisions]
     report["input_scene"] = str(scene_path)
     report["input_topview_image"] = str(image_path)
     report["output_scene"] = str(out_scene_path)
@@ -1038,6 +1996,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--min-confidence", type=float, default=0.70)
     parser.add_argument("--max-delta-deg", type=float, default=180.0)
     parser.add_argument("--snap-step-deg", type=float, default=90.0)
+    parser.add_argument("--target-label-map", type=Path, default=None, help="JSON map from short label IDs such as C1 to scene object IDs")
+    parser.add_argument("--max-repairs-per-object", type=int, default=1)
+    parser.add_argument("--visual-front-offset-deg", type=float, default=0.0)
     parser.add_argument("--review-json", type=Path, default=None, help="Use already saved review JSON instead of calling VLM")
     parser.add_argument("--no-apply", action="store_true", help="Write review/report but keep scene unchanged")
     return parser
@@ -1060,10 +2021,13 @@ def main(argv: list[str] | None = None) -> int:
         min_confidence=args.min_confidence,
         max_delta_deg=args.max_delta_deg,
         snap_step_deg=args.snap_step_deg,
+        target_label_map_path=args.target_label_map,
         review_json_path=args.review_json,
+        max_repairs_per_object=args.max_repairs_per_object,
+        visual_front_offset_deg=args.visual_front_offset_deg,
         apply=not args.no_apply,
     )
-    print(json.dumps(report.get("counts", {}), ensure_ascii=False))
+    print(json.dumps({"stop_reason": report.get("stop_reason"), "counts": report.get("counts", {})}, ensure_ascii=False))
     return 0
 
 

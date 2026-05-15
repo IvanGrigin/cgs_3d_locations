@@ -1,0 +1,11 @@
+# Рубрика для LLM-судьи (llm_vlm pipeline)
+weights:
+  functionality: 0.25
+  prompt_match: 0.25
+  style_match: 0.25
+  composition: 0.25
+axes:
+  functionality: "Наличие нужной мебели, проходимость, отсутствие критических gate hard_failures"
+  prompt_match: "Соответствие текстовому промпту и required_semantics"
+  style_match: "Читаемость стиля (style_label, палитра по косвенным признакам)"
+  composition: "Баланс заполнения, отсутствие хаоса / пустоты"

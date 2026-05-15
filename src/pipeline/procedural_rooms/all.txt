@@ -1,0 +1,3112 @@
+Название файла: __init__.py
+Содержимое файла:
+"""
+Procedural room generation package.
+
+The package adds deterministic, rule-based dense furnishing for room types that
+are hard to control with generic placers: bedrooms, living rooms and corridors.
+
+Public entry points:
+    - apply_procedural_room_stage
+    - apply_procedural_room_stage_to_artifacts
+"""
+
+from .procedural_room_stage import (
+    apply_procedural_room_stage,
+    apply_procedural_room_stage_to_artifacts,
+)
+
+__all__ = [
+    "apply_procedural_room_stage",
+    "apply_procedural_room_stage_to_artifacts",
+]
+
+Название файла: all.txt
+Содержимое файла:
+
+
+Название файла: bedroom_generator.py
+Содержимое файла:
+from __future__ import annotations
+
+import random
+from typing import Any
+
+from .geometry import Vec2, choose_longest_wall, choose_wall_most_opposite, wall_inside_normal
+from .object_specs import BEDROOM_SPECS, Density, ObjectSpec, density_rank
+from .placement_engine import PlacementEngine
+from .room_context import RoomContext
+
+
+def _bed_key(ctx: RoomContext) -> str:
+    if ctx.area_m2 < 7.0 or ctx.min_side_m < 2.4:
+        return "single_bed"
+    if ctx.area_m2 < 13.0 or ctx.min_side_m < 3.0:
+        return "double_bed"
+    return "queen_bed"
+
+
+def _tiny_bed_wall(ctx: RoomContext, bed_width: float) -> Any | None:
+    candidates = [
+        wall
+        for wall in ctx.walls
+        if not wall.has_door and wall.length >= bed_width + 0.25
+    ]
+    if not candidates:
+        return None
+    return min(candidates, key=lambda wall: (wall.length, wall.has_window))
+
+
+def generate_bedroom(ctx: RoomContext, *, density: Density, seed: int | None = None) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    rng = random.Random(seed)
+    engine = PlacementEngine(
+        ctx=ctx,
+        rng=rng,
+        source_name="procedural_room_stage",
+        generator_name="bedroom_generator",
+        archetype="bed_against_long_wall",
+    )
+
+    bed_spec = BEDROOM_SPECS[_bed_key(ctx)]
+    bed_wall = None
+    if ctx.min_side_m <= 2.1:
+        bed_wall = _tiny_bed_wall(ctx, bed_spec.size_m[0])
+    if bed_wall is None:
+        bed_wall = choose_longest_wall(ctx.walls, avoid_windows=True, avoid_doors=True, min_length=bed_spec.size_m[0] + 0.35)
+    if bed_wall is None:
+        bed_wall = choose_longest_wall(ctx.walls, avoid_windows=False, avoid_doors=True)
+    if bed_wall is None:
+        return [], {"generator": "bedroom_generator", "status": "no_wall"}
+
+    bed = engine.add_wall_aligned(
+        bed_spec,
+        bed_wall.id,
+        bed_wall.length * 0.5,
+        ignore_door_clearance=False,
+        extra_meta={"role": "main_bed"},
+    )
+
+    if bed is None:
+        # Try a smaller bed before giving up.
+        bed_spec = BEDROOM_SPECS["single_bed"]
+        bed = engine.add_wall_aligned(
+            bed_spec,
+            bed_wall.id,
+            bed_wall.length * 0.5,
+            ignore_door_clearance=False,
+            extra_meta={"role": "main_bed", "fallback": "single_bed"},
+        )
+
+    if bed is None:
+        return [], {"generator": "bedroom_generator", "status": "bed_rejected", "rejected": engine.rejected}
+
+    bed_width = bed_spec.size_m[0]
+    night_spec = BEDROOM_SPECS["nightstand"]
+    night_offset_x = bed_width * 0.5 + night_spec.size_m[0] * 0.5 + 0.08
+    night_offset_y = -0.02
+    left_ns = engine.add_near(
+        bed,
+        night_spec,
+        local_offset_xy=(-night_offset_x, night_offset_y),
+        allow_collision=False,
+        layer="secondary",
+    )
+    right_ns = engine.add_near(
+        bed,
+        night_spec,
+        local_offset_xy=(night_offset_x, night_offset_y),
+        allow_collision=False,
+        layer="secondary",
+    )
+
+    if density_rank(density) >= 2:
+        if left_ns:
+            engine.add_on_top(left_ns, BEDROOM_SPECS["table_lamp"], local_offset_xy=(0.0, 0.0))
+            engine.add_on_top(left_ns, BEDROOM_SPECS["decor_books"], local_offset_xy=(0.07, -0.05))
+        if right_ns:
+            engine.add_on_top(right_ns, BEDROOM_SPECS["table_lamp"], local_offset_xy=(0.0, 0.0))
+            engine.add_on_top(right_ns, BEDROOM_SPECS["decor_box"], local_offset_xy=(-0.06, -0.05))
+
+    if density_rank(density) >= 3:
+        # Soft decor on bed.
+        pillow_xs = [-0.42, -0.14, 0.14, 0.42]
+        for i, x in enumerate(pillow_xs):
+            engine.add_on_top(
+                bed,
+                BEDROOM_SPECS["pillow"],
+                local_offset_xy=(x, -bed_spec.size_m[1] * 0.35),
+                name=f"Decorative pillow {i + 1}",
+            )
+        engine.add_on_top(
+            bed,
+            BEDROOM_SPECS["blanket"],
+            local_offset_xy=(0.0, bed_spec.size_m[1] * 0.18),
+            name="Folded blanket",
+        )
+        engine.add_on_top(
+            bed,
+            BEDROOM_SPECS["blanket"],
+            local_offset_xy=(0.0, bed_spec.size_m[1] * 0.34),
+            name="Layered bed throw",
+        )
+        for i, x in enumerate([-0.30, 0.30]):
+            engine.add_on_top(
+                bed,
+                BEDROOM_SPECS["decor_books"],
+                local_offset_xy=(x, bed_spec.size_m[1] * 0.08),
+                name=f"Bedside reading stack {i + 1}",
+            )
+
+    # Rug is intentionally allowed to overlap bed.
+    if density_rank(density) >= 1:
+        engine.add_near(
+            bed,
+            BEDROOM_SPECS["rug"],
+            local_offset_xy=(0.0, bed_spec.size_m[1] * 0.22),
+            allow_collision=True,
+            layer="textile",
+        )
+
+    # Wardrobe modules on an opposite/free wall.
+    wardrobe_wall = choose_wall_most_opposite(ctx.walls, bed_wall, ctx.polygon, avoid_windows=True, avoid_doors=True)
+    wardrobe_items: list[dict[str, Any]] = []
+    if wardrobe_wall:
+        module = BEDROOM_SPECS["wardrobe_module"]
+        max_modules = 1
+        if ctx.area_m2 >= 9.0:
+            max_modules = 2
+        if ctx.area_m2 >= 13.0:
+            max_modules = 3
+        if density_rank(density) >= 3 and ctx.area_m2 >= 16.0:
+            max_modules = 4
+        available_modules = min(max_modules, int(max(1.0, wardrobe_wall.length - 0.4) // module.size_m[0]))
+        total_width = available_modules * module.size_m[0]
+        start = max(module.size_m[0] * 0.5, wardrobe_wall.length * 0.5 - total_width * 0.5 + module.size_m[0] * 0.5)
+        for i in range(available_modules):
+            item = engine.add_wall_aligned(
+                module,
+                wardrobe_wall.id,
+                start + i * module.size_m[0],
+                name=f"Wardrobe module {i + 1}",
+                category="wardrobe",
+                layer="storage",
+                margin=0.02,
+            )
+            if item:
+                wardrobe_items.append(item)
+
+    if density_rank(density) >= 3:
+        box_spec = BEDROOM_SPECS["decor_box"]
+        for i, wardrobe in enumerate(wardrobe_items[:4]):
+            engine.add_on_top(
+                wardrobe,
+                box_spec,
+                local_offset_xy=(0.0, 0.0),
+                name=f"Wardrobe top storage box {i + 1}",
+                layer="decor",
+            )
+
+    # Dresser on a remaining wall.
+    if density_rank(density) >= 2:
+        for wall in sorted(ctx.walls, key=lambda w: w.length, reverse=True):
+            if wall.id in {bed_wall.id, wardrobe_wall.id if wardrobe_wall else ""}:
+                continue
+            dresser = engine.add_wall_aligned(
+                BEDROOM_SPECS["dresser"],
+                wall.id,
+                wall.length * 0.5,
+                layer="storage",
+                margin=0.02,
+            )
+            if dresser:
+                engine.add_on_top(dresser, BEDROOM_SPECS["decor_vase"], local_offset_xy=(-0.25, 0.0))
+                if density_rank(density) >= 3:
+                    engine.add_on_top(dresser, BEDROOM_SPECS["decor_books"], local_offset_xy=(0.18, 0.02))
+                    engine.add_on_top(dresser, BEDROOM_SPECS["decor_box"], local_offset_xy=(0.42, 0.0))
+                break
+
+    # Bench at bed foot.
+    if density_rank(density) >= 2 and ctx.area_m2 >= 11.0:
+        engine.add_near(
+            bed,
+            BEDROOM_SPECS["bench"],
+            local_offset_xy=(0.0, bed_spec.size_m[1] * 0.5 + BEDROOM_SPECS["bench"].size_m[1] * 0.5 + 0.12),
+            allow_collision=False,
+            layer="secondary",
+        )
+
+    # Optional desk for large bedrooms.
+    if density_rank(density) >= 3 and ctx.area_m2 >= 14.0:
+        for wall in sorted(ctx.walls, key=lambda w: w.length, reverse=True):
+            if wall.id == bed_wall.id:
+                continue
+            desk = engine.add_wall_aligned(BEDROOM_SPECS["desk"], wall.id, wall.length * 0.28, layer="secondary", margin=0.02)
+            if desk:
+                engine.add_near(
+                    desk,
+                    BEDROOM_SPECS["chair"],
+                    local_offset_xy=(0.0, BEDROOM_SPECS["desk"].size_m[1] * 0.5 + BEDROOM_SPECS["chair"].size_m[1] * 0.5 + 0.08),
+                    allow_collision=False,
+                )
+                engine.add_on_top(desk, BEDROOM_SPECS["table_lamp"], local_offset_xy=(-0.35, 0.0))
+                break
+
+    # Wall decor above bed.
+    if density_rank(density) >= 2:
+        engine.add_wall_art(bed_wall.id, bed_wall.length * 0.5, BEDROOM_SPECS["wall_art"], z_center=1.55)
+    if density_rank(density) >= 3:
+        engine.add_wall_art(bed_wall.id, max(0.4, bed_wall.length * 0.5 - 0.7), BEDROOM_SPECS["sconce"], z_center=1.45)
+        engine.add_wall_art(bed_wall.id, min(bed_wall.length - 0.4, bed_wall.length * 0.5 + 0.7), BEDROOM_SPECS["sconce"], z_center=1.45)
+        for wall in sorted(ctx.walls, key=lambda w: w.length, reverse=True):
+            if wall.id == bed_wall.id:
+                continue
+            if wall.has_door:
+                continue
+            art_count = 3 if wall.length >= 3.0 else 2
+            for i in range(art_count):
+                along = wall.length * (i + 1) / (art_count + 1)
+                engine.add_wall_art(
+                    wall.id,
+                    along,
+                    BEDROOM_SPECS["wall_art"],
+                    z_center=1.45 + 0.08 * (i % 2),
+                    name=f"Bedroom gallery art {wall.id}-{i + 1}",
+                )
+
+    # Plants/floor lamps in corners.
+    if density_rank(density) >= 2 and ctx.area_m2 > 7.0:
+        engine.add_corner_object(BEDROOM_SPECS["plant"], preferred_index=0)
+    if density_rank(density) >= 3 and ctx.area_m2 > 7.0:
+        engine.add_corner_object(BEDROOM_SPECS["floor_lamp"], preferred_index=1)
+
+        # Very-high density should feel lived-in without adding more floor
+        # obstacles. These objects are either on existing surfaces or mounted.
+        small_vase = BEDROOM_SPECS["decor_vase"]
+        small_box = BEDROOM_SPECS["decor_box"]
+        for idx, parent in enumerate([x for x in [left_ns, right_ns] if x], start=1):
+            engine.add_on_top(parent, small_vase, local_offset_xy=(-0.10, 0.07), name=f"Nightstand vase {idx}")
+            engine.add_on_top(parent, BEDROOM_SPECS["decor_books"], local_offset_xy=(0.10, -0.07), name=f"Nightstand book pair {idx}")
+            engine.add_on_top(parent, small_box, local_offset_xy=(0.05, 0.08), name=f"Nightstand small box {idx}")
+
+        tray_spec = ObjectSpec("decor_tray", "Bedroom catch-all tray", (0.34, 0.22, 0.05), "decor", allow_collision=True)
+        for parent in wardrobe_items[:2]:
+            engine.add_on_top(parent, tray_spec, local_offset_xy=(0.0, 0.0), name="Wardrobe decorative tray")
+
+    engine.add_ceiling_light()
+
+    report = {
+        "generator": "bedroom_generator",
+        "archetype": engine.archetype,
+        "bed_wall_id": bed_wall.id,
+        "density": density,
+        "rejected": engine.rejected,
+    }
+    return engine.placements, report
+
+Название файла: corridor_generator.py
+Содержимое файла:
+from __future__ import annotations
+
+import random
+from typing import Any
+
+from .geometry import Vec2, choose_longest_wall
+from .object_specs import CORRIDOR_SPECS, Density, density_rank
+from .placement_engine import PlacementEngine
+from .room_context import RoomContext
+
+
+def generate_corridor(ctx: RoomContext, *, density: Density, seed: int | None = None) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    rng = random.Random(seed)
+    engine = PlacementEngine(
+        ctx=ctx,
+        rng=rng,
+        source_name="procedural_room_stage",
+        generator_name="corridor_generator",
+        archetype="linear_storage_along_wall",
+    )
+
+    main_wall = choose_longest_wall(ctx.walls, avoid_windows=True, avoid_doors=True)
+    if main_wall is None:
+        main_wall = choose_longest_wall(ctx.walls, avoid_windows=False, avoid_doors=True)
+    if main_wall is None:
+        return [], {"generator": "corridor_generator", "status": "no_wall"}
+
+    width = ctx.min_side_m
+
+    # Runner rug along the corridor axis. It is allowed to overlap the central clear path.
+    runner = CORRIDOR_SPECS["runner_rug"]
+    if ctx.width_m >= ctx.depth_m:
+        rug_size = (min(ctx.width_m * 0.75, max(1.2, ctx.width_m - 0.7)), 0.75, runner.size_m[2])
+        rug_yaw = 90.0
+    else:
+        rug_size = (0.75, min(ctx.depth_m * 0.75, max(1.2, ctx.depth_m - 0.7)), runner.size_m[2])
+        rug_yaw = 0.0
+
+    from .object_specs import ObjectSpec
+
+    rug_spec = ObjectSpec(
+        category=runner.category,
+        name=runner.name,
+        size_m=rug_size,
+        layer=runner.layer,
+        allow_collision=True,
+    )
+    engine.add_item(rug_spec, ctx.centroid, rug_yaw, allow_collision=True, layer="textile", ignore_door_clearance=True)
+
+    # Furniture depth is limited by corridor width.
+    if width >= 1.0:
+        shoe = CORRIDOR_SPECS["shoe_cabinet"]
+        if width < 1.2:
+            shoe = ObjectSpec(
+                category=shoe.category,
+                name="Extra narrow shoe cabinet",
+                size_m=(0.75, 0.24, 0.85),
+                layer=shoe.layer,
+            )
+        shoe_item = engine.add_wall_aligned(shoe, main_wall.id, main_wall.length * 0.35, layer="storage", margin=0.02)
+    else:
+        shoe_item = None
+
+    if width >= 1.25 and density_rank(density) >= 2:
+        bench = CORRIDOR_SPECS["bench"]
+        if width < 1.45:
+            bench = ObjectSpec(
+                category=bench.category,
+                name="Narrow entry bench",
+                size_m=(0.85, 0.30, 0.45),
+                layer=bench.layer,
+            )
+        b = engine.add_wall_aligned(bench, main_wall.id, main_wall.length * 0.68, layer="secondary", margin=0.02)
+        if b and density_rank(density) >= 3:
+            engine.add_on_top(b, CORRIDOR_SPECS["storage_basket"], local_offset_xy=(-0.23, 0.0), name="Bench basket left")
+            engine.add_on_top(b, CORRIDOR_SPECS["storage_basket"], local_offset_xy=(0.23, 0.0), name="Bench basket right")
+            engine.add_on_top(b, CORRIDOR_SPECS["key_tray"], local_offset_xy=(0.0, 0.0), name="Bench key tray")
+
+    if width >= 1.5 and density_rank(density) >= 2:
+        engine.add_wall_aligned(CORRIDOR_SPECS["coat_rack"], main_wall.id, main_wall.length * 0.12, layer="storage", margin=0.02)
+
+    if width >= 1.7 and density_rank(density) >= 3:
+        engine.add_wall_aligned(CORRIDOR_SPECS["wardrobe_narrow"], main_wall.id, main_wall.length * 0.88, layer="storage", margin=0.02)
+
+    # Opposite wall receives mirror/hooks/art because they are thin and safe.
+    opposite = None
+    for wall in sorted(ctx.walls, key=lambda w: w.length, reverse=True):
+        if wall.id != main_wall.id and not wall.has_door:
+            opposite = wall
+            break
+    if opposite is None:
+        opposite = main_wall
+
+    engine.add_wall_art(opposite.id, opposite.length * 0.5, CORRIDOR_SPECS["mirror"], z_center=1.25, category="mirror", name="Full-height mirror")
+    if density_rank(density) >= 2:
+        engine.add_wall_art(main_wall.id, main_wall.length * 0.52, CORRIDOR_SPECS["wall_hooks"], z_center=1.55, category="wall_hooks", name="Wall hooks")
+
+    if density_rank(density) >= 3:
+        # Series of small wall art along the opposite wall.
+        count = 5 if opposite.length >= 4.5 else (4 if opposite.length >= 2.4 else 3)
+        for i in range(count):
+            along = opposite.length * (i + 1) / (count + 1)
+            engine.add_wall_art(opposite.id, along, CORRIDOR_SPECS["wall_art"], z_center=1.55, name=f"Corridor wall art {i + 1}")
+
+        hook_count = 4 if main_wall.length >= 3.5 else 3
+        for i in range(hook_count):
+            engine.add_wall_art(
+                main_wall.id,
+                main_wall.length * (i + 1) / (hook_count + 1),
+                CORRIDOR_SPECS["wall_hooks"],
+                z_center=1.62,
+                category="wall_hooks",
+                name=f"Wall hook rail {i + 1}",
+            )
+
+        # Small console and decor if corridor is wide enough.
+        if width >= 1.35:
+            console = engine.add_wall_aligned(CORRIDOR_SPECS["console_table"], opposite.id, opposite.length * 0.28, layer="secondary", margin=0.02)
+            if console:
+                engine.add_on_top(console, CORRIDOR_SPECS["key_tray"], local_offset_xy=(0.0, 0.0))
+                engine.add_on_top(console, CORRIDOR_SPECS["small_plant"], local_offset_xy=(0.25, 0.0))
+                engine.add_on_top(console, CORRIDOR_SPECS["storage_basket"], local_offset_xy=(-0.25, 0.0), name="Console small basket")
+        if shoe_item:
+            engine.add_on_top(shoe_item, CORRIDOR_SPECS["key_tray"], local_offset_xy=(-0.18, 0.0), name="Shoe cabinet key tray")
+            engine.add_on_top(shoe_item, CORRIDOR_SPECS["small_plant"], local_offset_xy=(0.18, 0.0), name="Shoe cabinet small plant")
+        engine.add_corner_object(CORRIDOR_SPECS["umbrella_stand"], preferred_index=0)
+        engine.add_corner_object(CORRIDOR_SPECS["storage_basket"], preferred_index=1, name="Corner storage basket")
+
+    # Light series: a corridor usually needs several ceiling lights.
+    lights = 1
+    if ctx.max_side_m > 3.5:
+        lights = 2
+    if ctx.max_side_m > 5.5:
+        lights = 3
+    if density_rank(density) >= 3:
+        lights = max(lights, 3 if ctx.max_side_m >= 4.0 else 2)
+
+    for i in range(lights):
+        light = engine.add_ceiling_light(name=f"Corridor ceiling light {i + 1}")
+        if lights > 1:
+            if ctx.width_m >= ctx.depth_m:
+                x = ctx.bounds[0] + ctx.width_m * (i + 1) / (lights + 1)
+                y = ctx.centroid.y
+            else:
+                x = ctx.centroid.x
+                y = ctx.bounds[1] + ctx.depth_m * (i + 1) / (lights + 1)
+            light["position_m"][0] = x
+            light["position_m"][1] = y
+
+    report = {
+        "generator": "corridor_generator",
+        "archetype": engine.archetype,
+        "main_wall_id": main_wall.id,
+        "density": density,
+        "corridor_width_m": width,
+        "rejected": engine.rejected,
+    }
+    return engine.placements, report
+
+Название файла: geometry.py
+Содержимое файла:
+from __future__ import annotations
+
+import math
+from dataclasses import dataclass
+from typing import Any, Iterable, Sequence
+
+
+EPS = 1e-9
+
+
+@dataclass(frozen=True)
+class Vec2:
+    x: float
+    y: float
+
+    def __add__(self, other: "Vec2") -> "Vec2":
+        return Vec2(self.x + other.x, self.y + other.y)
+
+    def __sub__(self, other: "Vec2") -> "Vec2":
+        return Vec2(self.x - other.x, self.y - other.y)
+
+    def __mul__(self, value: float) -> "Vec2":
+        return Vec2(self.x * value, self.y * value)
+
+    def dot(self, other: "Vec2") -> float:
+        return self.x * other.x + self.y * other.y
+
+    def cross(self, other: "Vec2") -> float:
+        return self.x * other.y - self.y * other.x
+
+    def length(self) -> float:
+        return math.hypot(self.x, self.y)
+
+    def normalized(self) -> "Vec2":
+        length = self.length()
+        if length < EPS:
+            return Vec2(1.0, 0.0)
+        return Vec2(self.x / length, self.y / length)
+
+    def perpendicular_left(self) -> "Vec2":
+        return Vec2(-self.y, self.x)
+
+    def perpendicular_right(self) -> "Vec2":
+        return Vec2(self.y, -self.x)
+
+    def as_list(self) -> list[float]:
+        return [self.x, self.y]
+
+
+@dataclass(frozen=True)
+class AABB:
+    x_min: float
+    x_max: float
+    y_min: float
+    y_max: float
+    z_min: float
+    z_max: float
+
+    def to_json(self) -> dict[str, float]:
+        return {
+            "x_min": self.x_min,
+            "x_max": self.x_max,
+            "y_min": self.y_min,
+            "y_max": self.y_max,
+            "z_min": self.z_min,
+            "z_max": self.z_max,
+        }
+
+    def intersects_xy(self, other: "AABB", margin: float = 0.0) -> bool:
+        return not (
+            self.x_max + margin <= other.x_min
+            or other.x_max + margin <= self.x_min
+            or self.y_max + margin <= other.y_min
+            or other.y_max + margin <= self.y_min
+        )
+
+    def intersects_3d(self, other: "AABB", margin: float = 0.0) -> bool:
+        if not self.intersects_xy(other, margin=margin):
+            return False
+        return not (
+            self.z_max + margin <= other.z_min
+            or other.z_max + margin <= self.z_min
+        )
+
+
+@dataclass(frozen=True)
+class WallSegment:
+    id: str
+    start: Vec2
+    end: Vec2
+    index: int
+    has_door: bool = False
+    has_window: bool = False
+
+    @property
+    def vector(self) -> Vec2:
+        return self.end - self.start
+
+    @property
+    def length(self) -> float:
+        return self.vector.length()
+
+    @property
+    def tangent(self) -> Vec2:
+        return self.vector.normalized()
+
+    def point_at(self, distance_from_start: float) -> Vec2:
+        d = clamp(distance_from_start, 0.0, self.length)
+        return self.start + self.tangent * d
+
+
+def clamp(value: float, low: float, high: float) -> float:
+    return max(low, min(high, value))
+
+
+def as_float(value: Any, default: float = 0.0) -> float:
+    try:
+        if value is None:
+            return default
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def point_from_mapping(data: Any) -> Vec2:
+    if isinstance(data, dict):
+        return Vec2(as_float(data.get("x")), as_float(data.get("y", data.get("z", 0.0))))
+    if isinstance(data, Sequence) and len(data) >= 2:
+        return Vec2(as_float(data[0]), as_float(data[1]))
+    return Vec2(0.0, 0.0)
+
+
+def polygon_from_json(points: Iterable[Any]) -> list[Vec2]:
+    result = [point_from_mapping(p) for p in points]
+    if len(result) >= 2 and distance(result[0], result[-1]) < EPS:
+        result = result[:-1]
+    return result
+
+
+def polygon_area(points: Sequence[Vec2]) -> float:
+    if len(points) < 3:
+        return 0.0
+    acc = 0.0
+    for i, p in enumerate(points):
+        q = points[(i + 1) % len(points)]
+        acc += p.x * q.y - q.x * p.y
+    return abs(acc) * 0.5
+
+
+def signed_polygon_area(points: Sequence[Vec2]) -> float:
+    if len(points) < 3:
+        return 0.0
+    acc = 0.0
+    for i, p in enumerate(points):
+        q = points[(i + 1) % len(points)]
+        acc += p.x * q.y - q.x * p.y
+    return acc * 0.5
+
+
+def polygon_centroid(points: Sequence[Vec2]) -> Vec2:
+    if not points:
+        return Vec2(0.0, 0.0)
+    area2 = 0.0
+    cx = 0.0
+    cy = 0.0
+    for i, p in enumerate(points):
+        q = points[(i + 1) % len(points)]
+        cross = p.x * q.y - q.x * p.y
+        area2 += cross
+        cx += (p.x + q.x) * cross
+        cy += (p.y + q.y) * cross
+    if abs(area2) < EPS:
+        return Vec2(sum(p.x for p in points) / len(points), sum(p.y for p in points) / len(points))
+    return Vec2(cx / (3.0 * area2), cy / (3.0 * area2))
+
+
+def polygon_bounds(points: Sequence[Vec2]) -> tuple[float, float, float, float]:
+    if not points:
+        return 0.0, 0.0, 0.0, 0.0
+    xs = [p.x for p in points]
+    ys = [p.y for p in points]
+    return min(xs), min(ys), max(xs), max(ys)
+
+
+def distance(a: Vec2, b: Vec2) -> float:
+    return (a - b).length()
+
+
+def point_in_polygon(point: Vec2, polygon: Sequence[Vec2]) -> bool:
+    if len(polygon) < 3:
+        return False
+    inside = False
+    j = len(polygon) - 1
+    for i in range(len(polygon)):
+        pi = polygon[i]
+        pj = polygon[j]
+        if ((pi.y > point.y) != (pj.y > point.y)) and (
+            point.x < (pj.x - pi.x) * (point.y - pi.y) / (pj.y - pi.y + EPS) + pi.x
+        ):
+            inside = not inside
+        j = i
+    return inside
+
+
+def rectangle_corners(center: Vec2, width: float, depth: float, yaw_deg: float) -> list[Vec2]:
+    yaw = math.radians(yaw_deg)
+    ux = Vec2(math.cos(yaw), math.sin(yaw))
+    uy = Vec2(-math.sin(yaw), math.cos(yaw))
+    hw = width * 0.5
+    hd = depth * 0.5
+    return [
+        center + ux * (-hw) + uy * (-hd),
+        center + ux * (hw) + uy * (-hd),
+        center + ux * (hw) + uy * (hd),
+        center + ux * (-hw) + uy * (hd),
+    ]
+
+
+def aabb_from_box(center_xyz: Sequence[float], size_xyz: Sequence[float], yaw_deg: float) -> AABB:
+    x = as_float(center_xyz[0])
+    y = as_float(center_xyz[1])
+    z = as_float(center_xyz[2])
+    sx = max(as_float(size_xyz[0]), 0.001)
+    sy = max(as_float(size_xyz[1]), 0.001)
+    sz = max(as_float(size_xyz[2]), 0.001)
+    corners = rectangle_corners(Vec2(x, y), sx, sy, yaw_deg)
+    xs = [p.x for p in corners]
+    ys = [p.y for p in corners]
+    return AABB(
+        x_min=min(xs),
+        x_max=max(xs),
+        y_min=min(ys),
+        y_max=max(ys),
+        z_min=z - sz * 0.5,
+        z_max=z + sz * 0.5,
+    )
+
+
+def yaw_for_local_y_to_vector(vector: Vec2) -> float:
+    """Return yaw where object's local +Y axis points along the given vector."""
+    n = vector.normalized()
+    return math.degrees(math.atan2(-n.x, n.y))
+
+
+def local_axes_from_yaw(yaw_deg: float) -> tuple[Vec2, Vec2]:
+    yaw = math.radians(yaw_deg)
+    local_x = Vec2(math.cos(yaw), math.sin(yaw))
+    local_y = Vec2(-math.sin(yaw), math.cos(yaw))
+    return local_x, local_y
+
+
+def normalize_angle_deg(angle: float) -> float:
+    result = angle % 360.0
+    if result < 0:
+        result += 360.0
+    return result
+
+
+def wall_inside_normal(wall: WallSegment, polygon: Sequence[Vec2]) -> Vec2:
+    tangent = wall.tangent
+    midpoint = wall.point_at(wall.length * 0.5)
+    candidates = [tangent.perpendicular_left(), tangent.perpendicular_right()]
+    for n in candidates:
+        probe = midpoint + n.normalized() * 0.08
+        if point_in_polygon(probe, polygon):
+            return n.normalized()
+    centroid = polygon_centroid(polygon)
+    toward_centroid = (centroid - midpoint).normalized()
+    if toward_centroid.length() < EPS:
+        return candidates[0].normalized()
+    return toward_centroid
+
+
+def build_wall_segments(
+    polygon: Sequence[Vec2],
+    walls_json: Sequence[dict[str, Any]] | None = None,
+    doors: Sequence[dict[str, Any]] | None = None,
+    windows: Sequence[dict[str, Any]] | None = None,
+) -> list[WallSegment]:
+    door_wall_ids = {str(d.get("wall_id")) for d in (doors or []) if d.get("wall_id") is not None}
+    window_wall_ids = {str(w.get("wall_id")) for w in (windows or []) if w.get("wall_id") is not None}
+
+    result: list[WallSegment] = []
+    if walls_json:
+        for idx, wall in enumerate(walls_json):
+            try:
+                a = int(wall.get("from_vertex", idx))
+                b = int(wall.get("to_vertex", (idx + 1) % len(polygon)))
+            except (TypeError, ValueError):
+                a, b = idx, (idx + 1) % len(polygon)
+            if not polygon or a < 0 or b < 0 or a >= len(polygon) or b >= len(polygon):
+                continue
+            wall_id = str(wall.get("id", f"w{idx}"))
+            result.append(
+                WallSegment(
+                    id=wall_id,
+                    start=polygon[a],
+                    end=polygon[b],
+                    index=idx,
+                    has_door=wall_id in door_wall_ids,
+                    has_window=wall_id in window_wall_ids,
+                )
+            )
+
+    if not result and polygon:
+        for idx, p in enumerate(polygon):
+            q = polygon[(idx + 1) % len(polygon)]
+            wall_id = f"w{idx}"
+            result.append(
+                WallSegment(
+                    id=wall_id,
+                    start=p,
+                    end=q,
+                    index=idx,
+                    has_door=wall_id in door_wall_ids,
+                    has_window=wall_id in window_wall_ids,
+                )
+            )
+    return [w for w in result if w.length > 0.05]
+
+
+def opening_clearance_aabb(
+    wall: WallSegment,
+    opening: dict[str, Any],
+    polygon: Sequence[Vec2],
+    clearance_depth: float,
+    clearance_side: float = 0.25,
+) -> AABB | None:
+    width = as_float(opening.get("width"), 0.9)
+    s = as_float(opening.get("s"), wall.length * 0.5)
+    center_s = clamp(s + width * 0.5, 0.0, wall.length)
+    tangent = wall.tangent
+    normal = wall_inside_normal(wall, polygon)
+    center = wall.point_at(center_s) + normal * (clearance_depth * 0.5)
+    size_x = width + 2.0 * clearance_side
+    size_y = clearance_depth
+    yaw = yaw_for_local_y_to_vector(normal)
+    return aabb_from_box([center.x, center.y, 1.0], [size_x, size_y, 2.0], yaw)
+
+
+def object_footprint_inside_polygon(
+    center: Vec2,
+    size_xy: Sequence[float],
+    yaw_deg: float,
+    polygon: Sequence[Vec2],
+    tolerance: float = 0.02,
+) -> bool:
+    corners = rectangle_corners(center, as_float(size_xy[0]), as_float(size_xy[1]), yaw_deg)
+    if not polygon:
+        return True
+    for p in corners:
+        if not point_in_polygon(p, polygon):
+            # A small tolerance helps with objects intentionally touching walls.
+            moved = p + (polygon_centroid(polygon) - p).normalized() * tolerance
+            if not point_in_polygon(moved, polygon):
+                return False
+    return True
+
+
+def choose_longest_wall(
+    walls: Sequence[WallSegment],
+    *,
+    avoid_windows: bool = False,
+    avoid_doors: bool = True,
+    min_length: float = 0.0,
+) -> WallSegment | None:
+    candidates = []
+    for wall in walls:
+        if wall.length < min_length:
+            continue
+        if avoid_doors and wall.has_door:
+            continue
+        if avoid_windows and wall.has_window:
+            continue
+        candidates.append(wall)
+    if not candidates:
+        candidates = [w for w in walls if w.length >= min_length]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda w: w.length)
+
+
+def choose_wall_most_opposite(
+    walls: Sequence[WallSegment],
+    source_wall: WallSegment,
+    polygon: Sequence[Vec2],
+    *,
+    avoid_windows: bool = False,
+    avoid_doors: bool = True,
+) -> WallSegment | None:
+    source_n = wall_inside_normal(source_wall, polygon)
+    candidates: list[tuple[float, WallSegment]] = []
+    for wall in walls:
+        if wall.id == source_wall.id:
+            continue
+        if avoid_doors and wall.has_door:
+            continue
+        if avoid_windows and wall.has_window:
+            continue
+        n = wall_inside_normal(wall, polygon)
+        opposite_score = -source_n.dot(n)
+        candidates.append((opposite_score * 10.0 + wall.length, wall))
+    if not candidates:
+        return choose_longest_wall(walls, avoid_windows=avoid_windows, avoid_doors=avoid_doors)
+    return max(candidates, key=lambda item: item[0])[1]
+
+
+def nearest_corner_candidates(polygon: Sequence[Vec2], inset: float = 0.45) -> list[Vec2]:
+    if not polygon:
+        return []
+    centroid = polygon_centroid(polygon)
+    result = []
+    for p in polygon:
+        direction = (centroid - p).normalized()
+        result.append(p + direction * inset)
+    return result
+
+Название файла: living_room_generator.py
+Содержимое файла:
+from __future__ import annotations
+
+import random
+from typing import Any
+
+from .geometry import Vec2, as_float, choose_longest_wall, choose_wall_most_opposite, local_axes_from_yaw, wall_inside_normal, yaw_for_local_y_to_vector
+from .object_specs import LIVING_ROOM_SPECS, Density, ObjectSpec, density_rank
+from .placement_engine import PlacementEngine
+from .room_context import RoomContext
+
+
+def _sofa_spec_key(ctx: RoomContext, density: Density) -> str:
+    if ctx.area_m2 >= 24.0 and density_rank(density) >= 2:
+        return "sectional_sofa"
+    if ctx.area_m2 >= 12.0:
+        return "sofa_3"
+    return "sofa_2"
+
+
+def generate_living_room(ctx: RoomContext, *, density: Density, seed: int | None = None) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    rng = random.Random(seed)
+    engine = PlacementEngine(
+        ctx=ctx,
+        rng=rng,
+        source_name="procedural_room_stage",
+        generator_name="living_room_generator",
+        archetype="sofa_facing_tv_wall",
+    )
+
+    tv_wall = choose_longest_wall(ctx.walls, avoid_windows=True, avoid_doors=True, min_length=1.8)
+    if tv_wall is None:
+        tv_wall = choose_longest_wall(ctx.walls, avoid_windows=False, avoid_doors=True)
+    if tv_wall is None:
+        return [], {"generator": "living_room_generator", "status": "no_wall"}
+
+    tv_stand = engine.add_wall_aligned(
+        LIVING_ROOM_SPECS["tv_stand"],
+        tv_wall.id,
+        tv_wall.length * 0.5,
+        layer="primary",
+    )
+    if tv_stand:
+        engine.add_wall_art(tv_wall.id, tv_wall.length * 0.5, LIVING_ROOM_SPECS["tv"], z_center=1.25, category="tv", name="Wall-mounted TV")
+
+    sofa_key = _sofa_spec_key(ctx, density)
+    sofa_spec = LIVING_ROOM_SPECS[sofa_key]
+    sofa_wall = choose_wall_most_opposite(ctx.walls, tv_wall, ctx.polygon, avoid_windows=False, avoid_doors=True)
+
+    sofa = None
+    if sofa_wall:
+        sofa = engine.add_wall_aligned(
+            sofa_spec,
+            sofa_wall.id,
+            sofa_wall.length * 0.5,
+            layer="primary",
+            margin=0.02,
+        )
+
+    # If wall-aligned sofa does not work, place it in front of TV at a controlled distance.
+    if sofa is None and tv_stand:
+        tv_pos = tv_stand.get("position_m") or [ctx.centroid.x, ctx.centroid.y, 0.0]
+        tv_yaw = as_float(tv_stand.get("yaw_deg"), 0.0)
+        _, tv_forward = local_axes_from_yaw(tv_yaw)
+        distance = min(max(1.7, ctx.min_side_m * 0.55), 3.2)
+        center = Vec2(as_float(tv_pos[0]), as_float(tv_pos[1])) + tv_forward * distance
+        sofa = engine.add_item(
+            sofa_spec,
+            center,
+            tv_yaw + 180.0,
+            layer="primary",
+            margin=0.02,
+        )
+
+    if sofa is None:
+        return engine.placements, {"generator": "living_room_generator", "status": "sofa_rejected", "rejected": engine.rejected}
+
+    # Coffee table and rug are tied to sofa.
+    coffee = engine.add_near(
+        sofa,
+        LIVING_ROOM_SPECS["coffee_table"],
+        local_offset_xy=(0.0, sofa_spec.size_m[1] * 0.5 + LIVING_ROOM_SPECS["coffee_table"].size_m[1] * 0.5 + 0.28),
+        allow_collision=False,
+        layer="primary",
+    )
+    engine.add_near(
+        sofa,
+        LIVING_ROOM_SPECS["rug"],
+        local_offset_xy=(0.0, sofa_spec.size_m[1] * 0.55),
+        allow_collision=True,
+        layer="textile",
+    )
+
+    if coffee:
+        if density_rank(density) >= 2:
+            engine.add_on_top(coffee, LIVING_ROOM_SPECS["decor_tray"], local_offset_xy=(0.0, 0.0))
+            engine.add_on_top(coffee, LIVING_ROOM_SPECS["decor_books"], local_offset_xy=(-0.25, 0.07))
+        if density_rank(density) >= 3:
+            engine.add_on_top(coffee, LIVING_ROOM_SPECS["decor_vase"], local_offset_xy=(0.28, -0.08))
+            for i, (dx, dy) in enumerate([(-0.22, -0.15), (0.0, 0.16), (0.24, 0.13), (0.12, -0.18)], start=1):
+                engine.add_on_top(
+                    coffee,
+                    LIVING_ROOM_SPECS["decor_books"],
+                    local_offset_xy=(dx, dy),
+                    name=f"Coffee table book stack {i}",
+                )
+            remote_spec = ObjectSpec("tv_accessory", "Remote control", (0.18, 0.06, 0.025), "electronics", allow_collision=True)
+            engine.add_on_top(coffee, remote_spec, local_offset_xy=(0.35, 0.12), name="Remote control")
+
+    # Side tables, lamps, soft decor.
+    if density_rank(density) >= 2:
+        side_offset = sofa_spec.size_m[0] * 0.5 + LIVING_ROOM_SPECS["side_table"].size_m[0] * 0.5 + 0.12
+        side_l = engine.add_near(sofa, LIVING_ROOM_SPECS["side_table"], local_offset_xy=(-side_offset, 0.05), layer="secondary")
+        side_r = engine.add_near(sofa, LIVING_ROOM_SPECS["side_table"], local_offset_xy=(side_offset, 0.05), layer="secondary")
+        if side_l:
+            engine.add_on_top(side_l, LIVING_ROOM_SPECS["table_lamp"], local_offset_xy=(0.0, 0.0))
+            if density_rank(density) >= 3:
+                engine.add_on_top(side_l, LIVING_ROOM_SPECS["decor_books"], local_offset_xy=(-0.08, 0.08), name="Side table books left")
+                engine.add_on_top(side_l, LIVING_ROOM_SPECS["decor_vase"], local_offset_xy=(0.10, -0.06), name="Side table vase left")
+        if side_r and density_rank(density) >= 3:
+            engine.add_on_top(side_r, LIVING_ROOM_SPECS["plant_small"], local_offset_xy=(0.0, 0.0))
+            engine.add_on_top(side_r, LIVING_ROOM_SPECS["decor_books"], local_offset_xy=(0.08, 0.08), name="Side table books right")
+            engine.add_on_top(side_r, LIVING_ROOM_SPECS["decor_tray"], local_offset_xy=(-0.10, -0.06), name="Side table tray right")
+        engine.add_corner_object(LIVING_ROOM_SPECS["floor_lamp"], preferred_index=0)
+        engine.add_corner_object(LIVING_ROOM_SPECS["plant_large"], preferred_index=1)
+
+    if density_rank(density) >= 3:
+        for i, x in enumerate([-0.78, -0.52, -0.26, 0.0, 0.26, 0.52, 0.78]):
+            engine.add_on_top(sofa, LIVING_ROOM_SPECS["pillow"], local_offset_xy=(x, -sofa_spec.size_m[1] * 0.22), name=f"Sofa pillow {i + 1}")
+        engine.add_on_top(sofa, LIVING_ROOM_SPECS["blanket"], local_offset_xy=(sofa_spec.size_m[0] * 0.22, 0.0), name="Sofa throw blanket")
+        engine.add_on_top(sofa, LIVING_ROOM_SPECS["blanket"], local_offset_xy=(-sofa_spec.size_m[0] * 0.22, 0.03), name="Layered sofa blanket")
+
+    # Bookcases and console on free walls.
+    if density_rank(density) >= 2:
+        used_ids = {tv_wall.id, sofa_wall.id if sofa_wall else ""}
+        bookshelves: list[dict[str, Any]] = []
+        for wall in sorted(ctx.walls, key=lambda w: w.length, reverse=True):
+            if wall.id in used_ids or wall.has_door:
+                continue
+            if wall.length >= 1.7:
+                left = engine.add_wall_aligned(LIVING_ROOM_SPECS["bookshelf"], wall.id, wall.length * 0.25, layer="storage", margin=0.02)
+                right = None
+                if density_rank(density) >= 3 and wall.length >= 2.8:
+                    right = engine.add_wall_aligned(LIVING_ROOM_SPECS["bookshelf"], wall.id, wall.length * 0.75, layer="storage", margin=0.02)
+                bookshelves.extend([x for x in (left, right) if x])
+                if left or right:
+                    break
+        if density_rank(density) >= 3:
+            shelf_book = ObjectSpec("decor_books", "Bookshelf book stack", (0.22, 0.16, 0.18), "decor", allow_collision=True)
+            shelf_box = ObjectSpec("decor_box", "Bookshelf storage box", (0.26, 0.18, 0.16), "decor", allow_collision=True)
+            shelf_vase = ObjectSpec("decor_vase", "Bookshelf vase", (0.16, 0.16, 0.28), "decor", allow_collision=True)
+            for shelf_index, shelf in enumerate(bookshelves, start=1):
+                for i, (dx, dy, spec) in enumerate([
+                    (-0.22, -0.06, shelf_book),
+                    (0.02, -0.06, shelf_book),
+                    (0.24, -0.06, shelf_box),
+                    (-0.14, 0.08, shelf_vase),
+                    (0.18, 0.08, shelf_book),
+                ], start=1):
+                    engine.add_on_top(shelf, spec, local_offset_xy=(dx, dy), name=f"Bookshelf {shelf_index} item {i}")
+
+    if density_rank(density) >= 3:
+        for wall in sorted(ctx.walls, key=lambda w: w.length, reverse=True):
+            if wall.id == tv_wall.id or wall.has_door:
+                continue
+            console = engine.add_wall_aligned(LIVING_ROOM_SPECS["console_table"], wall.id, wall.length * 0.5, layer="secondary", margin=0.02)
+            if console:
+                engine.add_on_top(console, LIVING_ROOM_SPECS["decor_vase"], local_offset_xy=(-0.25, 0.0))
+                engine.add_on_top(console, LIVING_ROOM_SPECS["decor_books"], local_offset_xy=(0.2, 0.0))
+                engine.add_on_top(console, LIVING_ROOM_SPECS["decor_tray"], local_offset_xy=(0.0, 0.08), name="Console decorative tray")
+                engine.add_wall_art(wall.id, wall.length * 0.5, LIVING_ROOM_SPECS["wall_art"], z_center=1.55)
+                break
+
+        for wall in sorted(ctx.walls, key=lambda w: w.length, reverse=True):
+            if wall.has_door:
+                continue
+            art_count = 4 if wall.length >= 4.0 else 3
+            for i in range(art_count):
+                engine.add_wall_art(
+                    wall.id,
+                    wall.length * (i + 1) / (art_count + 1),
+                    LIVING_ROOM_SPECS["wall_art"],
+                    z_center=1.42 + 0.1 * (i % 2),
+                    name=f"Living room wall art {wall.id}-{i + 1}",
+                )
+
+        if tv_stand:
+            speaker_spec = ObjectSpec("tv_accessory", "Compact speaker", (0.18, 0.16, 0.22), "electronics", allow_collision=True)
+            box_spec = ObjectSpec("tv_accessory", "Media box", (0.32, 0.22, 0.07), "electronics", allow_collision=True)
+            for i, (dx, spec) in enumerate([(-0.55, speaker_spec), (0.55, speaker_spec), (0.0, box_spec)], start=1):
+                engine.add_on_top(tv_stand, spec, local_offset_xy=(dx, 0.0), name=f"TV accessory {i}")
+
+    # Armchairs around coffee table for medium/large rooms.
+    if density_rank(density) >= 2 and ctx.area_m2 >= 15.0 and coffee:
+        coffee_pos = coffee.get("position_m") or [ctx.centroid.x, ctx.centroid.y, 0.0]
+        sofa_yaw = as_float(sofa.get("yaw_deg"), 0.0)
+        ux, uy = local_axes_from_yaw(sofa_yaw)
+        center_base = Vec2(as_float(coffee_pos[0]), as_float(coffee_pos[1]))
+        for side, sign in [("left", -1.0), ("right", 1.0)]:
+            center = center_base + ux * (sign * 1.25)
+            item = engine.add_item(
+                LIVING_ROOM_SPECS["armchair"],
+                center,
+                sofa_yaw + sign * 70.0,
+                layer="secondary",
+                extra_meta={"seating_group_side": side},
+            )
+            if density_rank(density) < 3 and item:
+                break
+
+    # Optional dining zone in large rooms.
+    if density_rank(density) >= 3 and ctx.area_m2 >= 22.0:
+        center = Vec2(
+            ctx.bounds[0] + ctx.width_m * 0.25,
+            ctx.bounds[1] + ctx.depth_m * 0.25,
+        )
+        table = engine.add_item(LIVING_ROOM_SPECS["dining_table"], center, 0.0, layer="secondary")
+        if table:
+            for idx, (dx, dy, yaw) in enumerate([(0.0, -0.72, 0.0), (0.0, 0.72, 180.0), (-0.95, 0.0, 90.0), (0.95, 0.0, 270.0)]):
+                engine.add_near(
+                    table,
+                    LIVING_ROOM_SPECS["dining_chair"],
+                    local_offset_xy=(dx, dy),
+                    yaw_delta_deg=yaw,
+                    name=f"Dining chair {idx + 1}",
+                    layer="secondary",
+                )
+
+    engine.add_ceiling_light()
+
+    report = {
+        "generator": "living_room_generator",
+        "archetype": engine.archetype,
+        "tv_wall_id": tv_wall.id,
+        "sofa_wall_id": sofa_wall.id if sofa_wall else None,
+        "density": density,
+        "rejected": engine.rejected,
+    }
+    return engine.placements, report
+
+Название файла: object_specs.py
+Содержимое файла:
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Literal
+
+
+Density = Literal["normal", "high", "very_high"]
+
+
+@dataclass(frozen=True)
+class ObjectSpec:
+    category: str
+    name: str
+    size_m: tuple[float, float, float]
+    layer: str
+    mount_type: str = "floor"
+    replace_with_supplier: bool = True
+    allow_collision: bool = False
+    requires_access: bool = False
+
+
+BEDROOM_SPECS: dict[str, ObjectSpec] = {
+    "single_bed": ObjectSpec("bed", "Single bed", (0.95, 2.0, 0.55), "primary", requires_access=True),
+    "double_bed": ObjectSpec("bed", "Double bed", (1.6, 2.05, 0.55), "primary", requires_access=True),
+    "queen_bed": ObjectSpec("bed", "Queen bed", (1.8, 2.1, 0.55), "primary", requires_access=True),
+    "headboard": ObjectSpec("headboard", "Headboard", (1.8, 0.08, 1.1), "secondary"),
+    "nightstand": ObjectSpec("nightstand", "Nightstand", (0.45, 0.42, 0.55), "secondary"),
+    "wardrobe_module": ObjectSpec("wardrobe_module", "Wardrobe module", (0.6, 0.62, 2.25), "storage"),
+    "dresser": ObjectSpec("dresser", "Dresser", (1.15, 0.45, 0.85), "storage"),
+    "desk": ObjectSpec("desk", "Writing desk", (1.15, 0.58, 0.75), "secondary"),
+    "chair": ObjectSpec("chair", "Chair", (0.5, 0.5, 0.85), "secondary"),
+    "bench": ObjectSpec("bench", "Bed bench", (1.2, 0.42, 0.45), "secondary"),
+    "rug": ObjectSpec("rug", "Large bedroom rug", (1.8, 2.5, 0.03), "textile", replace_with_supplier=True, allow_collision=True),
+    "table_lamp": ObjectSpec("table_lamp", "Table lamp", (0.28, 0.28, 0.55), "lighting", allow_collision=True),
+    "floor_lamp": ObjectSpec("floor_lamp", "Floor lamp", (0.35, 0.35, 1.55), "lighting"),
+    "plant": ObjectSpec("plant", "Indoor plant", (0.42, 0.42, 1.2), "decor"),
+    "wall_art": ObjectSpec("wall_art", "Wall art", (0.8, 0.05, 0.6), "wall_decor", mount_type="wall", allow_collision=True),
+    "sconce": ObjectSpec("wall_light", "Wall sconce", (0.22, 0.08, 0.32), "lighting", mount_type="wall", allow_collision=True),
+    "pillow": ObjectSpec("pillow", "Decorative pillow", (0.45, 0.16, 0.18), "soft_decor", allow_collision=True),
+    "blanket": ObjectSpec("blanket", "Bed blanket", (1.4, 1.0, 0.06), "soft_decor", allow_collision=True),
+    "decor_books": ObjectSpec("decor_books", "Decorative books", (0.28, 0.2, 0.08), "decor", allow_collision=True),
+    "decor_vase": ObjectSpec("decor_vase", "Decorative vase", (0.18, 0.18, 0.32), "decor", allow_collision=True),
+    "decor_box": ObjectSpec("decor_box", "Storage box", (0.32, 0.24, 0.16), "decor", allow_collision=True),
+}
+
+LIVING_ROOM_SPECS: dict[str, ObjectSpec] = {
+    "sofa_2": ObjectSpec("sofa", "Two-seat sofa", (1.65, 0.88, 0.85), "primary", requires_access=True),
+    "sofa_3": ObjectSpec("sofa", "Three-seat sofa", (2.25, 0.92, 0.85), "primary", requires_access=True),
+    "sectional_sofa": ObjectSpec("sofa", "Sectional sofa", (2.65, 1.65, 0.85), "primary", requires_access=True),
+    "armchair": ObjectSpec("armchair", "Armchair", (0.82, 0.82, 0.9), "secondary"),
+    "coffee_table": ObjectSpec("coffee_table", "Coffee table", (1.1, 0.62, 0.42), "primary"),
+    "side_table": ObjectSpec("side_table", "Side table", (0.45, 0.45, 0.55), "secondary"),
+    "tv_stand": ObjectSpec("tv_stand", "TV stand", (1.65, 0.42, 0.52), "primary"),
+    "tv": ObjectSpec("tv", "TV", (1.25, 0.06, 0.72), "electronics", mount_type="wall", allow_collision=True),
+    "bookshelf": ObjectSpec("bookshelf", "Bookshelf", (0.82, 0.36, 2.05), "storage"),
+    "console_table": ObjectSpec("console_table", "Console table", (1.15, 0.35, 0.82), "secondary"),
+    "rug": ObjectSpec("rug", "Living room rug", (2.1, 2.8, 0.03), "textile", allow_collision=True),
+    "floor_lamp": ObjectSpec("floor_lamp", "Floor lamp", (0.38, 0.38, 1.65), "lighting"),
+    "table_lamp": ObjectSpec("table_lamp", "Table lamp", (0.28, 0.28, 0.55), "lighting", allow_collision=True),
+    "plant_large": ObjectSpec("plant", "Large indoor plant", (0.52, 0.52, 1.45), "decor"),
+    "plant_small": ObjectSpec("plant", "Small indoor plant", (0.25, 0.25, 0.45), "decor", allow_collision=True),
+    "wall_art": ObjectSpec("wall_art", "Wall art", (0.9, 0.05, 0.65), "wall_decor", mount_type="wall", allow_collision=True),
+    "decor_books": ObjectSpec("decor_books", "Coffee table books", (0.32, 0.24, 0.08), "decor", allow_collision=True),
+    "decor_vase": ObjectSpec("decor_vase", "Decorative vase", (0.2, 0.2, 0.34), "decor", allow_collision=True),
+    "decor_tray": ObjectSpec("decor_tray", "Decorative tray", (0.42, 0.28, 0.05), "decor", allow_collision=True),
+    "pillow": ObjectSpec("pillow", "Sofa pillow", (0.42, 0.15, 0.18), "soft_decor", allow_collision=True),
+    "blanket": ObjectSpec("blanket", "Sofa blanket", (0.8, 0.5, 0.06), "soft_decor", allow_collision=True),
+    "dining_table": ObjectSpec("dining_table", "Dining table", (1.4, 0.85, 0.75), "secondary", requires_access=True),
+    "dining_chair": ObjectSpec("dining_chair", "Dining chair", (0.48, 0.52, 0.9), "secondary"),
+}
+
+CORRIDOR_SPECS: dict[str, ObjectSpec] = {
+    "shoe_cabinet": ObjectSpec("shoe_cabinet", "Shoe cabinet", (0.85, 0.32, 0.9), "storage"),
+    "bench": ObjectSpec("entry_bench", "Entry bench", (1.0, 0.36, 0.45), "secondary"),
+    "coat_rack": ObjectSpec("coat_rack", "Coat rack", (0.65, 0.35, 1.8), "storage"),
+    "wardrobe_narrow": ObjectSpec("wardrobe", "Narrow wardrobe", (0.85, 0.48, 2.2), "storage"),
+    "mirror": ObjectSpec("mirror", "Full-height mirror", (0.65, 0.05, 1.8), "wall_decor", mount_type="wall", allow_collision=True),
+    "console_table": ObjectSpec("console_table", "Narrow console table", (0.95, 0.30, 0.8), "secondary"),
+    "runner_rug": ObjectSpec("runner_rug", "Runner rug", (0.75, 2.6, 0.03), "textile", allow_collision=True),
+    "umbrella_stand": ObjectSpec("umbrella_stand", "Umbrella stand", (0.25, 0.25, 0.55), "decor"),
+    "wall_hooks": ObjectSpec("wall_hooks", "Wall hooks", (0.8, 0.05, 0.25), "wall_decor", mount_type="wall", allow_collision=True),
+    "wall_art": ObjectSpec("wall_art", "Wall art", (0.55, 0.05, 0.45), "wall_decor", mount_type="wall", allow_collision=True),
+    "storage_basket": ObjectSpec("storage_basket", "Storage basket", (0.34, 0.28, 0.28), "decor", allow_collision=True),
+    "key_tray": ObjectSpec("decor_tray", "Key tray", (0.30, 0.18, 0.05), "decor", allow_collision=True),
+    "small_plant": ObjectSpec("plant", "Small plant", (0.23, 0.23, 0.42), "decor", allow_collision=True),
+}
+
+
+def normalize_density(value: str | None) -> Density:
+    raw = (value or "high").strip().lower().replace("-", "_")
+    if raw in {"low", "minimal", "normal"}:
+        return "normal"
+    if raw in {"very_high", "veryhigh", "dense", "max", "maximum"}:
+        return "very_high"
+    return "high"
+
+
+def density_rank(density: Density) -> int:
+    return {"normal": 1, "high": 2, "very_high": 3}[density]
+
+Название файла: placement_engine.py
+Содержимое файла:
+from __future__ import annotations
+
+import copy
+import math
+import random
+from dataclasses import dataclass, field
+from typing import Any, Sequence
+
+from .geometry import (
+    AABB,
+    Vec2,
+    aabb_from_box,
+    as_float,
+    clamp,
+    local_axes_from_yaw,
+    nearest_corner_candidates,
+    normalize_angle_deg,
+    object_footprint_inside_polygon,
+    polygon_bounds,
+    polygon_centroid,
+    wall_inside_normal,
+    yaw_for_local_y_to_vector,
+)
+from .object_specs import ObjectSpec
+from .room_context import RoomContext
+
+
+COLLISION_IGNORE_CATEGORIES = {
+    "rug",
+    "runner_rug",
+    "wall_art",
+    "wall_light",
+    "tv",
+    "mirror",
+    "wall_hooks",
+    "ceiling_light",
+    "floor_lamp",
+    "table_lamp",
+    "plant",
+    "pillow",
+    "blanket",
+    "decor_books",
+    "decor_vase",
+    "decor_box",
+    "decor_tray",
+    "storage_basket",
+    "umbrella_stand",
+}
+
+
+def clamp_center_inside_room_for_aabb(
+    center: Vec2,
+    size_m: Sequence[float],
+    *,
+    polygon: Sequence[Vec2],
+    yaw_deg: float = 0.0,
+    margin: float = 0.03,
+) -> Vec2:
+    """Clamp an object's center so its yawed AABB stays inside room bounds."""
+    x_min, y_min, x_max, y_max = polygon_bounds(polygon)
+    footprint_aabb = aabb_from_box([0.0, 0.0, 0.0], size_m, yaw_deg)
+    half_x = max(abs(footprint_aabb.x_min), abs(footprint_aabb.x_max)) + margin
+    half_y = max(abs(footprint_aabb.y_min), abs(footprint_aabb.y_max)) + margin
+
+    low_x = x_min + half_x
+    high_x = x_max - half_x
+    low_y = y_min + half_y
+    high_y = y_max - half_y
+    if low_x > high_x:
+        low_x = high_x = (x_min + x_max) * 0.5
+    if low_y > high_y:
+        low_y = high_y = (y_min + y_max) * 0.5
+
+    clamped = Vec2(clamp(center.x, low_x, high_x), clamp(center.y, low_y, high_y))
+    if object_footprint_inside_polygon(clamped, size_m[:2], yaw_deg, polygon):
+        return clamped
+
+    # Bbox clamping is enough for rectangular rooms. For slightly irregular
+    # polygons, move inward toward the room centroid until the footprint fits.
+    centroid = polygon_centroid(polygon)
+    for step in (0.25, 0.5, 0.75, 1.0):
+        candidate = Vec2(
+            clamp(clamped.x + (centroid.x - clamped.x) * step, low_x, high_x),
+            clamp(clamped.y + (centroid.y - clamped.y) * step, low_y, high_y),
+        )
+        if object_footprint_inside_polygon(candidate, size_m[:2], yaw_deg, polygon):
+            return candidate
+    return clamped
+
+
+@dataclass
+class PlacementEngine:
+    ctx: RoomContext
+    rng: random.Random
+    source_name: str
+    generator_name: str
+    archetype: str
+    placements: list[dict[str, Any]] = field(default_factory=list)
+    rejected: list[dict[str, Any]] = field(default_factory=list)
+    _counter: int = 0
+
+    def next_id(self, category: str) -> str:
+        self._counter += 1
+        safe_category = "".join(ch if ch.isalnum() or ch == "_" else "_" for ch in category.lower())
+        return f"{self.ctx.room_type}_{safe_category}_{self._counter:04d}"
+
+    def existing_aabbs(self, *, include_soft: bool = False) -> list[AABB]:
+        result: list[AABB] = []
+        for item in self.placements:
+            category = str(item.get("category", ""))
+            if not include_soft and category in COLLISION_IGNORE_CATEGORIES:
+                continue
+            if item.get("meta", {}).get("allow_collision"):
+                continue
+            aabb_json = item.get("aabb")
+            if not isinstance(aabb_json, dict):
+                continue
+            result.append(
+                AABB(
+                    x_min=as_float(aabb_json.get("x_min")),
+                    x_max=as_float(aabb_json.get("x_max")),
+                    y_min=as_float(aabb_json.get("y_min")),
+                    y_max=as_float(aabb_json.get("y_max")),
+                    z_min=as_float(aabb_json.get("z_min")),
+                    z_max=as_float(aabb_json.get("z_max")),
+                )
+            )
+        return result
+
+    def can_place(
+        self,
+        center: Vec2,
+        size_m: Sequence[float],
+        yaw_deg: float,
+        *,
+        allow_collision: bool = False,
+        margin: float = 0.03,
+        ignore_door_clearance: bool = False,
+    ) -> tuple[bool, str]:
+        if not object_footprint_inside_polygon(center, size_m[:2], yaw_deg, self.ctx.polygon):
+            return False, "outside_room_polygon"
+
+        aabb = aabb_from_box([center.x, center.y, as_float(size_m[2]) * 0.5], size_m, yaw_deg)
+
+        if not ignore_door_clearance:
+            for zone in self.ctx.door_clearance_zones:
+                if aabb.intersects_xy(zone, margin=0.0):
+                    return False, "door_clearance_collision"
+
+        if allow_collision:
+            return True, "ok"
+
+        for other in self.existing_aabbs():
+            if aabb.intersects_xy(other, margin=margin):
+                return False, "object_collision"
+
+        return True, "ok"
+
+    def make_item(
+        self,
+        spec: ObjectSpec,
+        center: Vec2,
+        yaw_deg: float,
+        *,
+        z_center: float | None = None,
+        name: str | None = None,
+        category: str | None = None,
+        layer: str | None = None,
+        mount_type: str | None = None,
+        wall_contact_side: str | None = None,
+        extra_meta: dict[str, Any] | None = None,
+        constraints: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        size = [float(spec.size_m[0]), float(spec.size_m[1]), float(spec.size_m[2])]
+        z = z_center if z_center is not None else size[2] * 0.5
+        yaw = normalize_angle_deg(yaw_deg)
+        aabb = aabb_from_box([center.x, center.y, z], size, yaw)
+        item_category = category or spec.category
+        meta = {
+            "procedural": True,
+            "density_layer": layer or spec.layer,
+            "replace_with_supplier": spec.replace_with_supplier,
+            "allow_collision": bool(spec.allow_collision),
+        }
+        if extra_meta:
+            meta.update(extra_meta)
+
+        return {
+            "id": self.next_id(item_category),
+            "name": name or spec.name,
+            "category": item_category,
+            "position_m": [center.x, center.y, z],
+            "size_m": size,
+            "rotation_deg": yaw,
+            "yaw_deg": yaw,
+            "yaw_rad": math.radians(yaw),
+            "aabb": aabb.to_json(),
+            "mount_type": mount_type or spec.mount_type,
+            "wall_contact_side": wall_contact_side,
+            "constraints": constraints or {"requires_access": bool(spec.requires_access)},
+            "asset": {
+                "kind": "procedural_placeholder",
+                "mesh_fit_mode": "fit",
+            },
+            "source": {
+                "placement_source": self.source_name,
+                "generator": self.generator_name,
+                "archetype": self.archetype,
+            },
+            "meta": meta,
+        }
+
+    def add_item(
+        self,
+        spec: ObjectSpec,
+        center: Vec2,
+        yaw_deg: float,
+        *,
+        z_center: float | None = None,
+        name: str | None = None,
+        category: str | None = None,
+        layer: str | None = None,
+        allow_collision: bool | None = None,
+        margin: float = 0.03,
+        ignore_door_clearance: bool = False,
+        mount_type: str | None = None,
+        wall_contact_side: str | None = None,
+        extra_meta: dict[str, Any] | None = None,
+        constraints: dict[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
+        collision_allowed = spec.allow_collision if allow_collision is None else allow_collision
+        ok, reason = self.can_place(
+            center,
+            spec.size_m,
+            yaw_deg,
+            allow_collision=collision_allowed,
+            margin=margin,
+            ignore_door_clearance=ignore_door_clearance,
+        )
+        if not ok:
+            self.rejected.append(
+                {
+                    "category": category or spec.category,
+                    "name": name or spec.name,
+                    "reason": reason,
+                    "center": [center.x, center.y],
+                    "size_m": list(spec.size_m),
+                    "yaw_deg": yaw_deg,
+                }
+            )
+            return None
+
+        item = self.make_item(
+            spec,
+            center,
+            yaw_deg,
+            z_center=z_center,
+            name=name,
+            category=category,
+            layer=layer,
+            mount_type=mount_type,
+            wall_contact_side=wall_contact_side,
+            extra_meta=extra_meta,
+            constraints=constraints,
+        )
+        self.placements.append(item)
+        return item
+
+    def add_wall_aligned(
+        self,
+        spec: ObjectSpec,
+        wall_id: str,
+        along_center_m: float,
+        *,
+        offset_from_wall_m: float | None = None,
+        name: str | None = None,
+        category: str | None = None,
+        layer: str | None = None,
+        allow_collision: bool | None = None,
+        margin: float = 0.03,
+        ignore_door_clearance: bool = False,
+        extra_meta: dict[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
+        wall = next((w for w in self.ctx.walls if w.id == wall_id), None)
+        if wall is None:
+            return None
+
+        normal = wall_inside_normal(wall, self.ctx.polygon)
+        depth = spec.size_m[1]
+        offset = depth * 0.5 if offset_from_wall_m is None else offset_from_wall_m
+        along = clamp(along_center_m, spec.size_m[0] * 0.5, max(spec.size_m[0] * 0.5, wall.length - spec.size_m[0] * 0.5))
+        base = wall.point_at(along)
+        center = base + normal * offset
+        yaw = yaw_for_local_y_to_vector(normal)
+        return self.add_item(
+            spec,
+            center,
+            yaw,
+            name=name,
+            category=category,
+            layer=layer,
+            allow_collision=allow_collision,
+            margin=margin,
+            ignore_door_clearance=ignore_door_clearance,
+            wall_contact_side="back",
+            extra_meta={**(extra_meta or {}), "wall_id": wall_id, "wall_along_m": along},
+        )
+
+    def add_on_top(
+        self,
+        parent: dict[str, Any] | None,
+        spec: ObjectSpec,
+        *,
+        local_offset_xy: tuple[float, float] = (0.0, 0.0),
+        yaw_delta_deg: float = 0.0,
+        name: str | None = None,
+        category: str | None = None,
+        layer: str | None = None,
+    ) -> dict[str, Any] | None:
+        if not parent:
+            return None
+        parent_pos = parent.get("position_m") or [0.0, 0.0, 0.0]
+        parent_size = parent.get("size_m") or [0.0, 0.0, 0.0]
+        parent_yaw = as_float(parent.get("yaw_deg", parent.get("rotation_deg")), 0.0)
+        ux, uy = local_axes_from_yaw(parent_yaw)
+        center_xy = Vec2(as_float(parent_pos[0]), as_float(parent_pos[1]))
+        center_xy = center_xy + ux * local_offset_xy[0] + uy * local_offset_xy[1]
+        z = as_float(parent_pos[2]) + as_float(parent_size[2]) * 0.5 + spec.size_m[2] * 0.5
+        return self.add_item(
+            spec,
+            center_xy,
+            parent_yaw + yaw_delta_deg,
+            z_center=z,
+            name=name,
+            category=category,
+            layer=layer,
+            allow_collision=True,
+            ignore_door_clearance=True,
+            extra_meta={"parent_id": parent.get("id"), "support_relation": "on_top"},
+        )
+
+    def add_near(
+        self,
+        anchor: dict[str, Any] | None,
+        spec: ObjectSpec,
+        *,
+        local_offset_xy: tuple[float, float],
+        yaw_delta_deg: float = 0.0,
+        name: str | None = None,
+        category: str | None = None,
+        layer: str | None = None,
+        allow_collision: bool | None = None,
+    ) -> dict[str, Any] | None:
+        if not anchor:
+            return None
+        parent_pos = anchor.get("position_m") or [0.0, 0.0, 0.0]
+        parent_yaw = as_float(anchor.get("yaw_deg", anchor.get("rotation_deg")), 0.0)
+        ux, uy = local_axes_from_yaw(parent_yaw)
+        center_xy = Vec2(as_float(parent_pos[0]), as_float(parent_pos[1]))
+        center_xy = center_xy + ux * local_offset_xy[0] + uy * local_offset_xy[1]
+        return self.add_item(
+            spec,
+            center_xy,
+            parent_yaw + yaw_delta_deg,
+            name=name,
+            category=category,
+            layer=layer,
+            allow_collision=allow_collision,
+            extra_meta={"anchor_id": anchor.get("id"), "placement_relation": "near"},
+        )
+
+    def add_wall_art(
+        self,
+        wall_id: str,
+        along_center_m: float,
+        spec: ObjectSpec,
+        *,
+        z_center: float = 1.55,
+        name: str | None = None,
+        category: str | None = None,
+        layer: str | None = None,
+    ) -> dict[str, Any] | None:
+        wall = next((w for w in self.ctx.walls if w.id == wall_id), None)
+        if wall is None:
+            return None
+        normal = wall_inside_normal(wall, self.ctx.polygon)
+        along = clamp(along_center_m, spec.size_m[0] * 0.5, max(spec.size_m[0] * 0.5, wall.length - spec.size_m[0] * 0.5))
+        center = wall.point_at(along) + normal * 0.035
+        yaw = yaw_for_local_y_to_vector(normal)
+        return self.add_item(
+            spec,
+            center,
+            yaw,
+            z_center=z_center,
+            name=name,
+            category=category,
+            layer=layer,
+            allow_collision=True,
+            ignore_door_clearance=True,
+            mount_type="wall",
+            wall_contact_side="back",
+            extra_meta={"wall_id": wall_id, "wall_along_m": along},
+        )
+
+    def add_ceiling_light(self, category: str = "ceiling_light", name: str = "Ceiling light") -> dict[str, Any]:
+        from .object_specs import ObjectSpec
+
+        size = (0.45, 0.45, 0.18)
+        spec = ObjectSpec(category=category, name=name, size_m=size, layer="lighting", mount_type="ceiling", allow_collision=True)
+        center = self.ctx.centroid
+        item = self.make_item(
+            spec,
+            center,
+            0.0,
+            z_center=max(2.2, self.ctx.ceiling_height_m - size[2] * 0.5),
+            mount_type="ceiling",
+            extra_meta={"ceiling_mounted": True},
+        )
+        self.placements.append(item)
+        return item
+
+    def add_corner_object(self, spec: ObjectSpec, *, preferred_index: int = 0, category: str | None = None, name: str | None = None) -> dict[str, Any] | None:
+        corners = nearest_corner_candidates(self.ctx.polygon, inset=max(spec.size_m[0], spec.size_m[1]) * 0.7)
+        if not corners:
+            return None
+        ordered = corners[preferred_index:] + corners[:preferred_index]
+        first_rejection: dict[str, Any] | None = None
+        for center in ordered:
+            clamped_center = clamp_center_inside_room_for_aabb(center, spec.size_m, polygon=self.ctx.polygon, margin=0.03)
+            ok, reason = self.can_place(clamped_center, spec.size_m, 0.0, allow_collision=spec.allow_collision, margin=0.02)
+            if not ok:
+                if first_rejection is None:
+                    first_rejection = {
+                        "category": category or spec.category,
+                        "name": name or spec.name,
+                        "reason": reason,
+                        "center": [clamped_center.x, clamped_center.y],
+                        "size_m": list(spec.size_m),
+                        "yaw_deg": 0.0,
+                    }
+                continue
+            item = self.make_item(spec, clamped_center, 0.0, category=category, name=name)
+            self.placements.append(item)
+            return item
+        if first_rejection:
+            self.rejected.append(first_rejection)
+        return None
+
+    def clone_item_with_new_size(self, item: dict[str, Any], new_size_m: Sequence[float]) -> dict[str, Any]:
+        cloned = copy.deepcopy(item)
+        cloned["size_m"] = [float(new_size_m[0]), float(new_size_m[1]), float(new_size_m[2])]
+        pos = cloned.get("position_m") or [0.0, 0.0, 0.0]
+        yaw = as_float(cloned.get("yaw_deg", cloned.get("rotation_deg")), 0.0)
+        cloned["aabb"] = aabb_from_box(pos, new_size_m, yaw).to_json()
+        return cloned
+
+Название файла: procedural_room_stage.py
+Содержимое файла:
+from __future__ import annotations
+
+import copy
+import dataclasses
+import json
+from pathlib import Path
+from typing import Any
+
+from .bedroom_generator import generate_bedroom
+from .corridor_generator import generate_corridor
+from .living_room_generator import generate_living_room
+from .object_specs import normalize_density
+from .room_context import build_room_context
+from .semantic_polish import apply_procedural_semantic_polish
+from .validation import validate_placements
+
+
+REMOVABLE_GENERATED_CATEGORIES = {
+    "bed",
+    "headboard",
+    "nightstand",
+    "wardrobe",
+    "wardrobe_module",
+    "dresser",
+    "desk",
+    "chair",
+    "bench",
+    "rug",
+    "runner_rug",
+    "table_lamp",
+    "floor_lamp",
+    "wall_light",
+    "ceiling_light",
+    "mirror",
+    "wall_art",
+    "plant",
+    "decor_vase",
+    "decor_books",
+    "decor_box",
+    "decor_tray",
+    "pillow",
+    "blanket",
+    "sofa",
+    "armchair",
+    "coffee_table",
+    "side_table",
+    "tv_stand",
+    "tv",
+    "bookshelf",
+    "console_table",
+    "dining_table",
+    "dining_chair",
+    "ottoman",
+    "cabinet",
+    "shelf",
+    "shoe_cabinet",
+    "coat_rack",
+    "wall_hooks",
+    "umbrella_stand",
+    "entry_bench",
+}
+
+
+SUPPORTED_ROOM_TYPES = {"bedroom", "living_room", "corridor"}
+
+
+def read_json(path: str | Path) -> Any:
+    with Path(path).open("r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def write_json(path: str | Path, data: Any) -> None:
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+
+def _as_bool(value: Any, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    raw = str(value).strip().lower()
+    if raw in {"1", "true", "yes", "y", "on"}:
+        return True
+    if raw in {"0", "false", "no", "n", "off"}:
+        return False
+    return default
+
+
+def _extract_placements(scene: dict[str, Any]) -> list[dict[str, Any]]:
+    placements = scene.get("placements")
+    if isinstance(placements, list):
+        return placements
+    items = scene.get("items")
+    if isinstance(items, list):
+        return items
+    return []
+
+
+def _is_removable_item(item: dict[str, Any]) -> bool:
+    category = str(item.get("category", "")).strip().lower()
+    meta = item.get("meta") if isinstance(item.get("meta"), dict) else {}
+    source = item.get("source") if isinstance(item.get("source"), dict) else {}
+
+    if meta.get("procedural"):
+        return True
+    if category in REMOVABLE_GENERATED_CATEGORIES:
+        return True
+    if str(source.get("placement_source", "")).startswith("procedural_room_stage"):
+        return True
+
+    # Keep obvious room shell/opening/material/curtain objects.
+    keep_tokens = ("wall", "floor", "ceiling", "door", "window", "curtain", "material", "baseboard")
+    if any(token in category for token in keep_tokens):
+        return False
+    return False
+
+
+def _filter_existing_placements(placements: list[dict[str, Any]], *, replace_existing: bool) -> tuple[list[dict[str, Any]], int]:
+    if not replace_existing:
+        return list(placements), 0
+    kept: list[dict[str, Any]] = []
+    removed = 0
+    for item in placements:
+        if _is_removable_item(item):
+            removed += 1
+        else:
+            kept.append(item)
+    return kept, removed
+
+
+def _build_placement_v1(scene: dict[str, Any], placements: list[dict[str, Any]], *, mode: str) -> dict[str, Any]:
+    meta = copy.deepcopy(scene.get("meta") if isinstance(scene.get("meta"), dict) else {})
+    meta.update(
+        {
+            "placer": meta.get("placer", "procedural_room_stage"),
+            "mode": mode,
+            "procedural_room_stage": True,
+        }
+    )
+    return {
+        "schema": "placement.v1",
+        "placer": "procedural_room_stage",
+        "mode": mode,
+        "placements": placements,
+        "meta": meta,
+    }
+
+
+def _dispatch_generator(ctx: Any, density: str, seed: int | None) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    d = normalize_density(density)
+    if ctx.room_type == "bedroom":
+        return generate_bedroom(ctx, density=d, seed=seed)
+    if ctx.room_type == "living_room":
+        return generate_living_room(ctx, density=d, seed=seed)
+    if ctx.room_type == "corridor":
+        return generate_corridor(ctx, density=d, seed=seed)
+    return [], {"status": "unsupported_room_type", "room_type": ctx.room_type}
+
+
+def _counts_by_field(items: list[dict[str, Any]], field: str, *, meta: bool = False) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for item in items:
+        source = item.get("meta") if meta and isinstance(item.get("meta"), dict) else item
+        if not isinstance(source, dict):
+            continue
+        value = str(source.get(field) or "unknown").strip() or "unknown"
+        counts[value] = counts.get(value, 0) + 1
+    return dict(sorted(counts.items()))
+
+
+def apply_procedural_room_stage(
+    *,
+    scene_json_path: str | Path,
+    out_dir: str | Path,
+    prompt: str = "",
+    policy: str = "auto",
+    density: str = "very_high",
+    replace_existing: bool = True,
+    seed: int | None = None,
+    tag: str = "base",
+    enabled_room_types: set[str] | None = None,
+) -> dict[str, Any]:
+    """Apply dense procedural generation to a scene JSON.
+
+    Returns a report dictionary. The report always contains `skipped`; if skipped
+    is false, it also contains `output_scene_json` and `output_placement_json`.
+
+    This function intentionally has no dependency on the rest of the pipeline.
+    It can be called from `run_pipeline.py` or tested as a standalone stage.
+    """
+    scene_json_path = Path(scene_json_path)
+    out_dir = Path(out_dir)
+    scene = read_json(scene_json_path)
+    ctx = build_room_context(scene, prompt=prompt)
+    enabled_room_types = enabled_room_types or SUPPORTED_ROOM_TYPES
+
+    policy_raw = (policy or "auto").strip().lower()
+    if policy_raw in {"never", "off", "false", "0", "none"}:
+        return {
+            "schema": "procedural_room_report/v1",
+            "skipped": True,
+            "reason": "policy_never",
+            "room_type": ctx.room_type,
+            "input_scene_json": str(scene_json_path),
+        }
+
+    if policy_raw == "auto" and ctx.room_type not in enabled_room_types:
+        return {
+            "schema": "procedural_room_report/v1",
+            "skipped": True,
+            "reason": "unsupported_room_type",
+            "room_type": ctx.room_type,
+            "enabled_room_types": sorted(enabled_room_types),
+            "input_scene_json": str(scene_json_path),
+        }
+
+    base_placements = _extract_placements(scene)
+    kept_placements, removed_existing_count = _filter_existing_placements(
+        base_placements,
+        replace_existing=replace_existing,
+    )
+
+    generated, generator_report = _dispatch_generator(ctx, density=density, seed=seed)
+    final_placements = kept_placements + generated
+
+    output_scene = copy.deepcopy(scene)
+    output_scene["placements"] = final_placements
+    output_scene.setdefault("meta", {})
+    if isinstance(output_scene["meta"], dict):
+        output_scene["meta"]["procedural_room_stage"] = {
+            "enabled": True,
+            "room_type": ctx.room_type,
+            "density": normalize_density(density),
+            "replace_existing": replace_existing,
+            "generated_count": len(generated),
+        }
+
+    output_scene, semantic_polish_report = apply_procedural_semantic_polish(
+        output_scene,
+        room_type=ctx.room_type,
+        size_class=ctx.size_class,
+        density=normalize_density(density),
+    )
+    final_placements = _extract_placements(output_scene)
+    generated_after_polish = [
+        item
+        for item in final_placements
+        if isinstance(item, dict)
+        and (
+            (isinstance(item.get("meta"), dict) and item["meta"].get("procedural"))
+            or str((item.get("source") if isinstance(item.get("source"), dict) else {}).get("placement_source", "")).startswith(
+                "procedural_room_stage"
+            )
+        )
+    ]
+    if isinstance(output_scene.get("meta"), dict) and isinstance(output_scene["meta"].get("procedural_room_stage"), dict):
+        output_scene["meta"]["procedural_room_stage"]["generated_count_before_semantic_polish"] = len(generated)
+        output_scene["meta"]["procedural_room_stage"]["generated_count_after_semantic_polish"] = len(generated_after_polish)
+
+    stem = f"procedural_room.{tag}"
+    output_scene_json = out_dir / f"scene_{stem}.v1.json"
+    output_placement_json = out_dir / f"placement_{stem}.v1.json"
+    report_json = out_dir / f"procedural_room_report.{tag}.json"
+
+    placement_v1 = _build_placement_v1(output_scene, final_placements, mode=f"procedural_room_{tag}")
+
+    validation = validate_placements(ctx, final_placements)
+    report = {
+        "schema": "procedural_room_report/v1",
+        "skipped": False,
+        "policy": policy_raw,
+        "room_type": ctx.room_type,
+        "room_id": ctx.room_id,
+        "area_m2": ctx.area_m2,
+        "size_class": ctx.size_class,
+        "density": normalize_density(density),
+        "replace_existing": replace_existing,
+        "input_scene_json": str(scene_json_path),
+        "output_scene_json": str(output_scene_json),
+        "output_placement_json": str(output_placement_json),
+        "removed_existing_count": removed_existing_count,
+        "kept_existing_count": len(kept_placements),
+        "generated_count": len(generated_after_polish),
+        "generated_count_before_semantic_polish": len(generated),
+        "generated_count_after_semantic_polish": len(generated_after_polish),
+        "counts_by_layer": _counts_by_field(generated_after_polish, "density_layer", meta=True),
+        "counts_by_category": _counts_by_field(generated_after_polish, "category"),
+        "final_count": len(final_placements),
+        "semantic_polish": semantic_polish_report,
+        "generator": generator_report,
+        "validation": validation,
+        "warnings": [],
+    }
+
+    if not generated:
+        report["warnings"].append("No procedural objects were generated.")
+
+    write_json(output_scene_json, output_scene)
+    write_json(output_placement_json, placement_v1)
+    write_json(report_json, report)
+    report["report_json"] = str(report_json)
+    return report
+
+
+def _get_attr(obj: Any, names: list[str]) -> Any:
+    for name in names:
+        if hasattr(obj, name):
+            return getattr(obj, name)
+    if isinstance(obj, dict):
+        for name in names:
+            if name in obj:
+                return obj[name]
+    return None
+
+
+def _updated_artifacts_copy(artifacts: Any, *, scene_path: str, placement_path: str) -> Any:
+    """Return artifacts copy with scene/placement fields updated.
+
+    The existing project may use a dataclass, a mutable object or a dict.
+    This helper supports all three without importing project-specific classes.
+    """
+    scene_field_candidates = ["scene_v1", "scene_v1_json", "scene_json", "scene_path"]
+    placement_field_candidates = ["placement_v1", "placement_v1_json", "placement_json", "placement_path"]
+
+    if dataclasses.is_dataclass(artifacts):
+        updates: dict[str, Any] = {}
+        field_names = {field.name for field in dataclasses.fields(artifacts)}
+        for name in scene_field_candidates:
+            if name in field_names:
+                updates[name] = Path(scene_path)
+                break
+        for name in placement_field_candidates:
+            if name in field_names:
+                updates[name] = Path(placement_path)
+                break
+        if updates:
+            return dataclasses.replace(artifacts, **updates)
+
+    if isinstance(artifacts, dict):
+        copied = dict(artifacts)
+        for name in scene_field_candidates:
+            if name in copied:
+                copied[name] = scene_path
+                break
+        for name in placement_field_candidates:
+            if name in copied:
+                copied[name] = placement_path
+                break
+        return copied
+
+    copied = copy.copy(artifacts)
+    for name in scene_field_candidates:
+        if hasattr(copied, name):
+            setattr(copied, name, scene_path)
+            break
+    for name in placement_field_candidates:
+        if hasattr(copied, name):
+            setattr(copied, name, placement_path)
+            break
+    return copied
+
+
+def apply_procedural_room_stage_to_artifacts(
+    *,
+    artifacts: Any,
+    run_dir: str | Path,
+    prompt: str = "",
+    policy: str = "auto",
+    density: str = "very_high",
+    replace_existing: bool = True,
+    seed: int | None = None,
+    tag: str = "base",
+    enabled_room_types: set[str] | None = None,
+) -> tuple[Any, dict[str, Any]]:
+    """Pipeline-friendly wrapper.
+
+    It expects an artifact object containing one of:
+        - scene_v1
+        - scene_v1_json
+        - scene_json
+        - scene_path
+    and updates one of:
+        - placement_v1
+        - placement_v1_json
+        - placement_json
+        - placement_path
+
+    It returns `(updated_artifacts, report)`.
+    """
+    scene_path = _get_attr(artifacts, ["scene_v1", "scene_v1_json", "scene_json", "scene_path"])
+    if not scene_path:
+        report = {
+            "schema": "procedural_room_report/v1",
+            "skipped": True,
+            "reason": "artifact_has_no_scene_path",
+        }
+        return artifacts, report
+
+    report = apply_procedural_room_stage(
+        scene_json_path=scene_path,
+        out_dir=run_dir,
+        prompt=prompt,
+        policy=policy,
+        density=density,
+        replace_existing=replace_existing,
+        seed=seed,
+        tag=tag,
+        enabled_room_types=enabled_room_types,
+    )
+
+    if report.get("skipped"):
+        return artifacts, report
+
+    updated = _updated_artifacts_copy(
+        artifacts,
+        scene_path=str(report["output_scene_json"]),
+        placement_path=str(report["output_placement_json"]),
+    )
+    return updated, report
+
+Название файла: room_context.py
+Содержимое файла:
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Any
+
+from .geometry import (
+    AABB,
+    Vec2,
+    as_float,
+    build_wall_segments,
+    opening_clearance_aabb,
+    polygon_area,
+    polygon_bounds,
+    polygon_centroid,
+    polygon_from_json,
+)
+
+
+@dataclass
+class RoomContext:
+    raw_scene: dict[str, Any]
+    room: dict[str, Any]
+    polygon: list[Vec2]
+    walls: list[Any]
+    doors: list[dict[str, Any]]
+    windows: list[dict[str, Any]]
+    room_id: str
+    room_type: str
+    area_m2: float
+    ceiling_height_m: float
+    bounds: tuple[float, float, float, float]
+    centroid: Vec2
+    door_clearance_zones: list[AABB] = field(default_factory=list)
+
+    @property
+    def width_m(self) -> float:
+        return max(0.0, self.bounds[2] - self.bounds[0])
+
+    @property
+    def depth_m(self) -> float:
+        return max(0.0, self.bounds[3] - self.bounds[1])
+
+    @property
+    def min_side_m(self) -> float:
+        return min(self.width_m, self.depth_m)
+
+    @property
+    def max_side_m(self) -> float:
+        return max(self.width_m, self.depth_m)
+
+    @property
+    def size_class(self) -> str:
+        area = self.area_m2
+        if area < 6.0:
+            return "tiny"
+        if area < 10.0:
+            return "small"
+        if area < 18.0:
+            return "medium"
+        if area < 30.0:
+            return "large"
+        return "xlarge"
+
+    @property
+    def aspect_ratio(self) -> float:
+        if self.min_side_m <= 0.001:
+            return 1.0
+        return self.max_side_m / self.min_side_m
+
+    @property
+    def is_long_narrow(self) -> bool:
+        return self.aspect_ratio >= 2.1
+
+
+def _extract_room(scene: dict[str, Any]) -> dict[str, Any]:
+    room = scene.get("room")
+    if isinstance(room, dict):
+        return room
+    nested = scene.get("data")
+    if isinstance(nested, dict) and isinstance(nested.get("room"), dict):
+        return nested["room"]
+    return {}
+
+
+def normalize_room_type(room_type: Any, prompt: str = "", area_m2: float | None = None) -> str:
+    raw = str(room_type or "").strip().lower()
+    prompt_l = (prompt or "").lower()
+
+    mapping = {
+        "bedroom": "bedroom",
+        "bed room": "bedroom",
+        "спальня": "bedroom",
+        "living_room": "living_room",
+        "living room": "living_room",
+        "гостиная": "living_room",
+        "hall": "corridor",
+        "corridor": "corridor",
+        "коридор": "corridor",
+        "прихожая": "corridor",
+        "room": "room",
+        "studio": "studio",
+        "kitchen": "kitchen",
+        "bathroom": "bathroom",
+        "joint_bathroom": "bathroom",
+        "toilet": "toilet",
+        "wc": "toilet",
+    }
+    if raw in mapping:
+        normalized = mapping[raw]
+    else:
+        normalized = raw
+
+    if normalized in {"room", "", "none", "null"}:
+        if any(token in prompt_l for token in ["спаль", "кровать", "bedroom", "bed "]):
+            return "bedroom"
+        if any(token in prompt_l for token in ["гостин", "диван", "living", "sofa", "tv"]):
+            return "living_room"
+        if area_m2 is not None and area_m2 >= 16.0:
+            return "living_room"
+        return "bedroom"
+
+    if normalized == "studio":
+        if any(token in prompt_l for token in ["спаль", "кровать", "bedroom"]):
+            return "bedroom"
+        return "living_room"
+
+    return normalized
+
+
+def build_room_context(scene: dict[str, Any], prompt: str = "") -> RoomContext:
+    room = _extract_room(scene)
+    polygon = polygon_from_json(room.get("floor_polygon") or room.get("floor_polygon_xz") or [])
+    if not polygon:
+        width = as_float(room.get("width_m"), 3.5)
+        depth = as_float(room.get("depth_m"), 4.0)
+        polygon = [
+            Vec2(0.0, 0.0),
+            Vec2(width, 0.0),
+            Vec2(width, depth),
+            Vec2(0.0, depth),
+        ]
+
+    doors = list(room.get("doors") or [])
+    windows = list(room.get("windows") or [])
+    walls = build_wall_segments(polygon, room.get("walls") or [], doors=doors, windows=windows)
+    area = as_float(room.get("area_m2"), polygon_area(polygon))
+    if area <= 0.001:
+        area = polygon_area(polygon)
+    bounds = polygon_bounds(polygon)
+    ceiling = as_float(room.get("ceiling_height_m", room.get("ceiling_height")), 2.8)
+    raw_type = room.get("room_type", room.get("type", "room"))
+    normalized_type = normalize_room_type(raw_type, prompt=prompt, area_m2=area)
+
+    ctx = RoomContext(
+        raw_scene=scene,
+        room=room,
+        polygon=polygon,
+        walls=walls,
+        doors=doors,
+        windows=windows,
+        room_id=str(room.get("id", "room")),
+        room_type=normalized_type,
+        area_m2=area,
+        ceiling_height_m=ceiling,
+        bounds=bounds,
+        centroid=polygon_centroid(polygon),
+    )
+
+    wall_by_id = {wall.id: wall for wall in walls}
+    for door in doors:
+        wall_id = str(door.get("wall_id", ""))
+        wall = wall_by_id.get(wall_id)
+        if wall is None:
+            continue
+        zone = opening_clearance_aabb(wall, door, polygon, clearance_depth=1.0, clearance_side=0.2)
+        if zone is not None:
+            ctx.door_clearance_zones.append(zone)
+    return ctx
+
+Название файла: semantic_polish.py
+Содержимое файла:
+from __future__ import annotations
+
+import copy
+from collections import Counter, defaultdict
+from typing import Any, Iterable
+
+
+WALL_MOUNTED_CATEGORIES = {"wall_art", "mirror", "wall_hooks", "wall_light", "tv"}
+CEILING_MOUNTED_CATEGORIES = {"ceiling_light"}
+SOFT_FLOOR_CATEGORIES = {"rug", "runner_rug"}
+SOFT_ON_OBJECT_CATEGORIES = {"pillow", "blanket"}
+ON_TOP_CATEGORIES = {"decor_books", "decor_vase", "decor_box", "decor_tray", "table_lamp", "plant", "storage_basket", "tv_accessory"}
+SOLID_FLOOR_CATEGORIES = {
+    "bed",
+    "nightstand",
+    "wardrobe",
+    "wardrobe_module",
+    "dresser",
+    "desk",
+    "chair",
+    "bench",
+    "sofa",
+    "armchair",
+    "coffee_table",
+    "side_table",
+    "tv_stand",
+    "bookshelf",
+    "console_table",
+    "dining_table",
+    "dining_chair",
+    "ottoman",
+    "cabinet",
+    "shelf",
+    "shoe_cabinet",
+    "coat_rack",
+    "umbrella_stand",
+    "entry_bench",
+    "plant",
+    "floor_lamp",
+    "storage_basket",
+}
+
+WARDROBE_TOP_INVALID_CATEGORIES = {"decor_tray", "decor_vase", "decor_books"}
+SURFACE_LIMITS_BY_PARENT_CATEGORY = {
+    "nightstand": 3,
+    "coffee_table": 6,
+    "side_table": 3,
+    "dresser": 4,
+    "console_table": 4,
+    "tv_stand": 5,
+    "bookshelf": 10,
+    "shoe_cabinet": 3,
+    "entry_bench": 3,
+}
+CATEGORY_KEEP_PRIORITY = {
+    "bed": 100,
+    "sofa": 95,
+    "wardrobe": 90,
+    "wardrobe_module": 90,
+    "dresser": 85,
+    "tv_stand": 84,
+    "bookshelf": 82,
+    "shoe_cabinet": 82,
+    "nightstand": 78,
+    "coffee_table": 76,
+    "side_table": 72,
+    "console_table": 72,
+    "entry_bench": 70,
+    "bench": 70,
+    "armchair": 68,
+    "chair": 65,
+    "desk": 65,
+    "floor_lamp": 35,
+    "plant": 30,
+    "umbrella_stand": 28,
+    "storage_basket": 25,
+}
+CATEGORY_LIMITS = {
+    "bedroom": {
+        "very_high": {"wall_art": 4, "wall_light": 2},
+        "high": {"wall_art": 3, "wall_light": 2},
+        "normal": {"wall_art": 2, "wall_light": 1},
+    },
+    "living_room": {
+        "very_high": {"wall_art": 8},
+        "high": {"wall_art": 5},
+        "normal": {"wall_art": 3},
+    },
+    "corridor": {
+        "very_high": {"wall_art": 4, "wall_hooks": 2},
+        "high": {"wall_art": 3, "wall_hooks": 2},
+        "normal": {"wall_art": 2, "wall_hooks": 1},
+    },
+}
+SMALL_BEDROOM_CATEGORY_LIMITS = {"wall_art": 2, "pillow": 2}
+SMALL_BEDROOM_ON_TOP_LIMIT = 5
+TALL_WALL_BLOCKING_CATEGORIES = {"wardrobe", "bookshelf", "cabinet"}
+
+
+def _meta(item: dict[str, Any]) -> dict[str, Any]:
+    meta = item.get("meta")
+    if not isinstance(meta, dict):
+        meta = {}
+        item["meta"] = meta
+    return meta
+
+
+def _category(item: dict[str, Any]) -> str:
+    return str(item.get("category") or "").strip().lower()
+
+
+def _to_float(value: Any, default: float = 0.0) -> float:
+    try:
+        if value is None:
+            return default
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _mount_type(item: dict[str, Any]) -> str:
+    return str(item.get("mount_type") or "").strip().lower()
+
+
+def _parent_id(item: dict[str, Any]) -> str:
+    meta = item.get("meta") if isinstance(item.get("meta"), dict) else {}
+    constraints = item.get("constraints") if isinstance(item.get("constraints"), dict) else {}
+    return str(meta.get("parent_id") or meta.get("support_id") or constraints.get("parent_id") or constraints.get("support_id") or "")
+
+
+def _item_id(item: dict[str, Any]) -> str:
+    return str(item.get("id") or "")
+
+
+def _physical_role(item: dict[str, Any]) -> str:
+    meta = item.get("meta") if isinstance(item.get("meta"), dict) else {}
+    role = str(meta.get("physical_role") or "").strip().lower()
+    if role:
+        return role
+    category = _category(item)
+    mount = _mount_type(item)
+    if mount == "ceiling" or category in CEILING_MOUNTED_CATEGORIES:
+        return "ceiling_mounted"
+    if mount == "wall" or category in WALL_MOUNTED_CATEGORIES:
+        return "wall_mounted"
+    if _parent_id(item) or mount == "on_top" or meta.get("support_relation") == "on_top":
+        if category in SOFT_ON_OBJECT_CATEGORIES:
+            return "soft_on_object"
+        return "on_top"
+    if category in SOFT_FLOOR_CATEGORIES:
+        return "soft_floor"
+    if category in SOLID_FLOOR_CATEGORIES:
+        return "solid_floor"
+    return "soft_floor"
+
+
+def _replace_with_supplier_for_role(category: str, role: str) -> bool:
+    if role == "solid_floor":
+        return True
+    if role == "ceiling_mounted":
+        return True
+    if role == "wall_mounted":
+        return category in {"mirror", "wall_light", "tv"}
+    if role in {"on_top", "soft_on_object", "soft_floor", "decorative_soft"}:
+        return False
+    return False
+
+
+def _removal(item: dict[str, Any], reason: str) -> dict[str, Any]:
+    return {
+        "id": item.get("id"),
+        "category": item.get("category"),
+        "name": item.get("name"),
+        "reason": reason,
+    }
+
+
+def _aabb(item: dict[str, Any]) -> dict[str, float] | None:
+    aabb = item.get("aabb")
+    if not isinstance(aabb, dict):
+        return None
+    try:
+        return {
+            "x_min": float(aabb.get("x_min")),
+            "x_max": float(aabb.get("x_max")),
+            "y_min": float(aabb.get("y_min")),
+            "y_max": float(aabb.get("y_max")),
+            "z_min": float(aabb.get("z_min")),
+            "z_max": float(aabb.get("z_max")),
+        }
+    except Exception:
+        return None
+
+
+def _intersects_xy(a: dict[str, float], b: dict[str, float], margin: float = 0.0) -> bool:
+    return not (
+        a["x_max"] + margin <= b["x_min"]
+        or b["x_max"] + margin <= a["x_min"]
+        or a["y_max"] + margin <= b["y_min"]
+        or b["y_max"] + margin <= a["y_min"]
+    )
+
+
+def normalize_item_semantics(item: dict[str, Any]) -> None:
+    category = _category(item)
+    meta = _meta(item)
+
+    if category in WALL_MOUNTED_CATEGORIES:
+        item["mount_type"] = "wall"
+    elif category in CEILING_MOUNTED_CATEGORIES:
+        item["mount_type"] = "ceiling"
+    elif _parent_id(item) or meta.get("support_relation") == "on_top":
+        item["mount_type"] = "on_top"
+
+    role = _physical_role(item)
+    meta["physical_role"] = role
+    meta["replace_with_supplier"] = _replace_with_supplier_for_role(category, role)
+    if role == "wall_mounted":
+        item["mount_type"] = "wall"
+    elif role == "ceiling_mounted":
+        item["mount_type"] = "ceiling"
+    elif role in {"on_top", "soft_on_object"}:
+        item["mount_type"] = "on_top"
+        meta["allow_collision"] = True
+        meta.setdefault("support_relation", "on_top")
+    elif role in {"soft_floor"}:
+        meta["allow_collision"] = True
+
+
+def remove_invalid_wardrobe_top_items(items: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    by_id = {_item_id(item): item for item in items if _item_id(item)}
+    kept: list[dict[str, Any]] = []
+    removed: list[dict[str, Any]] = []
+    for item in items:
+        parent = by_id.get(_parent_id(item))
+        if parent and _category(parent) in {"wardrobe", "wardrobe_module"} and _category(item) in WARDROBE_TOP_INVALID_CATEGORIES:
+            removed.append(_removal(item, "invalid_wardrobe_top_item"))
+            continue
+        kept.append(item)
+    return kept, removed
+
+
+def enforce_category_limits(items: list[dict[str, Any]], *, room_type: str, size_class: str, density: str) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    limits = dict(CATEGORY_LIMITS.get(room_type, {}).get(density, {}))
+    if size_class == "small" and room_type == "corridor":
+        limits["wall_art"] = min(limits.get("wall_art", 4), 4)
+        limits["wall_hooks"] = min(limits.get("wall_hooks", 2), 2)
+    if not limits:
+        return items, []
+
+    seen: dict[str, int] = defaultdict(int)
+    kept: list[dict[str, Any]] = []
+    removed: list[dict[str, Any]] = []
+    for item in items:
+        category = _category(item)
+        limit = limits.get(category)
+        if limit is not None:
+            seen[category] += 1
+            if seen[category] > limit:
+                removed.append(_removal(item, "category_limit"))
+                continue
+        kept.append(item)
+    return kept, removed
+
+
+def enforce_surface_limits(items: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    by_id = {_item_id(item): item for item in items if _item_id(item)}
+    children_by_parent: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for item in items:
+        parent_id = _parent_id(item)
+        if parent_id:
+            children_by_parent[parent_id].append(item)
+
+    remove_ids: set[str] = set()
+    removed: list[dict[str, Any]] = []
+    for parent_id, children in children_by_parent.items():
+        parent = by_id.get(parent_id)
+        if not parent:
+            continue
+        limit = SURFACE_LIMITS_BY_PARENT_CATEGORY.get(_category(parent))
+        if limit is None or len(children) <= limit:
+            continue
+        for child in children[limit:]:
+            child_id = _item_id(child)
+            if child_id:
+                remove_ids.add(child_id)
+            removed.append(_removal(child, "surface_limit"))
+
+    if not remove_ids:
+        return items, removed
+    return [item for item in items if _item_id(item) not in remove_ids], removed
+
+
+def repair_wall_mounted_overlaps(items: list[dict[str, Any]], *, room: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    del room
+    kept: list[dict[str, Any]] = []
+    kept_wall_aabbs: list[tuple[dict[str, Any], dict[str, float]]] = []
+    removed: list[dict[str, Any]] = []
+    tall_blockers: list[tuple[dict[str, Any], dict[str, float]]] = []
+    for item in items:
+        if _physical_role(item) != "solid_floor":
+            continue
+        category = _category(item)
+        aabb = _aabb(item)
+        if aabb is None:
+            continue
+        if category in TALL_WALL_BLOCKING_CATEGORIES or (category == "dresser" and aabb["z_max"] - aabb["z_min"] > 1.1):
+            tall_blockers.append((item, aabb))
+
+    for item in items:
+        if _physical_role(item) != "wall_mounted":
+            kept.append(item)
+            continue
+        aabb = _aabb(item)
+        if aabb is None:
+            kept.append(item)
+            continue
+        wall_id = str((_meta(item).get("wall_id") or item.get("wall_id") or ""))
+        overlaps = False
+        for blocker, blocker_aabb in tall_blockers:
+            blocker_wall = str((_meta(blocker).get("wall_id") or blocker.get("wall_id") or ""))
+            if wall_id and blocker_wall and wall_id != blocker_wall:
+                continue
+            if _intersects_xy(aabb, blocker_aabb, margin=0.08):
+                overlaps = True
+                break
+        for other, other_aabb in kept_wall_aabbs:
+            other_wall = str((_meta(other).get("wall_id") or other.get("wall_id") or ""))
+            if wall_id and other_wall and wall_id != other_wall:
+                continue
+            if _intersects_xy(aabb, other_aabb, margin=0.03):
+                overlaps = True
+                break
+        if overlaps:
+            removed.append(_removal(item, "wall_mounted_overlap"))
+            continue
+        kept.append(item)
+        kept_wall_aabbs.append((item, aabb))
+    return kept, removed
+
+
+def _axis_gap(a: dict[str, float], b: dict[str, float]) -> float:
+    x_overlap = not (a["x_max"] <= b["x_min"] or b["x_max"] <= a["x_min"])
+    y_overlap = not (a["y_max"] <= b["y_min"] or b["y_max"] <= a["y_min"])
+    if y_overlap:
+        return max(b["x_min"] - a["x_max"], a["x_min"] - b["x_max"], 0.0)
+    if x_overlap:
+        return max(b["y_min"] - a["y_max"], a["y_min"] - b["y_max"], 0.0)
+    return max(
+        min(abs(b["x_min"] - a["x_max"]), abs(a["x_min"] - b["x_max"])),
+        min(abs(b["y_min"] - a["y_max"]), abs(a["y_min"] - b["y_max"])),
+    )
+
+
+def enforce_bedroom_functional_clearances(items: list[dict[str, Any]], *, room: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    if str(room.get("room_type") or room.get("type") or "").strip().lower() not in {"bedroom", "bed room", "спальня"}:
+        return items, []
+
+    remove_ids: set[str] = set()
+    removed: list[dict[str, Any]] = []
+    solid = [(item, _aabb(item)) for item in items if _physical_role(item) == "solid_floor"]
+    solid = [(item, aabb) for item, aabb in solid if aabb is not None]
+    blockers = [(item, aabb) for item, aabb in solid if _category(item) in {"bed", "bench"}]
+
+    for item, aabb in solid:
+        if _category(item) != "wardrobe":
+            continue
+        for blocker, blocker_aabb in blockers:
+            if _axis_gap(aabb, blocker_aabb) < 0.55:
+                item_id = _item_id(item)
+                if item_id and item_id not in remove_ids:
+                    remove_ids.add(item_id)
+                    removed.append(_removal(item, "wardrobe_access_gap"))
+                break
+
+    area = _to_float(room.get("area_m2"), 0.0)
+    if area <= 0.0:
+        aabbs = [_aabb(item) for item in items]
+        xs = [v for aabb in aabbs if aabb for v in (aabb["x_min"], aabb["x_max"])]
+        ys = [v for aabb in aabbs if aabb for v in (aabb["y_min"], aabb["y_max"])]
+        if xs and ys:
+            area = (max(xs) - min(xs)) * (max(ys) - min(ys))
+    if area <= 7.0:
+        counts: Counter[str] = Counter()
+        on_top_count = 0
+        for item in items:
+            item_id = _item_id(item)
+            if item_id in remove_ids:
+                continue
+            category = _category(item)
+            role = _physical_role(item)
+            if category in SMALL_BEDROOM_CATEGORY_LIMITS:
+                counts[category] += 1
+                if counts[category] > SMALL_BEDROOM_CATEGORY_LIMITS[category]:
+                    remove_ids.add(item_id)
+                    removed.append(_removal(item, "small_bedroom_density_limit"))
+                    continue
+            if role == "on_top":
+                on_top_count += 1
+                if on_top_count > SMALL_BEDROOM_ON_TOP_LIMIT:
+                    remove_ids.add(item_id)
+                    removed.append(_removal(item, "small_bedroom_on_top_limit"))
+                    continue
+            if category in {"floor_lamp", "dresser"}:
+                remove_ids.add(item_id)
+                removed.append(_removal(item, "small_bedroom_floor_clutter"))
+
+    if not remove_ids:
+        return items, []
+    return [item for item in items if _item_id(item) not in remove_ids], removed
+
+
+def repair_solid_floor_overlaps(items: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    kept: list[dict[str, Any]] = []
+    kept_aabbs: list[tuple[dict[str, Any], dict[str, float]]] = []
+    removed: list[dict[str, Any]] = []
+    removed_ids: set[str] = set()
+
+    def priority(item: dict[str, Any]) -> int:
+        return CATEGORY_KEEP_PRIORITY.get(_category(item), 50)
+
+    for item in items:
+        item_id = _item_id(item)
+        if item_id in removed_ids:
+            continue
+        if _physical_role(item) != "solid_floor":
+            kept.append(item)
+            continue
+        aabb = _aabb(item)
+        if aabb is None:
+            kept.append(item)
+            continue
+
+        overlapping_index: int | None = None
+        for idx, (_other, other_aabb) in enumerate(kept_aabbs):
+            if _intersects_xy(aabb, other_aabb, margin=0.02):
+                overlapping_index = idx
+                break
+        if overlapping_index is None:
+            kept.append(item)
+            kept_aabbs.append((item, aabb))
+            continue
+
+        other, _other_aabb = kept_aabbs[overlapping_index]
+        if priority(item) <= priority(other):
+            removed.append(_removal(item, "solid_floor_overlap"))
+            if item_id:
+                removed_ids.add(item_id)
+            continue
+
+        other_id = _item_id(other)
+        removed.append(_removal(other, "solid_floor_overlap"))
+        if other_id:
+            removed_ids.add(other_id)
+        kept = [x for x in kept if _item_id(x) != other_id]
+        kept_aabbs.pop(overlapping_index)
+        kept.append(item)
+        kept_aabbs.append((item, aabb))
+
+    return kept, removed
+
+
+def apply_procedural_semantic_polish(
+    scene: dict[str, Any],
+    *,
+    room_type: str,
+    size_class: str,
+    density: str,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Return polished scene and report.
+
+    This function is safe to call repeatedly. It is deterministic and does not
+    require external dependencies.
+    """
+    next_scene = copy.deepcopy(scene)
+    room = next_scene.get("room") if isinstance(next_scene.get("room"), dict) else {}
+    placements = next_scene.get("placements")
+    if not isinstance(placements, list):
+        report = {
+            "schema": "procedural_semantic_polish/v1",
+            "skipped": True,
+            "reason": "missing_placements_list",
+        }
+        return next_scene, report
+
+    before_count = len(placements)
+    for item in placements:
+        if isinstance(item, dict):
+            normalize_item_semantics(item)
+
+    items = [item for item in placements if isinstance(item, dict)]
+    removed_all: list[dict[str, Any]] = []
+
+    items, removed = remove_invalid_wardrobe_top_items(items)
+    removed_all.extend(removed)
+
+    items, removed = enforce_category_limits(items, room_type=room_type, size_class=size_class, density=density)
+    removed_all.extend(removed)
+
+    for item in items:
+        normalize_item_semantics(item)
+
+    items, removed = enforce_surface_limits(items)
+    removed_all.extend(removed)
+
+    items, removed = repair_solid_floor_overlaps(items)
+    removed_all.extend(removed)
+
+    items, removed = enforce_bedroom_functional_clearances(items, room=room)
+    removed_all.extend(removed)
+
+    items, removed = repair_wall_mounted_overlaps(items, room=room)
+    removed_all.extend(removed)
+
+    for item in items:
+        normalize_item_semantics(item)
+
+    next_scene["placements"] = items
+
+    roles = Counter(_physical_role(item) for item in items)
+    by_category = Counter(_category(item) for item in items)
+    by_mount = Counter(str(item.get("mount_type") or "unknown") for item in items)
+    removed_by_reason = Counter(str(item.get("reason") or "unknown") for item in removed_all)
+
+    report = {
+        "schema": "procedural_semantic_polish/v1",
+        "skipped": False,
+        "room_type": room_type,
+        "size_class": size_class,
+        "density": density,
+        "before_count": before_count,
+        "after_count": len(items),
+        "removed_count": len(removed_all),
+        "removed_by_reason": dict(sorted(removed_by_reason.items())),
+        "counts_by_physical_role": dict(sorted(roles.items())),
+        "counts_by_mount_type": dict(sorted(by_mount.items())),
+        "counts_by_category": dict(sorted(by_category.items())),
+        "removed": removed_all,
+    }
+    return next_scene, report
+
+
+def solid_floor_items(items: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [item for item in items if isinstance(item, dict) and _physical_role(item) == "solid_floor"]
+
+
+def wall_mounted_items(items: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [item for item in items if isinstance(item, dict) and _physical_role(item) == "wall_mounted"]
+
+
+def on_top_items(items: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [item for item in items if isinstance(item, dict) and _physical_role(item) in {"on_top", "soft_on_object"}]
+
+Название файла: validation.py
+Содержимое файла:
+from __future__ import annotations
+
+from collections import deque
+from typing import Any
+
+from .geometry import AABB, as_float, object_footprint_inside_polygon, point_in_polygon, polygon_bounds, Vec2
+from .placement_engine import COLLISION_IGNORE_CATEGORIES
+from .room_context import RoomContext
+
+
+NON_SOLID_FALLBACK_CATEGORIES = {
+    "rug",
+    "runner_rug",
+    "pillow",
+    "blanket",
+    "wall_art",
+    "mirror",
+    "wall_light",
+    "wall_hooks",
+    "ceiling_light",
+    "tv",
+    "decor_books",
+    "decor_vase",
+    "decor_box",
+    "decor_tray",
+    "table_lamp",
+}
+
+
+def _aabb_from_item(item: dict[str, Any]) -> AABB | None:
+    aabb = item.get("aabb")
+    if not isinstance(aabb, dict):
+        return None
+    return AABB(
+        x_min=as_float(aabb.get("x_min")),
+        x_max=as_float(aabb.get("x_max")),
+        y_min=as_float(aabb.get("y_min")),
+        y_max=as_float(aabb.get("y_max")),
+        z_min=as_float(aabb.get("z_min")),
+        z_max=as_float(aabb.get("z_max")),
+    )
+
+
+def is_solid_floor_obstacle(item: dict[str, Any]) -> bool:
+    meta = item.get("meta") if isinstance(item.get("meta"), dict) else {}
+    role = str(meta.get("physical_role") or "").strip().lower()
+    if role:
+        return role == "solid_floor"
+
+    category = str(item.get("category", "")).strip().lower()
+    constraints = item.get("constraints") if isinstance(item.get("constraints"), dict) else {}
+    mount_type = str(item.get("mount_type") or constraints.get("mount_type") or "").strip().lower()
+    layer = str(meta.get("density_layer", "")).strip().lower()
+
+    if mount_type in {"wall", "ceiling", "on_top"}:
+        return False
+    if meta.get("allow_collision"):
+        return False
+    if meta.get("support_relation") == "on_top":
+        return False
+    if category in NON_SOLID_FALLBACK_CATEGORIES:
+        return False
+    if category in COLLISION_IGNORE_CATEGORIES and layer in {"soft_decor", "decor", "wall_decor", "textile", "lighting", "electronics"}:
+        return False
+    if layer in {"soft_decor", "decor", "wall_decor", "textile", "lighting", "electronics"}:
+        return False
+    return True
+
+
+def _is_soft_validation_item(item: dict[str, Any]) -> bool:
+    return not is_solid_floor_obstacle(item)
+
+
+def _aabb_contains_xy(aabb: AABB, x: float, y: float, margin: float = 0.0) -> bool:
+    return aabb.x_min - margin <= x <= aabb.x_max + margin and aabb.y_min - margin <= y <= aabb.y_max + margin
+
+
+def _gap_between(a: AABB, b: AABB) -> float:
+    x_overlap = not (a.x_max <= b.x_min or b.x_max <= a.x_min)
+    y_overlap = not (a.y_max <= b.y_min or b.y_max <= a.y_min)
+    if y_overlap:
+        return max(b.x_min - a.x_max, a.x_min - b.x_max, 0.0)
+    if x_overlap:
+        return max(b.y_min - a.y_max, a.y_min - b.y_max, 0.0)
+    return max(
+        min(abs(b.x_min - a.x_max), abs(a.x_min - b.x_max)),
+        min(abs(b.y_min - a.y_max), abs(a.y_min - b.y_max)),
+    )
+
+
+def _sample_access_points(aabb: AABB, *, clearance: float = 0.45, step: float = 0.15) -> list[tuple[float, float]]:
+    points: list[tuple[float, float]] = []
+    y = aabb.y_min
+    while y <= aabb.y_max + 1e-6:
+        points.append((aabb.x_min - clearance, y))
+        points.append((aabb.x_max + clearance, y))
+        y += step
+    x = aabb.x_min
+    while x <= aabb.x_max + 1e-6:
+        points.append((x, aabb.y_min - clearance))
+        points.append((x, aabb.y_max + clearance))
+        x += step
+    return points
+
+
+def _reachable_points(ctx: RoomContext, solid_aabbs: list[AABB], *, step: float = 0.12) -> set[tuple[int, int]]:
+    min_x, min_y, max_x, max_y = polygon_bounds(ctx.polygon)
+
+    def to_cell(x: float, y: float) -> tuple[int, int]:
+        return (round((x - min_x) / step), round((y - min_y) / step))
+
+    def from_cell(cell: tuple[int, int]) -> tuple[float, float]:
+        return (min_x + cell[0] * step, min_y + cell[1] * step)
+
+    def is_free(x: float, y: float) -> bool:
+        if not point_in_polygon(Vec2(x, y), ctx.polygon):
+            return False
+        return not any(_aabb_contains_xy(aabb, x, y, margin=0.03) for aabb in solid_aabbs)
+
+    starts: list[tuple[int, int]] = []
+    for zone in ctx.door_clearance_zones:
+        x = zone.x_min
+        while x <= zone.x_max + 1e-6:
+            y = zone.y_min
+            while y <= zone.y_max + 1e-6:
+                if is_free(x, y):
+                    starts.append(to_cell(x, y))
+                y += step
+            x += step
+    if not starts and is_free(ctx.centroid.x, ctx.centroid.y):
+        starts.append(to_cell(ctx.centroid.x, ctx.centroid.y))
+
+    seen: set[tuple[int, int]] = set(starts)
+    queue: deque[tuple[int, int]] = deque(starts)
+    max_i = round((max_x - min_x) / step)
+    max_j = round((max_y - min_y) / step)
+    while queue:
+        cell = queue.popleft()
+        for di, dj in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+            nxt = (cell[0] + di, cell[1] + dj)
+            if nxt in seen or nxt[0] < 0 or nxt[1] < 0 or nxt[0] > max_i or nxt[1] > max_j:
+                continue
+            x, y = from_cell(nxt)
+            if not is_free(x, y):
+                continue
+            seen.add(nxt)
+            queue.append(nxt)
+    return seen
+
+
+def _bedroom_functional_clearance_violations(ctx: RoomContext, solid_items: list[tuple[dict[str, Any], AABB]]) -> list[dict[str, Any]]:
+    if ctx.room_type != "bedroom":
+        return []
+
+    violations: list[dict[str, Any]] = []
+    room_min_x, _room_min_y, room_max_x, _room_max_y = ctx.bounds
+    room_width = room_max_x - room_min_x
+    solid_aabbs = [aabb for _item, aabb in solid_items]
+    reachable = _reachable_points(ctx, solid_aabbs)
+    min_x, min_y, _max_x, _max_y = polygon_bounds(ctx.polygon)
+    step = 0.12
+
+    def reachable_xy(x: float, y: float) -> bool:
+        cell = (round((x - min_x) / step), round((y - min_y) / step))
+        return cell in reachable
+
+    targets = [(item, aabb) for item, aabb in solid_items if str(item.get("category") or "") in {"bed", "dresser", "wardrobe"}]
+    for item, aabb in targets:
+        if not any(reachable_xy(x, y) for x, y in _sample_access_points(aabb)):
+            violations.append({"id": item.get("id"), "category": item.get("category"), "reason": "no_continuous_passage_from_door"})
+
+    for item, aabb in solid_items:
+        if str(item.get("category") or "") != "bed":
+            continue
+        if room_width <= 2.1:
+            left_gap = aabb.x_min - room_min_x
+            right_gap = room_max_x - aabb.x_max
+            if max(left_gap, right_gap) < 0.45:
+                violations.append(
+                    {
+                        "id": item.get("id"),
+                        "category": item.get("category"),
+                        "reason": "bed_splits_tiny_room_width",
+                        "left_gap_m": round(left_gap, 3),
+                        "right_gap_m": round(right_gap, 3),
+                    }
+                )
+
+    blockers = [(item, aabb) for item, aabb in solid_items if str(item.get("category") or "") in {"bed", "bench"}]
+    for item, aabb in solid_items:
+        if str(item.get("category") or "") != "wardrobe":
+            continue
+        for blocker, blocker_aabb in blockers:
+            gap = _gap_between(aabb, blocker_aabb)
+            if gap < 0.55:
+                violations.append(
+                    {
+                        "id": item.get("id"),
+                        "category": item.get("category"),
+                        "reason": "wardrobe_access_gap_too_small",
+                        "against_id": blocker.get("id"),
+                        "gap_m": round(gap, 3),
+                    }
+                )
+                break
+
+    return violations
+
+
+def validate_placements(ctx: RoomContext, placements: list[dict[str, Any]]) -> dict[str, Any]:
+    collisions: list[dict[str, Any]] = []
+    outside: list[dict[str, Any]] = []
+    door_violations: list[dict[str, Any]] = []
+
+    solid_items: list[tuple[dict[str, Any], AABB]] = []
+    soft_item_count = 0
+    for item in placements:
+        category = str(item.get("category", ""))
+        if _is_soft_validation_item(item):
+            soft_item_count += 1
+            continue
+        aabb = _aabb_from_item(item)
+        if aabb is None:
+            continue
+        solid_items.append((item, aabb))
+
+        pos = item.get("position_m") or [0.0, 0.0, 0.0]
+        size = item.get("size_m") or [0.0, 0.0, 0.0]
+        yaw = as_float(item.get("yaw_deg", item.get("rotation_deg")), 0.0)
+        if not object_footprint_inside_polygon(Vec2(as_float(pos[0]), as_float(pos[1])), size[:2], yaw, ctx.polygon):
+            outside.append({"id": item.get("id"), "category": category})
+
+        for zone in ctx.door_clearance_zones:
+            if aabb.intersects_xy(zone, margin=0.0):
+                door_violations.append({"id": item.get("id"), "category": category})
+
+    for i in range(len(solid_items)):
+        item_a, aabb_a = solid_items[i]
+        for j in range(i + 1, len(solid_items)):
+            item_b, aabb_b = solid_items[j]
+            if aabb_a.intersects_xy(aabb_b, margin=0.02):
+                collisions.append(
+                    {
+                        "a": item_a.get("id"),
+                        "b": item_b.get("id"),
+                        "category_a": item_a.get("category"),
+                        "category_b": item_b.get("category"),
+                    }
+                )
+
+    functional_violations = _bedroom_functional_clearance_violations(ctx, solid_items)
+
+    return {
+        "collisions": collisions,
+        "outside_room": outside,
+        "door_clearance_violations": door_violations,
+        "functional_clearance_violations": functional_violations,
+        "accessibility_ok": not collisions and not door_violations and not outside and not functional_violations,
+        "solid_item_count": len(solid_items),
+        "soft_item_count": soft_item_count,
+        "total_item_count": len(placements),
+    }
+

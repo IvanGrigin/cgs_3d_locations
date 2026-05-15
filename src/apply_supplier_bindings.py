@@ -15,6 +15,15 @@ try:
 except ImportError:
     from pipeline_artifacts import read_json, write_json
 
+ASSET_FALLBACK_MODE_NONE = "none"
+ASSET_FALLBACK_MODE_FBX_OBJ_PROXY = "fbx_obj_proxy"
+ASSET_FALLBACK_MODE_FBX_OBJ_TRELLIS_PROXY = "fbx_obj_trellis_proxy"
+ASSET_FALLBACK_MODES = {
+    ASSET_FALLBACK_MODE_NONE,
+    ASSET_FALLBACK_MODE_FBX_OBJ_PROXY,
+    ASSET_FALLBACK_MODE_FBX_OBJ_TRELLIS_PROXY,
+}
+TRELLIS_ASSET_STATUS = "trellis_generated_local_asset"
 
 LOW_QUALITY_ASSET_STATUSES = {"proxy_generated_with_blender", "needs_blender_rebuild"}
 SELECTED_BINDING_STATUSES = {
@@ -165,16 +174,101 @@ def _binding_has_supported_local_asset(binding: dict[str, Any] | None) -> bool:
 def _candidate_has_supported_local_asset(candidate: dict[str, Any] | None) -> bool:
     if not isinstance(candidate, dict):
         return False
-    local_path = str(candidate.get("asset_local_path") or "").strip()
-    asset_format = str(candidate.get("asset_format") or "").strip().lower()
     asset_status = str(candidate.get("asset_status") or "").strip().lower()
-    return bool(
-        local_path
-        and Path(local_path).expanduser().is_file()
-        and asset_format in {"obj", "fbx", "glb", "gltf"}
-        and asset_status not in LOW_QUALITY_ASSET_STATUSES
-    )
+    if asset_status in LOW_QUALITY_ASSET_STATUSES:
+        return False
+    for local_path in _candidate_asset_paths(candidate):
+        path_text = str(local_path).replace("\\", "/").lower()
+        if path_text.endswith("/built/proxy.glb") or path_text.endswith("/proxy.glb"):
+            continue
+        ext = str(Path(local_path).suffix).lower().lstrip(".")
+        if ext not in {"obj", "fbx", "glb", "gltf"}:
+            continue
+        if Path(local_path).is_file():
+            return True
+    return False
 
+
+def _candidate_asset_paths(candidate: dict[str, Any] | None) -> list[str]:
+    if not isinstance(candidate, dict):
+        return []
+
+    raw_values: list[Any] = []
+    for key in (
+        "asset_local_path",
+        "local_asset_path",
+        "mesh_path",
+        "mesh_local_path",
+        "obj_path",
+        "fbx_path",
+        "glb_path",
+        "gltf_path",
+        "file_path",
+        "downloaded_path",
+    ):
+        value = candidate.get(key)
+        if value:
+            raw_values.append(value)
+
+    for nested_key in ("asset", "source"):
+        nested = candidate.get(nested_key)
+        if isinstance(nested, dict):
+            for key in (
+                "asset_local_path",
+                "local_asset_path",
+                "mesh_path",
+                "mesh_local_path",
+                "obj_path",
+                "fbx_path",
+                "glb_path",
+                "gltf_path",
+                "file_path",
+                "downloaded_path",
+            ):
+                value = nested.get(key)
+                if value:
+                    raw_values.append(value)
+
+    extra = candidate.get("extra")
+    if isinstance(extra, dict):
+        trellis_asset = extra.get("trellis_generated_asset")
+        if isinstance(trellis_asset, dict):
+            for key in ("asset_local_path", "mesh_path", "glb_path", "gltf_path"):
+                value = trellis_asset.get(key)
+                if value:
+                    raw_values.append(value)
+
+    out: list[str] = []
+    seen: set[str] = set()
+
+    def add_file(path: Path) -> None:
+        if not path.is_file():
+            return
+        ext = path.suffix.lower().lstrip(".")
+        if ext not in {"fbx", "obj", "glb", "gltf"}:
+            return
+        rp = str(path.expanduser().resolve())
+        if rp not in seen:
+            seen.add(rp)
+            out.append(rp)
+
+    for value in raw_values:
+        values = value if isinstance(value, (list, tuple)) else [value]
+        for raw in values:
+            if raw is None:
+                continue
+            p = Path(str(raw)).expanduser()
+
+            if p.is_file():
+                add_file(p)
+                continue
+
+            if p.is_dir():
+                for pattern in ("*.fbx", "*.FBX", "*.obj", "*.OBJ", "*.glb", "*.GLB", "*.gltf", "*.GLTF"):
+                    for child in p.rglob(pattern):
+                        add_file(child)
+
+    return out
 
 def _normalize_supplier_catalog_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
     out = dict(candidate)
@@ -410,29 +504,128 @@ def _item_has_scene_geometry(item: dict[str, Any]) -> bool:
     return isinstance(size_m, list) and len(size_m) == 3
 
 
-def _candidate_asset(candidate: dict[str, Any], require_local_asset: bool) -> tuple[dict[str, Any], bool]:
-    local_path = str(candidate.get("asset_local_path") or "").strip()
-    asset_format = str(candidate.get("asset_format") or "").strip().lower()
+def _candidate_asset(
+    candidate: dict[str, Any],
+    require_local_asset: bool,
+    fallback_mode: str = ASSET_FALLBACK_MODE_NONE,
+) -> tuple[dict[str, Any], bool]:
+    if not isinstance(candidate, dict) or not candidate:
+        return {}, False
+
+    fallback_mode = str(fallback_mode or ASSET_FALLBACK_MODE_NONE).strip()
+    use_fallback_proxy = fallback_mode in {ASSET_FALLBACK_MODE_FBX_OBJ_PROXY, ASSET_FALLBACK_MODE_FBX_OBJ_TRELLIS_PROXY}
+
     asset_status = str(candidate.get("asset_status") or "").strip().lower()
-    if (
-        local_path
-        and Path(local_path).expanduser().is_file()
-        and asset_format in {"obj", "fbx", "glb", "gltf"}
-        and asset_status not in LOW_QUALITY_ASSET_STATUSES
-    ):
+    extra = candidate.get("extra") if isinstance(candidate.get("extra"), dict) else {}
+    trellis_extra = extra.get("trellis_generated_asset") if isinstance(extra.get("trellis_generated_asset"), dict) else {}
+    is_proxy_generated_glb = (
+        str(trellis_extra.get("asset_generation_method") or "").strip() == "proxy_glb_fallback"
+        or str(trellis_extra.get("asset_source") or "").strip() == "supplier_catalog_procedural_proxy"
+    )
+    local_paths = _candidate_asset_paths(candidate)
+
+    def make_asset_block(path: str, *, ext: str, source: str, fit_mode: str) -> dict[str, Any]:
+        return {
+            "mesh_path": path,
+            "mesh_fit_mode": fit_mode,
+            "kind": "supplier_catalog_asset",
+            "source_kind": "supplier_catalog_local_asset",
+            "asset_source": source,
+            "asset_format": ext,
+        }
+
+    # 1. Prefer real FBX supplier assets.
+    for p in local_paths:
+        path_text = str(p).replace("\\", "/").lower()
+        if path_text.endswith("/built/proxy.glb") or path_text.endswith("/proxy.glb"):
+            continue
+        ext = Path(p).suffix.lower().lstrip(".")
+        if ext == "fbx" and Path(p).is_file():
+            return (
+                make_asset_block(
+                    p,
+                    ext=ext,
+                    source="supplier_catalog_local_asset",
+                    fit_mode="uniform",
+                ),
+                False,
+            )
+
+    # 2. Real GLB/GLTF supplier assets are valid too.
+    # TRELLIS-generated GLB is stretched to target AABB because it is not metrically reliable.
+    # Real supplier GLB/GLTF is kept uniform and fitted by the builder.
+    for p in local_paths:
+        path_text = str(p).replace("\\", "/").lower()
+        if path_text.endswith("/built/proxy.glb") or path_text.endswith("/proxy.glb"):
+            continue
+        ext = Path(p).suffix.lower().lstrip(".")
+        if ext in {"glb", "gltf"} and Path(p).is_file():
+            is_trellis = asset_status == TRELLIS_ASSET_STATUS
+            return (
+                make_asset_block(
+                    p,
+                    ext=ext,
+                    source=(
+                        "supplier_catalog_procedural_proxy"
+                        if is_proxy_generated_glb
+                        else "trellis_generated_local_asset"
+                        if is_trellis
+                        else "supplier_catalog_local_asset"
+                    ),
+                    fit_mode="stretch" if is_trellis else "uniform",
+                ),
+                False,
+            )
+
+    # 3. Real OBJ supplier assets are valid. Previously this was only enabled in proxy fallback mode;
+    # now OBJ is a first-class local asset because many supplier archives contain OBJ+MTL.
+    for p in local_paths:
+        path_text = str(p).replace("\\", "/").lower()
+        if path_text.endswith("/built/proxy.glb") or path_text.endswith("/proxy.glb"):
+            continue
+        ext = Path(p).suffix.lower().lstrip(".")
+        if ext == "obj" and Path(p).is_file():
+            return (
+                make_asset_block(
+                    p,
+                    ext=ext,
+                    source="supplier_catalog_local_asset",
+                    fit_mode="uniform",
+                ),
+                False,
+            )
+
+    # 4. Strict local mode: no local mesh means no replacement.
+    if require_local_asset:
+        return {}, False
+
+    # 5. No real asset: fallback to procedural proxy if requested.
+    if use_fallback_proxy:
         return (
             {
-                "mesh_path": str(Path(local_path).expanduser().resolve()),
+                "kind": "procedural_proxy",
                 "mesh_fit_mode": "uniform",
+                "source_kind": "supplier_catalog_proxy",
+                "asset_source": "supplier_catalog_procedural_proxy",
             },
             False,
         )
-    if require_local_asset:
-        return {}, False
+
+    if asset_status in LOW_QUALITY_ASSET_STATUSES:
+        return {}, True
+
+    # 6. Old non-strict behavior: placeholder is allowed only without proxy mode.
     return {}, True
 
 
 def _replacement_mesh_fit_mode(binding: dict[str, Any], item: dict[str, Any]) -> str:
+    asset = item.get("asset") if isinstance(item.get("asset"), dict) else {}
+    asset_source = str(asset.get("asset_source") or "").strip().lower()
+    if asset_source in {"trellis_generated_local_asset", "supplier_catalog_procedural_proxy"}:
+        # Generated GLBs are not metrically reliable. Uniform fitting often makes
+        # them look undersized because a single long/empty axis limits the scale.
+        return "trellis_stretch"
+
     support_groups = {
         "desk",
         "dresser",
@@ -937,9 +1130,7 @@ def _normalize_supported_light_placements(
     by_target_id: dict[str, dict[str, Any]],
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     support_groups = {"desk", "side_table", "nightstand", "dresser", "coffee_table", "shelf", "tv_stand"}
-    floor_anchor_groups = {"sofa", "armchair", "bed", "desk", "side_table", "nightstand", "tv_stand"}
     moved: list[dict[str, Any]] = []
-    room_bounds = _room_xy_bounds(data, items)
 
     for item in items:
         if not isinstance(item, dict):
@@ -1030,62 +1221,7 @@ def _normalize_supported_light_placements(
             continue
 
         if group == "lamp_floor":
-            anchors: list[tuple[float, dict[str, Any], dict[str, float], str]] = []
-            for anchor in items:
-                if not isinstance(anchor, dict) or anchor is item:
-                    continue
-                anchor_id = str(anchor.get("id") or "").strip()
-                anchor_group = _semantic_group_for_item(anchor, by_target_id.get(anchor_id))
-                if anchor_group not in floor_anchor_groups:
-                    continue
-                anchor_aabb = _item_aabb(anchor)
-                if anchor_aabb is None:
-                    continue
-                anchor_c = _aabb_center(anchor_aabb)
-                anchors.append((math.hypot(old_pos[0] - anchor_c[0], old_pos[1] - anchor_c[1]), anchor, anchor_aabb, anchor_group))
-            if not anchors:
-                continue
-            _score, anchor, anchor_aabb, anchor_group = min(anchors, key=lambda row: row[0])
-            anchor_cx = 0.5 * (anchor_aabb["x_min"] + anchor_aabb["x_max"])
-            anchor_cy = 0.5 * (anchor_aabb["y_min"] + anchor_aabb["y_max"])
-            clearance = 0.08
-            candidates = [
-                (anchor_aabb["x_min"] - 0.5 * sx - clearance, anchor_cy),
-                (anchor_aabb["x_max"] + 0.5 * sx + clearance, anchor_cy),
-                (anchor_cx, anchor_aabb["y_min"] - 0.5 * sy - clearance),
-                (anchor_cx, anchor_aabb["y_max"] + 0.5 * sy + clearance),
-            ]
-            best: tuple[float, float, float] | None = None
-            for cx, cy in candidates:
-                if room_bounds:
-                    cx = min(max(cx, room_bounds["x_min"] + 0.5 * sx), room_bounds["x_max"] - 0.5 * sx)
-                    cy = min(max(cy, room_bounds["y_min"] + 0.5 * sy), room_bounds["y_max"] - 0.5 * sy)
-                corners = [(cx - 0.5 * sx, cy - 0.5 * sy), (cx - 0.5 * sx, cy + 0.5 * sy), (cx + 0.5 * sx, cy - 0.5 * sy), (cx + 0.5 * sx, cy + 0.5 * sy)]
-                inside_room = all(_point_in_room_xy(data, x, y) for x, y in corners)
-                cand = {
-                    "x_min": cx - 0.5 * sx,
-                    "x_max": cx + 0.5 * sx,
-                    "y_min": cy - 0.5 * sy,
-                    "y_max": cy + 0.5 * sy,
-                    "z_min": item_aabb["z_min"],
-                    "z_max": item_aabb["z_max"],
-                }
-                collision_score = _light_collides_xy(cand, items, skip_id=item_id, by_target_id=by_target_id)
-                edge_dist = _dist_to_room_edges(_room_polygon_points(data), cx, cy)
-                corner_penalty = 2.0 if edge_dist < 0.35 else 0.0
-                score = collision_score + corner_penalty + (0.0 if inside_room else 50.0) + math.hypot(cx - old_pos[0], cy - old_pos[1]) * 0.03
-                if best is None or score < best[0]:
-                    best = (score, cx, cy)
-            if best is None:
-                continue
-            _best_score, cx, cy = best
-            _set_item_center_xyz(item, cx, cy, old_pos[2])
-            meta = item.setdefault("meta", {})
-            if isinstance(meta, dict):
-                meta["supplier_light_position_normalized"] = True
-                meta["supplier_floor_anchor_target_id"] = str(anchor.get("id") or "")
-                meta["supplier_floor_anchor_group"] = anchor_group
-            moved.append({"id": item_id, "group": group, "old_xyz": [round(v, 4) for v in old_pos], "new_xyz": [round(cx, 4), round(cy, 4), round(old_pos[2], 4)]})
+            continue
 
     return items, {"moved_count": len(moved), "moved": moved}
 
@@ -2159,13 +2295,18 @@ def apply_supplier_bindings_to_data(
     bindings_data: dict[str, Any],
     *,
     require_local_asset: bool = False,
+    fallback_mode: str = ASSET_FALLBACK_MODE_NONE,
 ) -> dict[str, Any]:
     out = deepcopy(data)
-    placements = out.get("placements")
-    if not isinstance(placements, list):
-        placements = out.get("items")
+    processed_collection_key = "placements" if isinstance(out.get("placements"), list) else "items"
+    placements = out.get(processed_collection_key)
     if not isinstance(placements, list):
         raise RuntimeError("Некорректный scene/placement JSON: нет placements/items")
+    processed_item_ids = {
+        str(item.get("id") or "").strip()
+        for item in placements
+        if isinstance(item, dict) and str(item.get("id") or "").strip()
+    }
 
     bindings = bindings_data.get("bindings") or []
     if not isinstance(bindings, list):
@@ -2181,6 +2322,7 @@ def apply_supplier_bindings_to_data(
     replaced = 0
     placeholder_replaced = 0
     local_asset_replaced = 0
+    proxy_asset_replaced = 0
     suppressed_generated_count = 0
 
     new_items: list[dict[str, Any]] = []
@@ -2211,7 +2353,11 @@ def apply_supplier_bindings_to_data(
 
         candidate_size_m = _candidate_size_m(chosen)
 
-        asset_block, use_placeholder = _candidate_asset(chosen, require_local_asset=require_local_asset)
+        asset_block, use_placeholder = _candidate_asset(
+            chosen,
+            require_local_asset=require_local_asset,
+            fallback_mode=fallback_mode,
+        )
         if require_local_asset and not asset_block:
             new_items.append(item)
             continue
@@ -2239,7 +2385,13 @@ def apply_supplier_bindings_to_data(
             updated["asset"]["mesh_fit_mode"] = _replacement_mesh_fit_mode(binding, updated)
 
         source = deepcopy(updated.get("source") or {})
-        source["asset_source"] = "supplier_catalog_local_asset" if asset_block else "supplier_catalog_placeholder"
+        asset_kind = str(asset_block.get("kind") or "").strip().lower()
+        if asset_kind == "procedural_proxy":
+            source["asset_source"] = "supplier_catalog_procedural_proxy"
+        elif asset_block:
+            source["asset_source"] = str(asset_block.get("asset_source") or "supplier_catalog_local_asset")
+        else:
+            source["asset_source"] = "supplier_catalog_placeholder"
         source["supplier_replaced"] = True
         source["supplier_target_id"] = item_id
         source["supplier_unique_key"] = chosen.get("unique_key")
@@ -2271,6 +2423,8 @@ def apply_supplier_bindings_to_data(
         replaced += 1
         if use_placeholder:
             placeholder_replaced += 1
+        elif source["asset_source"] == "supplier_catalog_procedural_proxy":
+            proxy_asset_replaced += 1
         else:
             local_asset_replaced += 1
 
@@ -2373,10 +2527,57 @@ def apply_supplier_bindings_to_data(
     new_items, table_chair_postprocess = _ensure_table_chair_affordances(out, new_items, by_target_id)
     new_items, tv_postprocess = _ensure_tv_affordance(out, new_items, by_target_id)
 
-    if "placements" in out and isinstance(out.get("placements"), list):
+    def sync_parallel_collection(existing_items: list[Any], updated_items: list[Any]) -> list[Any]:
+        updated_by_id = {
+            str(item.get("id") or "").strip(): item
+            for item in updated_items
+            if isinstance(item, dict) and str(item.get("id") or "").strip()
+        }
+        existing_ids = {
+            str(item.get("id") or "").strip()
+            for item in existing_items
+            if isinstance(item, dict) and str(item.get("id") or "").strip()
+        }
+        seen_ids: set[str] = set()
+        synced: list[Any] = []
+        for item in existing_items:
+            if not isinstance(item, dict):
+                synced.append(item)
+                continue
+            item_id = str(item.get("id") or "").strip()
+            if not item_id:
+                synced.append(item)
+                continue
+            if item_id in processed_item_ids:
+                updated = updated_by_id.get(item_id)
+                if updated is None:
+                    continue
+                synced.append(deepcopy(updated))
+                seen_ids.add(item_id)
+            else:
+                synced.append(item)
+                seen_ids.add(item_id)
+
+        for item in updated_items:
+            if not isinstance(item, dict):
+                synced.append(deepcopy(item))
+                continue
+            item_id = str(item.get("id") or "").strip()
+            if item_id and (item_id in seen_ids or item_id in existing_ids):
+                continue
+            synced.append(deepcopy(item))
+            if item_id:
+                seen_ids.add(item_id)
+        return synced
+
+    if processed_collection_key == "placements":
         out["placements"] = new_items
-    elif "items" in out and isinstance(out.get("items"), list):
+        if isinstance(out.get("items"), list):
+            out["items"] = sync_parallel_collection(out["items"], new_items)
+    else:
         out["items"] = new_items
+        if isinstance(out.get("placements"), list):
+            out["placements"] = sync_parallel_collection(out["placements"], new_items)
 
     meta = deepcopy(out.get("meta") or {})
     meta["supplier_binding_summary"] = {
@@ -2393,6 +2594,8 @@ def apply_supplier_bindings_to_data(
         "computer_replaced_count": int(computer_postprocess.get("replaced_count", 0) or 0),
         "unusable_table_suppressed_count": 0,
         "require_local_asset": bool(require_local_asset),
+        "supplier_asset_fallback_mode": str(fallback_mode).strip() or ASSET_FALLBACK_MODE_NONE,
+        "proxy_asset_replaced_count": int(proxy_asset_replaced),
     }
     meta["supplier_bed_postprocess"] = {
         "preserved_bedding_count": len(preserved_bedding_ids),
@@ -2416,10 +2619,16 @@ def apply_supplier_bindings_to_json(
     output_json_path: str | Path,
     *,
     require_local_asset: bool = False,
+    fallback_mode: str = ASSET_FALLBACK_MODE_NONE,
 ) -> Path:
     data = read_json(input_json_path)
     bindings = read_json(bindings_json_path)
-    out = apply_supplier_bindings_to_data(data, bindings, require_local_asset=require_local_asset)
+    out = apply_supplier_bindings_to_data(
+        data,
+        bindings,
+        require_local_asset=require_local_asset,
+        fallback_mode=fallback_mode,
+    )
     reference_scene_blend = _infer_reference_scene_blend_path(input_json_path, data if isinstance(data, dict) else {})
     if reference_scene_blend:
         meta = deepcopy(out.get("meta") or {})
@@ -2438,6 +2647,12 @@ def build_cli() -> argparse.ArgumentParser:
     ap.add_argument("--bindings-json", required=True, help="supplier_bindings json with chosen_candidate")
     ap.add_argument("--out", required=True, help="Output JSON path")
     ap.add_argument("--require-local-asset", action="store_true", help="Replace only when candidate has local OBJ asset")
+    ap.add_argument(
+        "--supplier-asset-fallback-mode",
+        choices=[ASSET_FALLBACK_MODE_NONE, ASSET_FALLBACK_MODE_FBX_OBJ_PROXY, ASSET_FALLBACK_MODE_FBX_OBJ_TRELLIS_PROXY],
+        default=ASSET_FALLBACK_MODE_NONE,
+        help="Fallback policy for unavailable local assets.",
+    )
     return ap
 
 
@@ -2448,6 +2663,7 @@ def main() -> None:
         bindings_json_path=args.bindings_json,
         output_json_path=args.out,
         require_local_asset=bool(args.require_local_asset),
+        fallback_mode=str(getattr(args, "supplier_asset_fallback_mode", ASSET_FALLBACK_MODE_NONE)),
     )
     data = read_json(out_path)
     summary = (data.get("meta") or {}).get("supplier_binding_summary") or {}

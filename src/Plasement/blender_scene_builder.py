@@ -11,6 +11,8 @@
 from __future__ import annotations
 
 import argparse
+import copy
+import importlib.util
 import json
 import math
 import os
@@ -2200,11 +2202,35 @@ def _add_functional_light_for_item(item: Dict, aabb: Dict[str, float], parent: O
         return 0
 
 
+def _prune_missing_images_before_pack() -> int:
+    removed = 0
+    for img in list(bpy.data.images):
+        try:
+            if getattr(img, "packed_file", None) is not None:
+                continue
+            source = str(getattr(img, "source", "") or "")
+            if source not in {"FILE", "SEQUENCE", "MOVIE"}:
+                continue
+            filepath = str(getattr(img, "filepath", "") or "").strip()
+            if filepath:
+                abs_path = bpy.path.abspath(filepath)
+                if os.path.isfile(abs_path):
+                    continue
+            bpy.data.images.remove(img, do_unlink=True)
+            removed += 1
+        except Exception:
+            continue
+    return removed
+
+
 def _pack_assets_best_effort() -> None:
     try:
         bpy.ops.file.make_paths_relative()
     except Exception:
         pass
+    removed = _prune_missing_images_before_pack()
+    if removed:
+        print(f"[WARN] skipped missing image datablock(s) before packing: {removed}", file=sys.stderr)
     try:
         bpy.ops.file.pack_all()
     except Exception:
@@ -2663,8 +2689,39 @@ def _is_replacement_render_item(item: Dict) -> bool:
         or meta.get("supplier_requirement_added")
         or meta.get("procedural_lighting")
         or source.get("supplier_replaced")
-        or source.get("asset_source") in {"supplier_catalog_local_asset", "procedural_lighting"}
+        or source.get("asset_source") in {
+            "supplier_catalog_local_asset",
+            "supplier_catalog_procedural_proxy",
+            "trellis_generated_local_asset",
+            "procedural_lighting",
+        }
         or asset.get("kind") == "procedural_flat_ceiling_light"
+    )
+
+
+def _is_procedural_proxy_item(item: Dict) -> bool:
+    source = item.get("source") if isinstance(item.get("source"), dict) else {}
+    asset = item.get("asset") if isinstance(item.get("asset"), dict) else {}
+    category = str(item.get("category") or "").strip().lower()
+    procedural_placeholder_proxy_categories = {
+        "bench",
+        "blanket",
+        "decor_books",
+        "decor_box",
+        "decor_tray",
+        "decor_vase",
+        "pillow",
+        "plant",
+        "rug",
+        "table_lamp",
+        "wall_art",
+        "wall_light",
+    }
+    return bool(
+        source.get("asset_source") == "supplier_catalog_procedural_proxy"
+        or asset.get("kind") == "procedural_proxy"
+        or asset.get("source_kind") == "supplier_catalog_proxy"
+        or (asset.get("kind") == "procedural_placeholder" and category in procedural_placeholder_proxy_categories)
     )
 
 
@@ -4660,7 +4717,7 @@ def _procedural_requirement_role(item: Dict) -> str:
             item.get("name"),
         )
     )
-    for role in ("toilet", "sink", "shower", "bath", "table", "bed"):
+    for role in ("toilet", "sink", "shower", "bath", "table", "bed", "headboard"):
         if role in text:
             return role
     if "унит" in text:
@@ -4780,11 +4837,124 @@ def _is_procedural_requirement_item(item: Dict) -> bool:
     meta = item.get("meta") if isinstance(item.get("meta"), dict) else {}
     asset = item.get("asset") if isinstance(item.get("asset"), dict) else {}
     source = item.get("source") if isinstance(item.get("source"), dict) else {}
+    category = str(item.get("category") or item.get("semantic_group") or "").strip().lower()
     return bool(
         meta.get("procedural_requirement")
         or asset.get("kind") == "procedural_requirement_proxy"
+        or (asset.get("kind") == "procedural_placeholder" and category in {"bed", "headboard"})
         or source.get("asset_source") == "procedural_requirement"
     )
+
+
+def _build_procedural_catalog_proxy_in_aabb(
+    *,
+    item: Dict,
+    aabb: Dict[str, float],
+    rotation_deg_engine: float,
+    collection: bpy.types.Collection,
+    name: str,
+    fit_mode: str,
+    fallback_subclass: str = "closed_cabinet",
+) -> Optional[bpy.types.Object]:
+    build_from_catalog_item = None
+    try:
+        from src.Plasement.procedural_object_factory_blender import build_from_catalog_item  # type: ignore
+    except Exception:
+        try:
+            from procedural_object_factory_blender import build_from_catalog_item  # type: ignore
+        except Exception as exc:
+            factory_path = Path(__file__).resolve().parent / "procedural_object_factory_blender.py"
+            if not factory_path.is_file():
+                _log(
+                    True,
+                    f"⚠️ procedural proxy factory import failed for {name}: {exc}",
+                )
+                return None
+            try:
+                spec = importlib.util.spec_from_file_location("cgs_procedural_object_factory_blender", str(factory_path))
+                if spec is None or spec.loader is None:
+                    raise ImportError(f"cannot load spec from {factory_path}")
+                module = importlib.util.module_from_spec(spec)
+                sys.modules.setdefault("cgs_procedural_object_factory_blender", module)
+                spec.loader.exec_module(module)
+                build_from_catalog_item = getattr(module, "build_from_catalog_item")
+            except Exception as file_exc:
+                _log(
+                    True,
+                    f"⚠️ procedural proxy factory import failed for {name}: {file_exc}",
+                )
+                return None
+
+    meta = item.get("meta") if isinstance(item.get("meta"), dict) else {}
+    candidate = meta.get("supplier_candidate")
+    if not isinstance(candidate, dict):
+        candidate = {}
+
+    group = str(candidate.get("semantic_group") or candidate.get("category_norm") or item.get("semantic_group") or item.get("category") or "").strip().lower()
+    if not group:
+        group = str(_item_semantic_group(item) or "").strip().lower()
+    base_type = group or fallback_subclass
+
+    proxy_candidate = dict(candidate)
+    for key in ("semantic_group", "base_type"):
+        proxy_candidate.pop(key, None)
+    if "_source" in proxy_candidate:
+        proxy_candidate.pop("_source", None)
+    if base_type and base_type not in {"", "_"}:
+        proxy_candidate["semantic_group"] = base_type
+        proxy_candidate["base_type"] = base_type
+    proxy_candidate["category_norm"] = proxy_candidate.get("category_norm") or base_type
+
+    if not proxy_candidate.get("width_cm"):
+        proxy_candidate["width_cm"] = max(float(aabb.get("x_max", 0.0) - aabb.get("x_min", 0.0)), 0.001) * 100.0
+    if not proxy_candidate.get("depth_cm"):
+        proxy_candidate["depth_cm"] = max(float(aabb.get("y_max", 0.0) - aabb.get("y_min", 0.0)), 0.001) * 100.0
+    if not proxy_candidate.get("height_cm"):
+        proxy_candidate["height_cm"] = max(float(aabb.get("z_max", 0.0) - aabb.get("z_min", 0.0)), 0.001) * 100.0
+
+    try:
+        built_objs = build_from_catalog_item(
+            proxy_candidate,
+            loc=(0.0, 0.0, 0.0),
+            fallback_subclass=fallback_subclass,
+            collection_name=collection.name,
+        )
+    except Exception as exc:
+        _log(
+            True,
+            f"⚠️ build_from_catalog_item failed for {name}: {exc}",
+        )
+        return None
+    if not isinstance(built_objs, list) or not built_objs:
+        return None
+
+    root = place_in_aabb(
+        objs=built_objs,
+        aabb=aabb,
+        rotation_deg_engine=rotation_deg_engine,
+        fit_mode=fit_mode,
+        parent_name=name,
+        collection=collection,
+        snap_to_floor=_item_mount_mode(item).lower() in {"floor", ""},
+        floor_offset=-0.001,
+        semantic_group=_item_semantic_group(item),
+        snap_to_ceiling=_item_mount_mode(item).lower() == "ceiling",
+        ceiling_offset=0.0,
+        lock_rotation=False,
+    )
+    if root is None:
+        for obj in built_objs:
+            if obj is None:
+                continue
+            try:
+                _remove_object_family(obj)
+            except Exception:
+                try:
+                    bpy.data.objects.remove(obj, do_unlink=True)
+                except Exception:
+                    pass
+        return None
+    return root
 
 
 def _make_local_box_mesh(
@@ -4878,6 +5048,30 @@ def _make_procedural_requirement_mesh(
         for ix, lx in enumerate((-sx * 0.40, sx * 0.40)):
             for iy, ly in enumerate((-sy * 0.38, sy * 0.38)):
                 box(f"leg_{ix}_{iy}", (lx, ly, leg_h * 0.5), (sx * 0.07, sy * 0.08, leg_h), wood)
+    elif role == "headboard":
+        fabric = _make_pbr_material(f"Mat_{name}_padded_fabric", PBRMaps(), tint_rgb=(0.70, 0.66, 0.56), tex_scale=1.0)
+        seam = _make_pbr_material(f"Mat_{name}_soft_shadow", PBRMaps(), tint_rgb=(0.52, 0.48, 0.40), tex_scale=1.0)
+        box("back_panel", (0.0, 0.0, sz * 0.50), (sx, sy, sz), fabric)
+        cols = 4
+        rows = 2
+        cell_w = sx / cols
+        cell_h = sz * 0.82 / rows
+        y_front = -sy * 0.53
+        z_base = sz * 0.12
+        for col in range(cols):
+            for row in range(rows):
+                lx = -sx * 0.5 + cell_w * (col + 0.5)
+                lz = z_base + cell_h * (row + 0.5)
+                box(
+                    f"padded_square_{col}_{row}",
+                    (lx, y_front, lz),
+                    (cell_w * 0.88, max(sy * 0.12, 0.018), cell_h * 0.82),
+                    fabric,
+                )
+        for col in range(1, cols):
+            lx = -sx * 0.5 + cell_w * col
+            box(f"vertical_seam_{col}", (lx, y_front - 0.004, sz * 0.50), (max(sx * 0.006, 0.008), max(sy * 0.08, 0.012), sz * 0.78), seam)
+        box("top_seam", (0.0, y_front - 0.004, z_base + cell_h), (sx * 0.94, max(sy * 0.08, 0.012), max(sz * 0.008, 0.01)), seam)
     elif role == "bed":
         box("mattress", (0.0, 0.0, sz * 0.62), (sx, sy, sz * 0.34), ceramic)
         box("base", (0.0, 0.0, sz * 0.27), (sx, sy, sz * 0.24), wood)
@@ -4919,8 +5113,7 @@ def _make_curtain_proxy_mesh(
     collection: bpy.types.Collection,
     name: str,
 ) -> Optional[bpy.types.Object]:
-    if not texture_path or not Path(texture_path).expanduser().is_file():
-        return None
+    texture_file = str(Path(texture_path).expanduser().resolve()) if texture_path and Path(texture_path).expanduser().is_file() else None
 
     size_m = item.get("size_m") if isinstance(item.get("size_m"), list) else []
     width = float(size_m[0]) if len(size_m) >= 1 else max(float(aabb["x_max"]) - float(aabb["x_min"]), 0.4)
@@ -4978,12 +5171,15 @@ def _make_curtain_proxy_mesh(
     except Exception:
         pass
 
-    mat = _make_image_material(
-        f"MAT_{name}_Shtorystore",
-        str(Path(texture_path).expanduser().resolve()),
-        uv_scale=1.0,
-        extension="EXTEND",
-    )
+    if texture_file:
+        mat = _make_image_material(
+            f"MAT_{name}_Shtorystore",
+            texture_file,
+            uv_scale=1.0,
+            extension="EXTEND",
+        )
+    else:
+        mat = _make_pbr_material(f"MAT_{name}_Fabric", PBRMaps(), tint_rgb=(0.58, 0.68, 0.52), tex_scale=1.0)
     _assign_material_to_object(obj, mat)
 
     parent = bpy.data.objects.new(name, None)
@@ -5283,6 +5479,124 @@ def _synthesize_walls_from_floor_polygon(room_dict: dict) -> list[dict]:
             "to_vertex": (i + 1) % n,
         })
     return walls
+
+
+def _point_xy_from_wall_endpoint(value: object) -> Optional[Tuple[float, float]]:
+    if isinstance(value, dict) and "x" in value and "y" in value:
+        return (float(value["x"]), float(value["y"]))
+    if isinstance(value, (list, tuple)) and len(value) >= 2:
+        return (float(value[0]), float(value[1]))
+    return None
+
+
+def _wall_points_from_spec(wall: dict, poly_xy: List[Tuple[float, float]]) -> Optional[Tuple[Tuple[float, float], Tuple[float, float]]]:
+    if not isinstance(wall, dict):
+        return None
+    if "from_vertex" in wall and "to_vertex" in wall:
+        i0 = int(wall["from_vertex"])
+        i1 = int(wall["to_vertex"])
+        if i0 < 0 or i0 >= len(poly_xy) or i1 < 0 or i1 >= len(poly_xy):
+            return None
+        return poly_xy[i0], poly_xy[i1]
+    for from_key, to_key in (("from", "to"), ("start", "end"), ("p0", "p1")):
+        p0 = _point_xy_from_wall_endpoint(wall.get(from_key))
+        p1 = _point_xy_from_wall_endpoint(wall.get(to_key))
+        if p0 is not None and p1 is not None:
+            return p0, p1
+    return None
+
+
+def _room_opening_list(room: dict, group_name: str) -> List[dict]:
+    out: List[dict] = []
+
+    def add_many(value: object) -> None:
+        if isinstance(value, list):
+            out.extend([x for x in value if isinstance(x, dict)])
+
+    add_many(room.get(group_name))
+    nested = room.get("openings")
+    if isinstance(nested, dict):
+        add_many(nested.get(group_name))
+        if group_name == "openings":
+            for nested_name in ("doors", "windows"):
+                add_many(nested.get(nested_name))
+    elif group_name == "openings":
+        add_many(nested)
+
+    deduped: List[dict] = []
+    seen: set[Tuple[str, str, str, str, str, str]] = set()
+    for opening in out:
+        marker = (
+            str(opening.get("id") or ""),
+            str(opening.get("wall_id") or ""),
+            str(opening.get("s") or ""),
+            str(opening.get("width") or ""),
+            str(opening.get("z0") if opening.get("z0") is not None else opening.get("sill_height") or ""),
+            str(opening.get("height") or ""),
+        )
+        if marker in seen:
+            continue
+        seen.add(marker)
+        deduped.append(opening)
+    return deduped
+
+
+def _room_openings_by_wall(room: dict) -> Dict[str, List[dict]]:
+    out: Dict[str, List[dict]] = {}
+    seen: set[Tuple[str, str, str, str, str, str]] = set()
+
+    def marker_for(opening: dict) -> Tuple[str, str, str, str, str, str]:
+        return (
+            str(opening.get("id") or ""),
+            str(opening.get("wall_id") or ""),
+            str(opening.get("s") or ""),
+            str(opening.get("width") or ""),
+            str(opening.get("z0") if opening.get("z0") is not None else opening.get("sill_height") or ""),
+            str(opening.get("height") or ""),
+        )
+
+    for group_name in ("doors", "windows", "openings"):
+        for opening in _room_opening_list(room, group_name):
+            if not isinstance(opening, dict):
+                continue
+            wid = str(opening.get("wall_id") or "").strip()
+            if not wid:
+                continue
+            marker = marker_for(opening)
+            if marker in seen:
+                continue
+            seen.add(marker)
+            out.setdefault(wid, []).append(opening)
+    return out
+
+
+def _opening_kind(opening: dict) -> str:
+    text = " ".join(
+        str(opening.get(key) or "").strip().lower()
+        for key in ("type", "kind", "category", "id", "name")
+    )
+    if "window" in text or "окн" in text or opening.get("sill_height") is not None:
+        return "window"
+    if "door" in text or "двер" in text:
+        return "door"
+    return "opening"
+
+
+def _opening_z0(opening: dict, default: float) -> float:
+    raw = opening.get("z0")
+    if raw is None and _opening_kind(opening) == "window":
+        raw = opening.get("sill_height")
+    try:
+        return float(raw if raw is not None else default)
+    except Exception:
+        return float(default)
+
+
+def _opening_height(opening: dict, default: float) -> float:
+    try:
+        return max(0.0, float(opening.get("height", default)))
+    except Exception:
+        return float(default)
 
 
 def _room_spec_from_bounds(
@@ -5622,7 +5936,7 @@ def build_room_from_spec(
     if "z_max" in r:
         H = float(r["z_max"]) - floor_z
     else:
-        H = float(r.get("ceiling_height", 2.8))
+        H = float(r.get("ceiling_height", r.get("ceiling_height_m", r.get("height_m", 2.8))))
     H = max(H, 0.1)
 
     poly = r["floor_polygon"]
@@ -5644,7 +5958,10 @@ def build_room_from_spec(
         floor_tex = _choose_texture("floor", tex.get("floor", []), style_text, rng)
         wall_tex = _choose_texture("wall", tex.get("wall", []), style_text, rng)
         door_tex = _choose_texture("door", tex.get("door", []), style_text, rng)
-        window_tex = _choose_texture("window", tex.get("window", []), style_text, rng)
+        # Random "view through window" photos tend to read as dark stained glass
+        # in close room renders. Keep windows as neutral glass unless a supplier
+        # stage explicitly assigns a texture later.
+        window_tex = None
 
     supplier_floor_tex, supplier_floor_uv_scale, supplier_floor_mirror = _floor_material_texture_info(r)
     if supplier_floor_tex:
@@ -5670,7 +5987,10 @@ def build_room_from_spec(
         if floor_tex else None
     )
     wall_mat = _make_image_material("MAT_ROOM_WALL", wall_tex, uv_scale=1.0) if wall_tex else None
-    door_mat = _make_image_material("MAT_ROOM_DOOR", door_tex, uv_scale=1.0) if door_tex else None
+    door_mat = (
+        _make_image_material("MAT_ROOM_DOOR", door_tex, uv_scale=1.0)
+        if door_tex else _make_pbr_material("MAT_ROOM_DOOR_FALLBACK", PBRMaps(), tint_rgb=(0.62, 0.48, 0.34), tex_scale=1.0)
+    )
     win_mat = _make_glass_material("MAT_ROOM_WINDOW", window_tex) if window_tex else _make_glass_material("MAT_ROOM_WINDOW", None)
 
     out_objs: List[bpy.types.Object] = []
@@ -5691,19 +6011,17 @@ def build_room_from_spec(
             print(f"[RoomSpec] walls missing -> synthesized {len(walls)} walls from floor_polygon")
 
     wall_by_id = {}
+    openings_by_wall = _room_openings_by_wall(r)
 
     for w in walls:
         wid = str(w.get("id", f"w{len(wall_by_id)}"))
-        i0 = int(w["from_vertex"])
-        i1 = int(w["to_vertex"])
-
-        if i0 < 0 or i0 >= len(poly_xy) or i1 < 0 or i1 >= len(poly_xy):
+        wall_points = _wall_points_from_spec(w, poly_xy)
+        if wall_points is None:
             if verbose:
-                print(f"[RoomSpec] skip invalid wall {wid}: from={i0} to={i1}")
+                print(f"[RoomSpec] skip invalid wall {wid}: {w}")
             continue
 
-        p0 = poly_xy[i0]
-        p1 = poly_xy[i1]
+        p0, p1 = wall_points
 
         ex, ey = (p1[0] - p0[0], p1[1] - p0[1])
         ex, ey = _normalize2(ex, ey)
@@ -5718,36 +6036,66 @@ def build_room_from_spec(
         else:
             nx, ny = (ey, -ex)
 
-        wall_obj = _make_wall_quad(
-            f"Room_Wall_{wid}",
-            p0,
-            p1,
-            z0=floor_z,
-            z1=floor_z + H,
-            coll=coll_room,
-        )
-        _set_uvs_wall_sz(wall_obj, origin_xy=p0, dir_xy=(ex, ey), uv_scale=wall_uv_scale)
+        wall_len = math.hypot(p1[0] - p0[0], p1[1] - p0[1])
+        segments: List[Tuple[float, float, float, float]] = [(0.0, wall_len, floor_z, floor_z + H)]
+        for opening in openings_by_wall.get(wid, []):
+            try:
+                opening_s0 = max(0.0, float(opening.get("s", 0.0)))
+                opening_width = max(0.0, float(opening.get("width", 0.0)))
+                default_z0 = 0.9 if _opening_kind(opening) == "window" else 0.0
+                opening_z0 = max(floor_z, floor_z + _opening_z0(opening, default_z0))
+                opening_z1 = min(floor_z + H, opening_z0 + _opening_height(opening, H))
+            except Exception:
+                continue
+            opening_s1 = min(wall_len, opening_s0 + opening_width)
+            if opening_s1 <= opening_s0 or opening_z1 <= opening_z0:
+                continue
+            segments = _subtract_wall_opening_from_segments(
+                segments,
+                opening_s0=opening_s0,
+                opening_s1=opening_s1,
+                opening_z0=opening_z0,
+                opening_z1=opening_z1,
+            )
 
-        if wall_mat:
-            _assign_material_to_object(wall_obj, wall_mat)
+        for seg_idx, (s0, s1, z0, z1) in enumerate(segments):
+            seg_p0 = (p0[0] + ex * s0, p0[1] + ey * s0)
+            seg_p1 = (p0[0] + ex * s1, p0[1] + ey * s1)
+            wall_name = f"Room_Wall_{wid}" if len(segments) == 1 else f"Room_Wall_{wid}_{seg_idx}"
+            wall_obj = _make_wall_quad(
+                wall_name,
+                seg_p0,
+                seg_p1,
+                z0=z0,
+                z1=z1,
+                coll=coll_room,
+            )
+            _set_uvs_wall_sz(wall_obj, origin_xy=p0, dir_xy=(ex, ey), uv_scale=wall_uv_scale)
 
-        out_objs.append(wall_obj)
+            if wall_mat:
+                _assign_material_to_object(wall_obj, wall_mat)
+
+            out_objs.append(wall_obj)
 
         wall_by_id[wid] = {
             "p0": p0,
             "p1": p1,
             "dir": (ex, ey),
             "in": (nx, ny),
+            "len": wall_len,
         }
 
-    for d in r.get("doors", []):
+    for d in _room_opening_list(r, "doors"):
         wid = d["wall_id"]
         info = wall_by_id.get(wid)
         if not info:
             continue
 
-        s0 = float(d["s"])
-        width = float(d["width"])
+        wall_len = float(info.get("len", 0.0))
+        s0 = max(0.0, min(float(d["s"]), wall_len))
+        width = max(0.0, min(float(d["width"]), wall_len - s0))
+        if width <= 0.02:
+            continue
         z0 = floor_z + float(d.get("z0", 0.0))
         height = float(d.get("height", 2.0))
 
@@ -5770,16 +6118,19 @@ def build_room_from_spec(
                 _assign_material_to_object(door_obj, door_mat)
             out_objs.append(door_obj)
 
-    for w in r.get("windows", []):
+    for w in _room_opening_list(r, "windows"):
         wid = w["wall_id"]
         info = wall_by_id.get(wid)
         if not info:
             continue
 
-        s0 = float(w["s"])
-        width = float(w["width"])
-        z0 = floor_z + float(w.get("z0", 0.9))
-        height = float(w.get("height", 1.2))
+        wall_len = float(info.get("len", 0.0))
+        s0 = max(0.0, min(float(w["s"]), wall_len))
+        width = max(0.0, min(float(w["width"]), wall_len - s0))
+        if width <= 0.02:
+            continue
+        z0 = floor_z + _opening_z0(w, 0.9)
+        height = _opening_height(w, 1.2)
 
         win_objs = _make_double_sided_decal_on_wall(
             name=f"Room_Window_{w['id']}",
@@ -5922,7 +6273,7 @@ def add_supplier_wall_overlay_from_spec(
 
     openings_by_wall: Dict[str, List[dict]] = {}
     for group_name in ("doors", "windows", "openings"):
-        for opening in room.get(group_name, []) or []:
+        for opening in _room_opening_list(room, group_name):
             if not isinstance(opening, dict):
                 continue
             wid = str(opening.get("wall_id") or "").strip()
@@ -5935,10 +6286,10 @@ def add_supplier_wall_overlay_from_spec(
             continue
         try:
             wid = str(wall.get("id", f"w{wall_index}"))
-            i0 = int(wall["from_vertex"])
-            i1 = int(wall["to_vertex"])
-            p0 = poly_xy[i0]
-            p1 = poly_xy[i1]
+            wall_points = _wall_points_from_spec(wall, poly_xy)
+            if wall_points is None:
+                continue
+            p0, p1 = wall_points
         except Exception:
             continue
 
@@ -5956,8 +6307,9 @@ def add_supplier_wall_overlay_from_spec(
         for opening in openings_by_wall.get(wid, []):
             opening_s0 = float(opening.get("s", 0.0))
             opening_width = float(opening.get("width", 0.0))
-            opening_z0 = floor_z + float(opening.get("z0", 0.0))
-            opening_z1 = opening_z0 + float(opening.get("height", height))
+            default_z0 = 0.9 if _opening_kind(opening) == "window" else 0.0
+            opening_z0 = floor_z + _opening_z0(opening, default_z0)
+            opening_z1 = opening_z0 + _opening_height(opening, height)
             segments = _subtract_wall_opening_from_segments(
                 segments,
                 opening_s0=opening_s0,
@@ -6078,9 +6430,11 @@ def place_in_aabb(
             parent.scale = (parent.scale.x * k, parent.scale.y * k, parent.scale.z * k)
         elif fit_mode_l in {"curtain_soft_width", "curtain_window_soft_width"}:
             width_squeeze = 0.92
+            min_depth_scale = 0.04
+            max_depth_scale = 1.50
             if tgt.x >= tgt.y:
                 width_factor = sx * width_squeeze
-                depth_factor = sy
+                depth_factor = max(min_depth_scale, min(max_depth_scale, sy))
                 parent.scale = (
                     parent.scale.x * width_factor,
                     parent.scale.y * depth_factor,
@@ -6088,7 +6442,7 @@ def place_in_aabb(
                 )
             else:
                 width_factor = sy * width_squeeze
-                depth_factor = sx
+                depth_factor = max(min_depth_scale, min(max_depth_scale, sx))
                 parent.scale = (
                     parent.scale.x * depth_factor,
                     parent.scale.y * width_factor,
@@ -6188,6 +6542,8 @@ def place_in_aabb(
 
     def _scale_guard_reason() -> Optional[str]:
         fit_mode_l = (fit_mode or "stretch").lower()
+        if fit_mode_l == "trellis_stretch":
+            return None
         if fit_mode_l in {"uniform", "curtain_soft_width", "curtain_window_soft_width"}:
             return None
         if not _rigid_supplier_group(semantic_group):
@@ -6278,6 +6634,54 @@ def _has_room_spec(data: dict) -> bool:
     return isinstance(poly, list) and len(poly) >= 3
 
 
+def _merge_nested_dict(base: dict, overlay: dict) -> dict:
+    out = copy.deepcopy(base) if isinstance(base, dict) else {}
+    for key, value in overlay.items():
+        if isinstance(value, dict) and isinstance(out.get(key), dict):
+            out[key] = _merge_nested_dict(out[key], value)
+        else:
+            out[key] = copy.deepcopy(value)
+    return out
+
+
+def _merge_render_items_with_placements(raw_items: object, raw_placements: object) -> List[dict]:
+    items = [copy.deepcopy(item) for item in (raw_items or []) if isinstance(item, dict)]
+    if not isinstance(raw_placements, list):
+        return items
+
+    placement_by_id: Dict[str, dict] = {
+        str(pl.get("id") or "").strip(): pl
+        for pl in raw_placements
+        if isinstance(pl, dict) and str(pl.get("id") or "").strip()
+    }
+    if not placement_by_id:
+        return items
+
+    merged_items: List[dict] = []
+    seen_ids: set[str] = set()
+    for item in items:
+        item_id = str(item.get("id") or "").strip()
+        placement = placement_by_id.get(item_id)
+        if not placement:
+            merged_items.append(item)
+            continue
+
+        seen_ids.add(item_id)
+        merged = copy.deepcopy(item)
+        for key, value in placement.items():
+            if key in {"asset", "source", "meta", "constraints"} and isinstance(value, dict):
+                merged[key] = _merge_nested_dict(merged.get(key) if isinstance(merged.get(key), dict) else {}, value)
+            else:
+                merged[key] = copy.deepcopy(value)
+        merged_items.append(merged)
+
+    for item_id, placement in placement_by_id.items():
+        if item_id not in seen_ids:
+            merged_items.append(copy.deepcopy(placement))
+
+    return merged_items
+
+
 def build_scene(
     json_path: str,
     draw_aabb: bool,
@@ -6319,7 +6723,7 @@ def build_scene(
 
     if "items" in data:
         room_engine = data.get("room") or {}
-        items = data["items"] or []
+        items = _merge_render_items_with_placements(data["items"] or [], data.get("placements"))
     else:
         room_engine = data.get("room") or data.get("room_spec") or {}
         items = data.get("placements") or data.get("items") or []
@@ -6580,6 +6984,9 @@ def build_scene(
                         actual_aabb = _aabb_from_object_family_root(parent)
                         if actual_aabb is not None:
                             item_actual_aabbs[item_id] = actual_aabb
+                    if isinstance(parent, bpy.types.Object):
+                        parent["cgs_item_id"] = item_id
+                        parent["cgs_procedural_proxy"] = "catalog"
                 if placed_ok:
                     continue
 
@@ -6653,7 +7060,16 @@ def build_scene(
                 if placed_ok:
                     continue
 
-            if asset_kind == "procedural_curtain_proxy":
+            if (
+                asset_kind == "procedural_curtain_proxy"
+                or (
+                    not mesh_path
+                    and (
+                        semantic_group == "curtain"
+                        or str(it.get("category") or "").strip().lower() == "curtain"
+                    )
+                )
+            ):
                 parent = _make_curtain_proxy_mesh(
                     item=it,
                     aabb=aabb_eng,
@@ -6670,22 +7086,40 @@ def build_scene(
                         if actual_aabb is not None:
                             item_actual_aabbs[item_id] = actual_aabb
 
+            if not placed_ok and _is_procedural_proxy_item(it):
+                parent = _build_procedural_catalog_proxy_in_aabb(
+                    item=it,
+                    aabb=aabb_eng,
+                    rotation_deg_engine=rot_deg,
+                    collection=coll_items,
+                    name=name,
+                    fit_mode=fit_mode,
+                )
+                if parent is not None:
+                    placed_ok = True
+                    if item_id:
+                        item_roots[item_id] = parent
+                        actual_aabb = _aabb_from_object_family_root(parent)
+                        if actual_aabb is not None:
+                            item_actual_aabbs[item_id] = actual_aabb
+
             candidate_specs: List[Tuple[int, dict, str]] = []
-            seen_mesh_paths: set[str] = set()
-            for rank_idx, candidate in enumerate(supplier_candidate_pool):
-                candidate_mesh_path = _resolve_path_maybe(json_dir, _candidate_mesh_path_raw(candidate, it))
-                if not candidate_mesh_path or not os.path.isfile(candidate_mesh_path):
-                    continue
-                candidate_key = str(Path(candidate_mesh_path).resolve())
-                if candidate_key in seen_mesh_paths:
-                    continue
-                seen_mesh_paths.add(candidate_key)
-                candidate_specs.append((rank_idx, candidate, candidate_mesh_path))
-            if mesh_path and os.path.isfile(mesh_path):
-                default_key = str(Path(mesh_path).resolve())
-                if default_key not in seen_mesh_paths:
-                    candidate_specs.append((-1, {}, mesh_path))
-                    seen_mesh_paths.add(default_key)
+            if not placed_ok:
+                seen_mesh_paths: set[str] = set()
+                for rank_idx, candidate in enumerate(supplier_candidate_pool):
+                    candidate_mesh_path = _resolve_path_maybe(json_dir, _candidate_mesh_path_raw(candidate, it))
+                    if not candidate_mesh_path or not os.path.isfile(candidate_mesh_path):
+                        continue
+                    candidate_key = str(Path(candidate_mesh_path).resolve())
+                    if candidate_key in seen_mesh_paths:
+                        continue
+                    seen_mesh_paths.add(candidate_key)
+                    candidate_specs.append((rank_idx, candidate, candidate_mesh_path))
+                if mesh_path and os.path.isfile(mesh_path):
+                    default_key = str(Path(mesh_path).resolve())
+                    if default_key not in seen_mesh_paths:
+                        candidate_specs.append((-1, {}, mesh_path))
+                        seen_mesh_paths.add(default_key)
 
             if candidate_specs:
                 print(f"[DBG] placement name={name}")

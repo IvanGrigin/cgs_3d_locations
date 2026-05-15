@@ -62,6 +62,43 @@ def _candidate_has_real_local_asset(candidate: dict[str, Any]) -> bool:
     return status not in LOW_QUALITY_ASSET_STATUSES
 
 
+def _asset_payload_from_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
+    status = str(candidate.get("asset_status") or "").strip().lower()
+    local_path = str(candidate.get("asset_local_path") or "").strip()
+    payload = {
+        "asset_status": candidate.get("asset_status") or "ready_existing_local_asset",
+        "asset_source_url": candidate.get("asset_source_url"),
+        "preview_local_path": candidate.get("preview_local_path"),
+        "blender_job_path": candidate.get("blender_job_path"),
+        "asset_notes_json": candidate.get("asset_notes_json"),
+        "asset_extra_json": candidate.get("asset_extra_json"),
+    }
+    if status in LOW_QUALITY_ASSET_STATUSES:
+        payload["asset_low_quality_local_path"] = str(Path(local_path).expanduser().resolve()) if local_path else None
+    else:
+        payload["asset_format"] = _infer_asset_format(candidate)
+        payload["asset_local_path"] = str(Path(local_path).expanduser().resolve()) if local_path else None
+    return payload
+
+
+def _asset_payload_from_acquired_asset(asset) -> dict[str, Any]:
+    status = str(getattr(asset, "asset_status", "") or "").strip().lower()
+    payload = {
+        "asset_status": asset.asset_status,
+        "asset_source_url": asset.asset_source_url,
+        "preview_local_path": asset.preview_local_path,
+        "blender_job_path": asset.blender_job_path,
+        "asset_notes_json": asset.notes_json,
+        "asset_extra_json": asset.extra_json,
+    }
+    if status in LOW_QUALITY_ASSET_STATUSES:
+        payload["asset_low_quality_local_path"] = asset.asset_local_path
+    else:
+        payload["asset_format"] = asset.asset_format
+        payload["asset_local_path"] = asset.asset_local_path
+    return payload
+
+
 def _candidate_is_acceptable(candidate: dict[str, Any]) -> bool:
     acceptability = candidate.get("acceptability")
     if not isinstance(acceptability, dict):
@@ -88,6 +125,8 @@ def _catalog_row_by_unique_key(catalog_json_paths: list[Path]) -> dict[str, dict
     for json_path in catalog_json_paths:
         data = read_json(json_path)
         items = data.get("items") if isinstance(data, dict) else data
+        if not isinstance(items, list) and isinstance(data, dict) and data.get("unique_key"):
+            items = [data]
         if not isinstance(items, list):
             continue
         for item in items:
@@ -143,7 +182,18 @@ def _merge_catalog_fields(candidate: dict[str, Any], catalog_row: dict[str, Any]
     if not catalog_row:
         return deepcopy(candidate)
     merged = deepcopy(catalog_row)
+    catalog_asset_status = str(catalog_row.get("asset_status") or "").strip().lower()
+    preserve_catalog_asset = catalog_asset_status == "trellis_generated_local_asset"
     for key, value in candidate.items():
+        if preserve_catalog_asset and key in {
+            "asset_status",
+            "asset_format",
+            "asset_local_path",
+            "asset_source_url",
+            "asset_notes_json",
+            "asset_extra_json",
+        }:
+            continue
         if value is not None:
             merged[key] = deepcopy(value)
     return merged
@@ -202,6 +252,9 @@ def _candidate_to_product_record(candidate: dict[str, Any]) -> ProductRecord:
 
 
 def _apply_asset_payload(candidate: dict[str, Any], payload: dict[str, Any]) -> None:
+    if str(payload.get("asset_status") or "").strip().lower() in LOW_QUALITY_ASSET_STATUSES:
+        for key in ("asset_format", "asset_local_path"):
+            candidate.pop(key, None)
     for key, value in payload.items():
         if value is not None:
             candidate[key] = value
@@ -226,6 +279,7 @@ def acquire_assets_for_bindings_data(
     out_dir: Path,
     blender_bin: str | None = None,
     catalog_rows_by_key: dict[str, dict[str, Any]] | None = None,
+    keep_unresolved_candidates: bool = False,
 ) -> dict[str, Any]:
     out = deepcopy(bindings_data)
     bindings = out.get("bindings") or []
@@ -279,33 +333,18 @@ def acquire_assets_for_bindings_data(
             payload = cached_payload_by_key.get(unique_key)
             if payload is None:
                 if _candidate_has_ready_local_asset(merged_candidate):
-                    payload = {
-                        "asset_status": merged_candidate.get("asset_status") or "ready_existing_local_asset",
-                        "asset_format": _infer_asset_format(merged_candidate),
-                        "asset_local_path": str(Path(str(merged_candidate.get("asset_local_path"))).expanduser().resolve()),
-                        "asset_source_url": merged_candidate.get("asset_source_url"),
-                        "preview_local_path": merged_candidate.get("preview_local_path"),
-                        "blender_job_path": merged_candidate.get("blender_job_path"),
-                        "asset_notes_json": merged_candidate.get("asset_notes_json"),
-                        "asset_extra_json": merged_candidate.get("asset_extra_json"),
-                    }
-                    ready_before_keys.add(unique_key)
+                    payload = _asset_payload_from_candidate(merged_candidate)
+                    if _candidate_has_real_local_asset(merged_candidate):
+                        ready_before_keys.add(unique_key)
+                    else:
+                        unresolved_keys.add(unique_key)
                 else:
                     try:
                         record = _candidate_to_product_record(merged_candidate)
                         upsert_product(db_path, record)
                         asset = acquire_asset_for_record(record, db_path=db_path, out_dir=out_dir, blender_bin=blender_bin)
                         upsert_asset(db_path, asset)
-                        payload = {
-                            "asset_status": asset.asset_status,
-                            "asset_format": asset.asset_format,
-                            "asset_local_path": asset.asset_local_path,
-                            "asset_source_url": asset.asset_source_url,
-                            "preview_local_path": asset.preview_local_path,
-                            "blender_job_path": asset.blender_job_path,
-                            "asset_notes_json": asset.notes_json,
-                            "asset_extra_json": asset.extra_json,
-                        }
+                        payload = _asset_payload_from_acquired_asset(asset)
                         candidate_after = deepcopy(merged_candidate)
                         _apply_asset_payload(candidate_after, payload)
                         if _candidate_has_real_local_asset(candidate_after):
@@ -333,6 +372,10 @@ def acquire_assets_for_bindings_data(
             notes = list(binding.get("selection_notes") or [])
             notes.append(f"asset_acquisition_selected_real_candidate_rank:{selected_rank}")
             binding["selection_notes"] = notes
+        elif keep_unresolved_candidates:
+            notes = list(binding.get("selection_notes") or [])
+            notes.append("asset_acquisition_no_real_asset_found_keep_candidate_for_fallback")
+            binding["selection_notes"] = notes
         else:
             binding["chosen_candidate"] = None
             binding["selection_status"] = "no_real_asset_after_acquisition"
@@ -351,6 +394,7 @@ def acquire_assets_for_bindings_data(
         "downloaded_ready_count": len(downloaded_ready_keys),
         "unresolved_count": len(unresolved_keys),
         "failed_count": len(failed_keys),
+        "keep_unresolved_candidates": bool(keep_unresolved_candidates),
         "db_path": str(db_path.resolve()),
         "out_dir": str(out_dir.resolve()),
     }
@@ -366,6 +410,7 @@ def acquire_assets_for_bindings_json(
     out_dir: str | Path,
     blender_bin: str | None = None,
     catalog_json_paths: list[str | Path] | None = None,
+    keep_unresolved_candidates: bool = False,
 ) -> Path:
     bindings_data = read_json(bindings_json_path)
     catalog_rows_by_key = _catalog_row_by_unique_key(
@@ -377,6 +422,7 @@ def acquire_assets_for_bindings_json(
         out_dir=Path(out_dir).expanduser().resolve(),
         blender_bin=blender_bin,
         catalog_rows_by_key=catalog_rows_by_key,
+        keep_unresolved_candidates=keep_unresolved_candidates,
     )
     output_path = Path(output_json_path).expanduser().resolve()
     write_json(output_path, out)

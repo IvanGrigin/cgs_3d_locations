@@ -116,6 +116,7 @@ SUPPLIER_SELECTION_STRATEGIES = {
     "cheapest",
     "cheap_style",
     "style",
+    "best_visual_reference",
 }
 
 
@@ -151,6 +152,11 @@ STYLE_ALIASES = {
     "wabi_sabi": "eco_organic",
     "классический": "classic",
     "classic": "classic",
+    "classical": "classic",
+    "traditional": "classic",
+    "soft_classic": "soft_classic",
+    "soft_traditional": "soft_classic",
+    "residential_classic": "soft_classic",
 }
 
 
@@ -165,6 +171,7 @@ STYLE_COMPATIBILITY = {
     "high_tech": {"modern", "loft_industrial"},
     "eco_organic": {"scandinavian", "japandi", "soft_minimalism"},
     "mid_century_modern": {"modern", "contemporary"},
+    "soft_classic": {"classic", "contemporary", "modern", "scandinavian"},
     "classic": {"contemporary"},
 }
 
@@ -266,11 +273,89 @@ def _target_user_preferences(target: dict[str, Any], context: dict[str, Any] | N
     return prefs
 
 
-def _product_size_m(row: dict[str, Any]) -> list[float] | None:
+_DIMENSION_UNIT_RE = r"(?:мм|mm|см|cm|метр(?:а|ов)?|м|m)?"
+_DIMENSION_LABELS: dict[str, tuple[str, ...]] = {
+    "width": ("ширина", "шир.", "width", "w"),
+    "depth": ("глубина", "глуб.", "depth", "d"),
+    "length": ("длина", "дл.", "length", "len", "l"),
+    "height": ("высота", "выс.", "height", "h"),
+}
+
+
+def _dimension_value_to_cm(value: Any, unit: str | None = None) -> float | None:
+    number = _safe_float(str(value).replace(",", ".") if value is not None else None)
+    if number is None or number <= 0:
+        return None
+    unit_norm = str(unit or "").strip().lower().replace(".", "")
+    if unit_norm in {"мм", "mm"}:
+        return number / 10.0
+    if unit_norm in {"м", "m", "метр", "метра", "метров"}:
+        return number * 100.0
+    if not unit_norm and number <= 6.0:
+        return number * 100.0
+    return number
+
+
+def _infer_dimensions_cm_from_text(row: dict[str, Any]) -> dict[str, float]:
+    parts = [
+        row.get("title"),
+        row.get("description"),
+        row.get("category_raw"),
+        row.get("extra_json"),
+        row.get("extra"),
+    ]
+    text = " ".join(str(part or "") for part in parts).lower().replace("ё", "е")
+    found: dict[str, float] = {}
+
+    for axis, labels in _DIMENSION_LABELS.items():
+        label_re = "|".join(re.escape(label) for label in labels)
+        pattern = re.compile(
+            rf"(?:\b|^)(?:{label_re})(?:\b|\.?)\s*(?:[:=-]|\s)\s*"
+            rf"(\d+(?:[.,]\d+)?)\s*({_DIMENSION_UNIT_RE})",
+            re.IGNORECASE,
+        )
+        match = pattern.search(text)
+        if not match:
+            continue
+        value = _dimension_value_to_cm(match.group(1), match.group(2))
+        if value is not None:
+            found[axis] = value
+
+    if "depth" not in found and "length" in found:
+        found["depth"] = found["length"]
+
+    if not {"width", "depth", "height"} <= set(found):
+        triple = re.search(
+            rf"(\d+(?:[.,]\d+)?)\s*(?:x|х|×|\*)\s*"
+            rf"(\d+(?:[.,]\d+)?)\s*(?:x|х|×|\*)\s*"
+            rf"(\d+(?:[.,]\d+)?)\s*({_DIMENSION_UNIT_RE})",
+            text,
+            flags=re.IGNORECASE,
+        )
+        if triple:
+            unit = triple.group(4)
+            values = [_dimension_value_to_cm(triple.group(i), unit) for i in (1, 2, 3)]
+            if all(value is not None for value in values):
+                found.setdefault("width", float(values[0]))
+                found.setdefault("depth", float(values[1]))
+                found.setdefault("height", float(values[2]))
+
+    return {key: round(float(value), 4) for key, value in found.items() if value and value > 0}
+
+
+def _row_dimension_cm(row: dict[str, Any], axis: str) -> float | None:
     dims = row.get("dimensions_cm") if isinstance(row.get("dimensions_cm"), dict) else {}
-    width = row.get("width_cm", dims.get("width"))
-    depth = row.get("depth_cm", dims.get("depth"))
-    height = row.get("height_cm", dims.get("height"))
+    value = row.get(f"{axis}_cm", dims.get(axis))
+    direct = _dimension_value_to_cm(value, "cm") if value is not None else None
+    if direct is not None:
+        return direct
+    return _infer_dimensions_cm_from_text(row).get(axis)
+
+
+def _product_size_m(row: dict[str, Any]) -> list[float] | None:
+    width = _row_dimension_cm(row, "width")
+    depth = _row_dimension_cm(row, "depth")
+    height = _row_dimension_cm(row, "height")
     if width is None or depth is None or height is None:
         return None
     try:
@@ -292,6 +377,10 @@ def _effective_target_size_m(target: dict[str, Any]) -> list[float]:
         tw = max(tw, 0.60)
         td = max(td, 0.60)
         th = max(th, 0.45)
+    if str(target.get("semantic_group") or "").strip() == "bed":
+        # Bed catalog height usually includes the headboard, while generated target
+        # height may describe only mattress/deck height.
+        th = max(th, 0.90)
     return [tw, td, th]
 
 
@@ -300,15 +389,16 @@ def _has_text(value: Any) -> bool:
 
 
 def _has_full_dimensions(row: dict[str, Any]) -> bool:
-    return (
-        row.get("width_cm") is not None
-        and row.get("depth_cm") is not None
-        and row.get("height_cm") is not None
-    )
+    return _product_size_m(row) is not None
 
 
 def _has_category(row: dict[str, Any]) -> bool:
-    return _has_text(row.get("category_raw")) or _has_text(row.get("category_norm"))
+    return (
+        _has_text(row.get("category_raw"))
+        or _has_text(row.get("category_raw_en"))
+        or _has_text(row.get("category_raw_ru"))
+        or _has_text(row.get("category_norm"))
+    )
 
 
 def _row_is_rich(row: dict[str, Any]) -> bool:
@@ -317,7 +407,10 @@ def _row_is_rich(row: dict[str, Any]) -> bool:
             _has_text(row.get("title")),
             row.get("price_value") is not None,
             _has_full_dimensions(row),
-            _has_text(row.get("description")) or _has_text(row.get("vlm_description_text")),
+            _has_text(row.get("description"))
+            or _has_text(row.get("description_short_en"))
+            or _has_text(row.get("description_short_ru"))
+            or _has_text(row.get("vlm_description_text")),
             _has_category(row),
             _has_text(row.get("brand")),
         )
@@ -326,6 +419,7 @@ def _row_is_rich(row: dict[str, Any]) -> bool:
 
 SUPPORTED_LOCAL_ASSET_EXTS = {"obj", "fbx", "glb", "gltf"}
 LOW_QUALITY_ASSET_STATUSES = {"proxy_generated_with_blender", "needs_blender_rebuild"}
+PRICE_SELECTION_MODES = {"cheapest", "cheapest_top20"}
 _CAMEL_RE_1 = re.compile(r"([a-z0-9])([A-Z])")
 _CAMEL_RE_2 = re.compile(r"([A-Z]+)([A-Z][a-z])")
 _TOKEN_STOPWORDS = {
@@ -373,6 +467,12 @@ _TOKEN_ALIASES: dict[str, tuple[str, ...]] = {
     "диван": ("sofa",),
     "chair": ("chair",),
     "стул": ("chair",),
+    "stool": ("stool",),
+    "pouf": ("stool",),
+    "pouffe": ("stool",),
+    "ottoman": ("stool",),
+    "пуф": ("stool",),
+    "табурет": ("stool",),
     "armchair": ("armchair", "chair"),
     "кресло": ("armchair", "chair"),
     "sideboard": ("sideboard", "cabinet"),
@@ -383,7 +483,37 @@ _TOKEN_ALIASES: dict[str, tuple[str, ...]] = {
     "торшер": ("floor", "lamp"),
     "mirror": ("mirror",),
     "зеркало": ("mirror",),
+    "wood": ("wood",),
+    "дерево": ("wood", "brown"),
+    "деревянныи": ("wood", "brown"),
+    "деревянный": ("wood", "brown"),
+    "деревянная": ("wood", "brown"),
+    "metal": ("metal",),
+    "металл": ("metal",),
+    "металлическии": ("metal",),
+    "металлический": ("metal",),
 }
+LOCALIZED_CATALOG_TEXT_FIELDS = (
+    "title_en",
+    "title_ru",
+    "category_raw_en",
+    "category_raw_ru",
+    "color_en",
+    "color_ru",
+    "materials_en",
+    "materials_ru",
+    "description_short_de",
+    "description_short_en",
+    "description_short_ru",
+    "description_en",
+    "description_ru",
+    "search_text_de",
+    "search_text_en",
+    "search_text_ru",
+)
+LOCALIZED_CATEGORY_FIELDS = ("title_en", "title_ru", "category_raw_en", "category_raw_ru", "search_text_en", "search_text_ru")
+LOCALIZED_COLOR_FIELDS = ("color_en", "color_ru", "description_short_en", "description_short_ru", "search_text_en", "search_text_ru")
+LOCALIZED_MATERIAL_FIELDS = ("materials_en", "materials_ru", "description_short_en", "description_short_ru", "search_text_en", "search_text_ru")
 _ACCEPTANCE_DEFAULTS = {
     "known": {
         "max_primary_axis_distance": 0.75,
@@ -509,6 +639,9 @@ def _candidate_has_ready_real_asset(row: dict[str, Any]) -> bool:
     asset_status = str(row.get("asset_status") or "").strip().lower()
     if not local_path or not Path(local_path).expanduser().is_file():
         return False
+    path_text = local_path.replace("\\", "/").lower()
+    if path_text.endswith("/built/proxy.glb") or path_text.endswith("/proxy.glb"):
+        return False
     if asset_format not in SUPPORTED_LOCAL_ASSET_EXTS:
         return False
     return asset_status not in LOW_QUALITY_ASSET_STATUSES
@@ -555,6 +688,13 @@ def _normalize_text_tokens(value: Any) -> set[str]:
     return tokens
 
 
+def _row_tokens_from_fields(row: dict[str, Any], fields: tuple[str, ...] | list[str]) -> set[str]:
+    tokens: set[str] = set()
+    for field in fields:
+        tokens |= _normalize_text_tokens(row.get(field))
+    return tokens
+
+
 def _normalize_color_token(token: str) -> str:
     t = str(token or "").strip().lower().replace("ё", "е")
     aliases = {
@@ -574,6 +714,7 @@ def _normalize_color_token(token: str) -> str:
         "navy": "blue",
         "teal": "green",
         "olive": "green",
+        "sage": "green",
         "burgundy": "red",
         "pink": "red",
         "white": "white",
@@ -587,6 +728,40 @@ def _normalize_color_token(token: str) -> str:
         "green": "green",
         "blue": "blue",
         "purple": "purple",
+        "белыи": "white",
+        "белый": "white",
+        "белая": "white",
+        "черныи": "black",
+        "черный": "black",
+        "черная": "black",
+        "серыи": "gray",
+        "серый": "gray",
+        "серая": "gray",
+        "бежевыи": "beige",
+        "бежевый": "beige",
+        "бежевая": "beige",
+        "беж": "beige",
+        "кремовыи": "beige",
+        "кремовый": "beige",
+        "кремовая": "beige",
+        "натуральныи": "beige",
+        "натуральный": "beige",
+        "песочныи": "beige",
+        "песочный": "beige",
+        "коричневыи": "brown",
+        "коричневый": "brown",
+        "дуб": "brown",
+        "дерево": "brown",
+        "оливковыи": "green",
+        "оливковый": "green",
+        "зеленый": "green",
+        "зеленая": "green",
+        "синии": "blue",
+        "синий": "blue",
+        "синяя": "blue",
+        "красныи": "red",
+        "красный": "red",
+        "красная": "red",
     }
     return aliases.get(t, t)
 
@@ -723,6 +898,7 @@ def _row_query_tokens(row: dict[str, Any]) -> set[str]:
     tokens: set[str] = set()
     for part in parts:
         tokens |= _normalize_text_tokens(part)
+    tokens |= _row_tokens_from_fields(row, LOCALIZED_CATALOG_TEXT_FIELDS)
     tokens |= _row_image_color_tokens(row)
     return tokens
 
@@ -737,6 +913,7 @@ def _row_category_tokens(row: dict[str, Any]) -> set[str]:
     tokens: set[str] = set()
     for part in parts:
         tokens |= _normalize_text_tokens(part)
+    tokens |= _row_tokens_from_fields(row, LOCALIZED_CATEGORY_FIELDS)
     return tokens
 
 
@@ -761,6 +938,7 @@ def _row_design_tokens(row: dict[str, Any]) -> set[str]:
     tokens: set[str] = set()
     for part in parts:
         tokens |= _normalize_text_tokens(part)
+    tokens |= _row_tokens_from_fields(row, LOCALIZED_CATALOG_TEXT_FIELDS)
     tokens |= _row_image_color_tokens(row)
     return tokens
 
@@ -784,7 +962,16 @@ def _row_color_tokens(row: dict[str, Any]) -> set[str]:
     tokens |= _extract_color_tokens(row.get("vlm_description_text"))
     tokens |= _extract_color_tokens(row.get("materials"))
     tokens |= _extract_color_tokens(row.get("title"))
+    for field in LOCALIZED_COLOR_FIELDS:
+        tokens |= _extract_color_tokens(row.get(field))
     tokens |= _row_image_color_tokens(row)
+    return tokens
+
+
+def _row_material_tokens(row: dict[str, Any]) -> set[str]:
+    tokens: set[str] = set()
+    for field in ("materials", "vlm_materials", *LOCALIZED_MATERIAL_FIELDS):
+        tokens |= _normalize_text_tokens(row.get(field))
     return tokens
 
 
@@ -794,7 +981,7 @@ def _same_family(group_a: str, group_b: str) -> bool:
     families = [
         {"desk", "side_table"},
         {"coffee_table", "side_table"},
-        {"chair", "armchair"},
+        {"chair", "armchair", "stool", "bench"},
         {"dresser", "nightstand"},
         {"shelf", "tv_stand"},
         {"computer", "computer_monitor", "laptop_computer_keyboard_mouse"},
@@ -1253,8 +1440,8 @@ def _bbox_fill_info(target: dict[str, Any], row: dict[str, Any]) -> dict[str, An
 
 def _infer_row_group(row: dict[str, Any]) -> str:
     category_norm = str(row.get("category_norm") or "").strip().lower()
-    title = row.get("title")
-    category_raw = row.get("category_raw")
+    title = " ".join(str(row.get(key) or "") for key in ("title", "title_en", "title_ru", "search_text_en", "search_text_ru"))
+    category_raw = " ".join(str(row.get(key) or "") for key in ("category_raw", "category_raw_en", "category_raw_ru"))
     row_text = " ".join(str(value or "").lower() for value in (title, category_raw, category_norm))
     if category_norm == "tv_projector_screen" and any(token in row_text for token in ("monitor", "монитор", "gaming", "игров")):
         return "computer"
@@ -1275,6 +1462,11 @@ def _infer_row_group(row: dict[str, Any]) -> str:
             "armchair": "armchair",
             "chair": "chair",
             "dining_chair": "chair",
+            "stool": "stool",
+            "ottoman": "stool",
+            "pouf": "stool",
+            "pouffe": "stool",
+            "bench": "bench",
             "sofa": "sofa",
             "dining_table": "dining_table",
             "coffee_table": "coffee_table",
@@ -1295,13 +1487,45 @@ def _infer_row_group(row: dict[str, Any]) -> str:
             "mirror": "mirror",
             "table": "coffee_table",
             "floor_lamp": "lamp_floor",
+            "standing_lamp": "lamp_floor",
             "chandelier": "lamp_ceiling",
+            "ceiling_light": "lamp_ceiling",
+            "pendant_lamp": "lamp_ceiling",
             "lamp_table": "lamp_table",
+            "table_lamp": "lamp_table",
+            "desk_lamp": "lamp_table",
+            "wall_lamp": "lamp_wall",
+            "wall_light": "lamp_wall",
             "lighting": "lamp_ceiling",
             "light": "lamp_ceiling",
         }
         if category_norm in direct_map:
             return direct_map[category_norm]
+
+    localized_tokens = _row_category_tokens(row)
+    for token, group in (
+        ("bed", "bed"),
+        ("nightstand", "nightstand"),
+        ("wardrobe", "wardrobe"),
+        ("dresser", "dresser"),
+        ("desk", "desk"),
+        ("armchair", "armchair"),
+        ("chair", "chair"),
+        ("stool", "stool"),
+        ("bench", "bench"),
+        ("sofa", "sofa"),
+        ("bookcase", "shelf"),
+        ("shelf", "shelf"),
+        ("mirror", "mirror"),
+    ):
+        if token in localized_tokens:
+            return group
+    if "chandelier" in localized_tokens or ("ceiling" in localized_tokens and "lamp" in localized_tokens):
+        return "lamp_ceiling"
+    if "floor" in localized_tokens and "lamp" in localized_tokens:
+        return "lamp_floor"
+    if "lamp" in localized_tokens:
+        return "lamp_table"
 
     return _semantic_group(title, category_raw, {})
 
@@ -1379,8 +1603,8 @@ def _design_match_info(target: dict[str, Any], row: dict[str, Any]) -> tuple[flo
     style_tokens = _normalize_text_tokens(constraints.get("style"))
     brand_tokens = _normalize_text_tokens(constraints.get("brand"))
 
-    material_match = bool(material_tokens and (material_tokens & _normalize_text_tokens(row.get("materials"))))
-    color_match = bool(color_tokens and (color_tokens & _normalize_text_tokens(row.get("color"))))
+    material_match = bool(material_tokens and (material_tokens & _row_material_tokens(row)))
+    color_match = bool(color_tokens and (color_tokens & _row_color_tokens(row)))
     style_match = bool(style_tokens and (style_tokens & _normalize_text_tokens(row.get("style"))))
     brand_match = bool(brand_tokens and (brand_tokens & _normalize_text_tokens(row.get("brand"))))
 
@@ -1520,6 +1744,8 @@ def _price_rank_info(row: dict[str, Any]) -> dict[str, Any]:
 
 def _selection_strategy(context: dict[str, Any] | None) -> str:
     strategy = str((context or {}).get("supplier_selection_strategy") or "balanced").strip().lower()
+    if strategy == "best_visual_reference":
+        return "style"
     if strategy not in SUPPLIER_SELECTION_STRATEGIES:
         return "balanced"
     return strategy
@@ -1727,16 +1953,29 @@ def _parse_json_object_from_text(text: str) -> dict[str, Any]:
 
 def _llm_candidate_payload(candidate: dict[str, Any]) -> dict[str, Any]:
     score_breakdown = candidate.get("score_breakdown") if isinstance(candidate.get("score_breakdown"), dict) else {}
+    image_urls = _candidate_images(candidate, limit=20)
     return {
         "unique_key": candidate.get("unique_key"),
         "title": candidate.get("title"),
+        "title_en": candidate.get("title_en"),
+        "title_ru": candidate.get("title_ru"),
         "brand": candidate.get("brand"),
         "collection": candidate.get("collection"),
         "source_site": candidate.get("source_site"),
         "price_value": candidate.get("price_value"),
         "price_currency": candidate.get("price_currency"),
         "color": candidate.get("color"),
+        "color_en": candidate.get("color_en"),
+        "color_ru": candidate.get("color_ru"),
         "materials": candidate.get("materials"),
+        "materials_en": candidate.get("materials_en"),
+        "materials_ru": candidate.get("materials_ru"),
+        "category_raw_en": candidate.get("category_raw_en"),
+        "category_raw_ru": candidate.get("category_raw_ru"),
+        "description_short_en": candidate.get("description_short_en"),
+        "description_short_ru": candidate.get("description_short_ru"),
+        "search_text_en": candidate.get("search_text_en"),
+        "search_text_ru": candidate.get("search_text_ru"),
         "style_llm": {
             "primary": candidate.get("style_llm"),
             "secondary": candidate.get("style_llm_secondary") or [],
@@ -1750,7 +1989,10 @@ def _llm_candidate_payload(candidate: dict[str, Any]) -> dict[str, Any]:
             "depth": candidate.get("depth_cm"),
             "height": candidate.get("height_cm"),
         },
-        "description": str(candidate.get("description") or "")[:500],
+        "description": str(candidate.get("description") or candidate.get("description_short_en") or candidate.get("description_short_ru") or "")[:500],
+        "image_count": len(image_urls),
+        "has_product_images": bool(image_urls),
+        "image_urls_sample": image_urls[:3],
         "vlm_description": str(
             candidate.get("vlm_description_text")
             or candidate.get("vlm_description_summary")
@@ -1785,6 +2027,7 @@ def _llm_candidate_payload(candidate: dict[str, Any]) -> dict[str, Any]:
             "material_score": score_breakdown.get("material_score"),
             "description_score": score_breakdown.get("description_score"),
             "asset_availability_score": score_breakdown.get("asset_availability_score"),
+            "source_quality_score": score_breakdown.get("source_quality_score"),
             "price_known_rank": score_breakdown.get("price_known_rank"),
             "price_sort_value": score_breakdown.get("price_sort_value"),
         },
@@ -1866,6 +2109,9 @@ def _llm_rerank_candidates(
         "Respect selection_strategy: cheapest means keep price dominant after fit/type; cheap_style means "
         "prefer style-compatible candidates then lower price; style means prioritize style fit and ignore price. "
         "Also consider visual similarity, prompt/style match, and explicit user preferences such as budget and preferred colors. "
+        "For best_visual_reference mode, product cards with usable product images and dimensions are preferred because "
+        "they become TRELLIS visual references; do not pick an image-less card over a close image-rich card only because "
+        "it has a downloadable archive. "
         "Prefer realistic assets over placeholders when all else is close. "
         "Return strict JSON only."
     )
@@ -1963,9 +2209,192 @@ def _llm_rerank_candidates(
     }
 
 
+def _candidate_axis_m(row: dict[str, Any], key: str) -> float | None:
+    dims = row.get("dimensions_cm") if isinstance(row.get("dimensions_cm"), dict) else {}
+    value = row.get(f"{key}_cm", dims.get(key))
+    parsed = _safe_float(value)
+    if parsed is None or parsed <= 0:
+        return None
+    return parsed / 100.0
+
+
+def _luxury_ceiling_intent(context: dict[str, Any] | None) -> bool:
+    context = context or {}
+    tokens: set[str] = set()
+    for key in ("prompt_tokens", "room_style_tokens"):
+        value = context.get(key)
+        if isinstance(value, set):
+            tokens.update(str(token).lower() for token in value)
+        elif isinstance(value, (list, tuple)):
+            tokens.update(str(token).lower() for token in value)
+    text = " ".join(str(context.get(key) or "") for key in ("prompt_text", "room_style_hint", "style_label")).lower().replace("ё", "е")
+    intent_tokens = {
+        "люстра",
+        "люстры",
+        "chandelier",
+        "classic",
+        "classical",
+        "luxury",
+        "baroque",
+        "классика",
+        "классический",
+        "классическая",
+        "роскошный",
+        "роскошная",
+        "барокко",
+    }
+    return bool(tokens.intersection(intent_tokens) or any(token in text for token in intent_tokens))
+
+
+def _target_room_type_from_context(context: dict[str, Any] | None) -> str:
+    room_design_spec = (context or {}).get("room_design_spec")
+    if isinstance(room_design_spec, dict):
+        room_type = str(room_design_spec.get("room_type") or room_design_spec.get("target_room_type") or "").strip().lower()
+        if room_type:
+            return room_type
+    return str((context or {}).get("room_type") or (context or {}).get("target_room_type") or "").strip().lower()
+
+
+def _candidate_title_tokens(row: dict[str, Any]) -> set[str]:
+    return _normalize_text_tokens(
+        " ".join(
+            str(row.get(key) or "")
+            for key in (
+                "title",
+                "title_en",
+                "title_ru",
+                "name",
+                "category",
+                "category_raw",
+                "category_raw_en",
+                "category_raw_ru",
+                "category_norm",
+                "semantic_group",
+                "product_type",
+                "description",
+                "description_short_en",
+                "description_short_ru",
+                "search_text_en",
+                "search_text_ru",
+            )
+        )
+    )
+
+
+def _candidate_oriented_xy_ratio(target_size_m: list[float], candidate_size_m: list[float]) -> dict[str, Any]:
+    tw, td = [max(float(target_size_m[i]), 1e-6) for i in (0, 1)]
+    cw, cd = [max(float(candidate_size_m[i]), 1e-6) for i in (0, 1)]
+    direct = {
+        "orientation": "direct",
+        "width_ratio": cw / tw,
+        "depth_ratio": cd / td,
+        "oriented_width_m": cw,
+        "oriented_depth_m": cd,
+    }
+    swapped = {
+        "orientation": "swapped_xy",
+        "width_ratio": cd / tw,
+        "depth_ratio": cw / td,
+        "oriented_width_m": cd,
+        "oriented_depth_m": cw,
+    }
+    best = min((direct, swapped), key=lambda item: max(item["width_ratio"], item["depth_ratio"]))
+    return {
+        **best,
+        "max_xy_ratio": max(best["width_ratio"], best["depth_ratio"]),
+    }
+
+
+def _hard_dimension_reject_info(target: dict[str, Any], row: dict[str, Any], context: dict[str, Any] | None) -> dict[str, Any] | None:
+    target_group = str(target.get("semantic_group") or "").strip().lower()
+    target_category = str(target.get("category") or "").strip().lower()
+    candidate_group = str(row.get("semantic_group") or _infer_row_group(row) or "").strip().lower()
+    if target_group and candidate_group and not _same_family(target_group, candidate_group):
+        return None
+
+    target_size = _effective_target_size_m(target)
+    if len(target_size) != 3:
+        return None
+
+    candidate_size = _product_size_m(row)
+    candidate_width = float(candidate_size[0]) if candidate_size else (_candidate_axis_m(row, "width") or 0.0)
+    candidate_depth = float(candidate_size[1]) if candidate_size else (_candidate_axis_m(row, "depth") or 0.0)
+    candidate_height = float(candidate_size[2]) if candidate_size else (_candidate_axis_m(row, "height") or 0.0)
+    candidate_max = max(candidate_width, candidate_depth)
+    target_max = max(float(target_size[0] or 0.0), float(target_size[1] or 0.0))
+    title_tokens = _candidate_title_tokens(row)
+    chandelier_like = bool(title_tokens.intersection({"chandelier", "люстра", "люстры"}))
+
+    is_ceiling_light = target_group == "lamp_ceiling" or target_category == "ceiling_light"
+    if is_ceiling_light and _target_room_type_from_context(context) == "bedroom" and not _luxury_ceiling_intent(context):
+        if chandelier_like:
+            return {
+                "hard_dimension_reject_reason": "rejected_bedroom_chandelier_not_requested",
+                "target_size_m": [round(float(x), 4) for x in target_size],
+                "candidate_size_m": [round(candidate_width, 4), round(candidate_depth, 4), round(candidate_height, 4)] if candidate_max > 0 else None,
+                "room_type": "bedroom",
+            }
+        if target_max <= 0.60 and candidate_max > 0.80:
+            return {
+                "hard_dimension_reject_reason": "rejected_oversized_for_target_aabb",
+                "target_size_m": [round(float(x), 4) for x in target_size],
+                "candidate_size_m": [round(candidate_width, 4), round(candidate_depth, 4), round(candidate_height, 4)],
+                "max_candidate_xy_m": round(candidate_max, 4),
+            }
+        if _candidate_axis_m(row, "height") is None and target_max > 0 and candidate_max > max(0.80, target_max * 1.8):
+            return {
+                "hard_dimension_reject_reason": "rejected_missing_height_for_oversized_light",
+                "target_size_m": [round(float(x), 4) for x in target_size],
+                "candidate_width_m": round(candidate_width, 4),
+                "candidate_depth_m": round(candidate_depth, 4),
+            }
+
+    if candidate_size is None:
+        return None
+
+    xy_info = _candidate_oriented_xy_ratio(target_size, candidate_size)
+    xy_ratio = float(xy_info["max_xy_ratio"])
+    threshold = 1.8 if target_group.startswith("lamp_") else 2.5
+    if xy_ratio > threshold:
+        return {
+            "hard_dimension_reject_reason": "rejected_oversized_for_target_aabb",
+            "target_size_m": [round(float(x), 4) for x in target_size],
+            "candidate_size_m": [round(float(x), 4) for x in candidate_size],
+            "max_xy_ratio": round(xy_ratio, 6),
+            "max_xy_ratio_threshold": threshold,
+            "fit_orientation": xy_info["orientation"],
+        }
+    if target_max <= 0.35 and candidate_max > 0.80:
+        return {
+            "hard_dimension_reject_reason": "rejected_very_small_target_large_candidate",
+            "target_size_m": [round(float(x), 4) for x in target_size],
+            "candidate_size_m": [round(float(x), 4) for x in candidate_size],
+            "max_candidate_xy_m": round(candidate_max, 4),
+        }
+    return None
+
+
+def _bedroom_ceiling_light_reject_reason(target: dict[str, Any], row: dict[str, Any], context: dict[str, Any] | None) -> str | None:
+    info = _hard_dimension_reject_info(target, row, context)
+    if not info:
+        return None
+    reason = str(info.get("hard_dimension_reject_reason") or "")
+    if reason in {
+        "rejected_bedroom_chandelier_not_requested",
+        "rejected_oversized_for_target_aabb",
+        "rejected_missing_height_for_oversized_light",
+    }:
+        return reason
+    return None
+
+
 def _rank_candidate(target: dict[str, Any], row: dict[str, Any], context: dict[str, Any] | None = None) -> tuple[tuple[Any, ...], dict[str, Any]] | None:
     source_policy_ok, source_policy_breakdown = _source_policy_match_info(row)
     if not source_policy_ok:
+        return None
+
+    hard_dimension_reject = _hard_dimension_reject_info(target, row, context)
+    if hard_dimension_reject:
         return None
 
     identity_ok, identity_breakdown = candidate_identity_gate(target, row)
@@ -1977,6 +2406,8 @@ def _rank_candidate(target: dict[str, Any], row: dict[str, Any], context: dict[s
         return None
 
     target_group = str(target.get("semantic_group") or "").strip()
+    if _bedroom_ceiling_light_reject_reason(target, row, context):
+        return None
     accessory_group_relaxed_size = target_group in {"kitchenware", "food_drink", "decorative_set", "plant_planter_vase"}
     size_rank, size_distance, size_breakdown = _size_match_info(target, row)
     has_real_asset = _candidate_has_ready_real_asset(row)
@@ -2464,6 +2895,8 @@ def load_supplier_catalog_json(
     for json_path in json_paths:
         data = read_json(json_path)
         items = data.get("items") if isinstance(data, dict) else data
+        if not isinstance(items, list) and isinstance(data, dict) and data.get("unique_key"):
+            items = [data]
         if not isinstance(items, list):
             if isinstance(data, dict) and isinstance(data.get("bindings"), list):
                 raise RuntimeError(
@@ -2487,8 +2920,12 @@ def load_supplier_catalog_json(
                 "parsed_at": item.get("parsed_at"),
                 "external_id": item.get("external_id"),
                 "category_raw": item.get("category_raw"),
+                "category_raw_en": item.get("category_raw_en"),
+                "category_raw_ru": item.get("category_raw_ru"),
                 "category_norm": item.get("category_norm"),
                 "title": item.get("title"),
+                "title_en": item.get("title_en"),
+                "title_ru": item.get("title_ru"),
                 "brand": item.get("brand"),
                 "collection": item.get("collection"),
                 "product_url": item.get("product_url"),
@@ -2511,7 +2948,17 @@ def load_supplier_catalog_json(
                 "style_llm_evidence": item.get("style_llm_evidence"),
                 "style_llm_rationale": item.get("style_llm_rationale"),
                 "color": item.get("color"),
+                "color_en": item.get("color_en"),
+                "color_ru": item.get("color_ru"),
                 "description": item.get("description"),
+                "description_short_de": item.get("description_short_de"),
+                "description_short_en": item.get("description_short_en"),
+                "description_short_ru": item.get("description_short_ru"),
+                "description_en": item.get("description_en"),
+                "description_ru": item.get("description_ru"),
+                "search_text_de": item.get("search_text_de"),
+                "search_text_en": item.get("search_text_en"),
+                "search_text_ru": item.get("search_text_ru"),
                 "vlm_description_text": item.get("vlm_description_text"),
                 "vlm_description_summary": item.get("vlm_description_summary"),
                 "vlm_color": item.get("vlm_color"),
@@ -2523,6 +2970,8 @@ def load_supplier_catalog_json(
                 "depth_cm": item.get("depth_cm", dims.get("depth")),
                 "height_cm": item.get("height_cm", dims.get("height")),
                 "materials": item.get("materials"),
+                "materials_en": item.get("materials_en"),
+                "materials_ru": item.get("materials_ru"),
                 "room": item.get("room"),
                 "availability": item.get("availability"),
                 "images_json": json.dumps(item.get("images") or [], ensure_ascii=False),
@@ -2534,6 +2983,13 @@ def load_supplier_catalog_json(
                 "mesh_available": item.get("mesh_available"),
                 "mesh_ready": item.get("mesh_ready"),
             }
+            inferred_dims = _infer_dimensions_cm_from_text(row)
+            for axis in ("width", "depth", "height"):
+                key = f"{axis}_cm"
+                if row.get(key) is None and inferred_dims.get(axis) is not None:
+                    row[key] = inferred_dims[axis]
+            if inferred_dims:
+                row["dimensions_inferred_from_text"] = inferred_dims
             if sites and str(row.get("source_site") or "") not in sites:
                 continue
             if not row.get("title"):
@@ -2643,10 +3099,14 @@ def _target_is_large_furniture_candidate(target: dict[str, Any]) -> bool:
 
     allowed_groups = {
         "bed",
+        "bench",
+        "stool",
         "dresser",
         "desk",
         "shelf",
         "wardrobe",
+        "nightstand",
+        "shoe_cabinet",
         "sofa",
         "armchair",
         "chair",
@@ -2663,13 +3123,15 @@ def _target_is_large_furniture_candidate(target: dict[str, Any]) -> bool:
         "lamp_table",
         "lamp_floor",
         "lamp_ceiling",
+        "lamp_wall",
+        "tv",
         "mirror",
         "bathroom_sink",
     }
     if semantic_group not in allowed_groups:
         return False
 
-    if semantic_group in {"lamp_table", "lamp_floor", "lamp_ceiling", "mirror", "bathroom_sink", "kitchenware", "kitchen_faucet", "food_drink", "decorative_set", "plant_planter_vase"}:
+    if semantic_group in {"nightstand", "side_table", "stool", "bench", "lamp_table", "lamp_floor", "lamp_ceiling", "mirror", "bathroom_sink", "kitchenware", "kitchen_faucet", "food_drink", "decorative_set", "plant_planter_vase"}:
         return True
 
     return largest_axis >= 0.55 or volume >= 0.06
@@ -2721,6 +3183,255 @@ def _enrich_targets_from_source_scene(data: dict[str, Any], targets: list[dict[s
     return out
 
 
+def _candidate_images(candidate: dict[str, Any], limit: int = 8) -> list[str]:
+    raw = candidate.get("images")
+    if raw is None:
+        raw = candidate.get("images_json")
+    if isinstance(raw, str):
+        raw = _json_loads_or(raw, [])
+    out: list[str] = []
+    if isinstance(raw, list):
+        for item in raw:
+            if isinstance(item, str):
+                text = item.strip()
+            elif isinstance(item, dict):
+                text = str(item.get("url") or item.get("src") or item.get("image") or item.get("href") or "").strip()
+            else:
+                text = ""
+            if text:
+                out.append(text)
+    return _dedup_keep_order(out)[:limit]
+
+
+def _candidate_dimensions_m(candidate: dict[str, Any]) -> dict[str, float | None]:
+    size = _product_size_m(candidate)
+    if size is not None:
+        return {
+            "width": round(float(size[0]), 4),
+            "depth": round(float(size[1]), 4),
+            "height": round(float(size[2]), 4),
+        }
+    return {
+        "width": _safe_float(candidate.get("width_cm")) / 100.0 if _safe_float(candidate.get("width_cm")) is not None else None,
+        "depth": _safe_float(candidate.get("depth_cm")) / 100.0 if _safe_float(candidate.get("depth_cm")) is not None else None,
+        "height": _safe_float(candidate.get("height_cm")) / 100.0 if _safe_float(candidate.get("height_cm")) is not None else None,
+    }
+
+
+def _candidate_has_local_asset(candidate: dict[str, Any]) -> bool:
+    return bool(_candidate_has_ready_real_asset(candidate))
+
+
+def _candidate_generation_prompt(candidate: dict[str, Any], target: dict[str, Any]) -> str:
+    parts = [
+        "Generate a realistic 3D model",
+        f"category: {candidate.get('semantic_group') or candidate.get('category_norm') or target.get('semantic_group') or target.get('category')}",
+        f"title: {candidate.get('title')}",
+        f"title_en: {candidate.get('title_en')}",
+        f"title_ru: {candidate.get('title_ru')}",
+        f"style: {candidate.get('style_llm') or candidate.get('style')}",
+        f"color: {candidate.get('color')}",
+        f"color_en: {candidate.get('color_en')}",
+        f"color_ru: {candidate.get('color_ru')}",
+        f"material: {candidate.get('materials')}",
+        f"material_en: {candidate.get('materials_en')}",
+        f"material_ru: {candidate.get('materials_ru')}",
+        f"dimensions_m: {_candidate_dimensions_m(candidate)}",
+    ]
+    return ". ".join(str(x) for x in parts if str(x).strip() and not str(x).endswith(": None")) + "."
+
+
+def _build_generation_reference(candidate: dict[str, Any], target: dict[str, Any]) -> dict[str, Any]:
+    has_local_asset = _candidate_has_local_asset(candidate)
+    has_downloadable_asset = _candidate_has_downloadable_asset(candidate)
+    return {
+        "source": "supplier_card",
+        "generation_intent": "visual_reference_for_3d_generation",
+        "asset_policy": "asset_is_optional_tiebreaker",
+        "unique_key": candidate.get("unique_key"),
+        "source_site": candidate.get("source_site"),
+        "product_url": candidate.get("product_url") or candidate.get("source_url"),
+        "title": candidate.get("title"),
+        "title_en": candidate.get("title_en"),
+        "title_ru": candidate.get("title_ru"),
+        "category": candidate.get("semantic_group") or candidate.get("category_norm"),
+        "category_raw_en": candidate.get("category_raw_en"),
+        "category_raw_ru": candidate.get("category_raw_ru"),
+        "style": candidate.get("style_llm") or candidate.get("style"),
+        "color": candidate.get("color"),
+        "color_en": candidate.get("color_en"),
+        "color_ru": candidate.get("color_ru"),
+        "material": candidate.get("materials"),
+        "materials_en": candidate.get("materials_en"),
+        "materials_ru": candidate.get("materials_ru"),
+        "description_short_en": candidate.get("description_short_en"),
+        "description_short_ru": candidate.get("description_short_ru"),
+        "search_text_en": candidate.get("search_text_en"),
+        "search_text_ru": candidate.get("search_text_ru"),
+        "dimensions_m": _candidate_dimensions_m(candidate),
+        "image_urls": _candidate_images(candidate),
+        "local_images": candidate.get("local_images") or [],
+        "prompt": _candidate_generation_prompt(candidate, target),
+        "has_local_asset": has_local_asset,
+        "has_downloadable_asset": has_downloadable_asset,
+        "will_generate_3d_model": not has_local_asset,
+    }
+
+
+def _selection_diagnostics(candidate: dict[str, Any], mode: str) -> dict[str, Any]:
+    breakdown = candidate.get("score_breakdown") if isinstance(candidate.get("score_breakdown"), dict) else {}
+    has_local_asset = _candidate_has_local_asset(candidate)
+    return {
+        "mode": mode,
+        "generation_intent": "visual_reference_for_3d_generation",
+        "asset_policy": "asset_is_optional_tiebreaker",
+        "has_local_asset": has_local_asset,
+        "has_downloadable_asset": _candidate_has_downloadable_asset(candidate),
+        "will_generate_3d_model": not has_local_asset,
+        "score": candidate.get("final_score"),
+        "score_breakdown": {
+            key: breakdown.get(key)
+            for key in (
+                "size_score",
+                "style_score",
+                "color_score",
+                "material_score",
+                "description_score",
+                "image_color_score",
+                "price_score",
+                "asset_availability_score",
+                "source_quality_score",
+            )
+            if key in breakdown
+        },
+    }
+
+
+def _candidate_from_scored(
+    rank_key: tuple[Any, ...],
+    row: dict[str, Any],
+    reasons: dict[str, Any],
+    *,
+    selection_mode: str,
+) -> dict[str, Any]:
+    return {
+        "rank_key": [x for x in rank_key[:-1]],
+        "score": round(float(reasons.get("design_score") or 0.0), 6),
+        "unique_key": row.get("unique_key"),
+        "source_site": row.get("source_site"),
+        "source_url": row.get("source_url"),
+        "parsed_at": row.get("parsed_at"),
+        "external_id": row.get("external_id"),
+        "title": row.get("title"),
+        "title_en": row.get("title_en"),
+        "title_ru": row.get("title_ru"),
+        "brand": row.get("brand"),
+        "collection": row.get("collection"),
+        "category_raw": row.get("category_raw"),
+        "category_raw_en": row.get("category_raw_en"),
+        "category_raw_ru": row.get("category_raw_ru"),
+        "category_norm": row.get("category_norm"),
+        "semantic_group": row.get("semantic_group"),
+        "product_url": row.get("product_url"),
+        "model_link_type": row.get("model_link_type"),
+        "model_page_url": row.get("model_page_url"),
+        "model_download_url": row.get("model_download_url"),
+        "model_download_landing_url": row.get("model_download_landing_url"),
+        "model_vendor_url": row.get("model_vendor_url"),
+        "model_extraction_method": row.get("model_extraction_method"),
+        "model_download_filename": row.get("model_download_filename"),
+        "model_format": row.get("model_format"),
+        "asset_status": row.get("asset_status"),
+        "asset_format": row.get("asset_format"),
+        "asset_local_path": row.get("asset_local_path"),
+        "price_value": row.get("price_value"),
+        "price_currency": row.get("price_currency"),
+        "style": row.get("style"),
+        "style_llm": row.get("style_llm"),
+        "style_llm_confidence": row.get("style_llm_confidence"),
+        "style_llm_secondary": row.get("style_llm_secondary"),
+        "style_llm_quality_score": row.get("style_llm_quality_score"),
+        "style_llm_quality_flags": row.get("style_llm_quality_flags"),
+        "style_llm_evidence": row.get("style_llm_evidence"),
+        "style_llm_rationale": row.get("style_llm_rationale"),
+        "color": row.get("color"),
+        "color_en": row.get("color_en"),
+        "color_ru": row.get("color_ru"),
+        "materials": row.get("materials"),
+        "materials_en": row.get("materials_en"),
+        "materials_ru": row.get("materials_ru"),
+        "room": row.get("room"),
+        "availability": row.get("availability"),
+        "images_json": row.get("images_json"),
+        "extra_json": row.get("extra_json"),
+        "width_cm": row.get("width_cm"),
+        "depth_cm": row.get("depth_cm"),
+        "height_cm": row.get("height_cm"),
+        "description": row.get("description"),
+        "description_short_de": row.get("description_short_de"),
+        "description_short_en": row.get("description_short_en"),
+        "description_short_ru": row.get("description_short_ru"),
+        "description_en": row.get("description_en"),
+        "description_ru": row.get("description_ru"),
+        "search_text_de": row.get("search_text_de"),
+        "search_text_en": row.get("search_text_en"),
+        "search_text_ru": row.get("search_text_ru"),
+        "image_color_features": row.get("image_color_features"),
+        "selection_mode": selection_mode,
+        "final_score": reasons.get("final_score"),
+        "score_breakdown": reasons,
+        "rich_card": _row_is_rich(row),
+    }
+
+
+def _candidate_price_number(candidate: dict[str, Any]) -> float | None:
+    price = _safe_float(candidate.get("price_value"))
+    if price is None or price <= 0:
+        return None
+    return price
+
+
+def _choose_accepted_candidate_for_mode(
+    accepted_candidates: list[tuple[int, dict[str, Any]]],
+    selection_mode: str,
+) -> tuple[int, dict[str, Any], dict[str, Any]]:
+    if not accepted_candidates:
+        raise ValueError("accepted_candidates must be non-empty")
+
+    if selection_mode in {"cheapest", "cheapest_top20"}:
+        pool = accepted_candidates
+        if selection_mode == "cheapest_top20":
+            pool = [(idx, candidate) for idx, candidate in accepted_candidates if idx < 20]
+            if not pool:
+                pool = accepted_candidates[:20] or accepted_candidates
+        priced_pool = [
+            (idx, candidate, price)
+            for idx, candidate in pool
+            if (price := _candidate_price_number(candidate)) is not None
+        ]
+        if priced_pool:
+            chosen_index, chosen_candidate, chosen_price = min(
+                priced_pool,
+                key=lambda item: (
+                    float(item[2]),
+                    -float((item[1].get("final_score") or 0.0)),
+                    int(item[0]),
+                ),
+            )
+            return chosen_index, chosen_candidate, {
+                "policy": "lowest_price_among_all_suitable" if selection_mode == "cheapest" else "lowest_price_among_top20_suitable",
+                "priced_candidate_count": len(priced_pool),
+                "selection_pool_count": len(pool),
+                "chosen_price": chosen_price,
+            }
+
+    chosen_index, chosen_candidate = accepted_candidates[0]
+    return chosen_index, chosen_candidate, {
+        "policy": "first_acceptable_by_suitability_order",
+        "selection_pool_count": len(accepted_candidates),
+    }
+
+
 def build_bindings_with_candidates(
     *,
     targets_json_path: Path,
@@ -2745,8 +3456,14 @@ def build_bindings_with_candidates(
         room_design_spec=room_design_spec,
         selection_mode=selection_mode,
     )
-    design_spec_enabled = isinstance(room_design_spec, dict)
     normalized_selection_mode = _selection_mode(context)
+    design_spec_enabled = isinstance(room_design_spec, dict) or normalized_selection_mode in {
+        "cheapest",
+        "cheapest_top20",
+        "best_match",
+        "best_match_v2",
+        "best_visual_reference",
+    }
     price_stats = build_price_stats(catalog_rows) if design_spec_enabled else {}
 
     bindings: list[dict[str, Any]] = []
@@ -2757,6 +3474,15 @@ def build_bindings_with_candidates(
             continue
 
         replacement_policy = str(target.get("replacement_policy") or "keep_generated")
+        target_meta = target.get("meta") if isinstance(target.get("meta"), dict) else {}
+        target_source = target.get("source") if isinstance(target.get("source"), dict) else {}
+        layout_source = (
+            target.get("layout_source")
+            or target_meta.get("layout_source")
+            or target_source.get("placement_source")
+            or target_source.get("generator")
+            or "unknown_layout"
+        )
         binding = {
             "target_id": str(target.get("target_id") or ""),
             "category": target.get("category"),
@@ -2765,7 +3491,7 @@ def build_bindings_with_candidates(
             "replacement_policy": replacement_policy,
             "replacement_reason": target.get("replacement_reason"),
             "provenance": {
-                "layout_source": "infinigen_layout",
+                "layout_source": str(layout_source or "unknown_layout"),
                 "final_asset_source": "generated" if replacement_policy != "replace_with_supplier" else "supplier_catalog_pending",
                 "allowed_asset_sources": ["generated_native", "supplier_catalog"],
             },
@@ -2791,9 +3517,36 @@ def build_bindings_with_candidates(
             continue
 
         scored: list[tuple[tuple[Any, ...], dict[str, Any], dict[str, Any]]] = []
+        hard_rejection_notes: list[str] = []
+        rejection_summary: dict[str, int] = {}
+
+        def note_rejection(reason: str) -> None:
+            rejection_summary[reason] = int(rejection_summary.get(reason, 0)) + 1
+
         for row in catalog_rows:
+            source_policy_ok, _source_policy_breakdown = _source_policy_match_info(row)
+            if not source_policy_ok:
+                note_rejection("source_policy_failed")
+                continue
+            hard_reject = _hard_dimension_reject_info(target, row, context)
+            if hard_reject:
+                note_rejection("size_out_of_policy")
+                if len(hard_rejection_notes) < 5:
+                    title = str(row.get("title") or row.get("unique_key") or "candidate")
+                    reason = str(hard_reject.get("hard_dimension_reject_reason") or "hard_dimension_reject")
+                    hard_rejection_notes.append(f"{title}:{reason}")
+                continue
+            identity_ok, _identity_breakdown = candidate_identity_gate(target, row)
+            if not identity_ok:
+                note_rejection("identity_gate_failed")
+                continue
+            category_rank, _category_breakdown = _category_match_info(target, row)
+            if category_rank >= 3:
+                note_rejection("category_mismatch")
+                continue
             ranked = _rank_candidate(target, row, context)
             if ranked is None:
+                note_rejection("other_matcher_filter")
                 continue
             rank_key, reasons = ranked
             if design_spec_enabled:
@@ -2805,6 +3558,9 @@ def build_bindings_with_candidates(
                     price_stats=price_stats,
                 )
                 reasons = {**reasons, **design_breakdown}
+                if design_breakdown.get("candidate_score_hard_reject_reason"):
+                    note_rejection(str(design_breakdown.get("candidate_score_hard_reject_reason")))
+                    continue
                 rank_key = (
                     0 if design_breakdown.get("gate_passed", True) else 1,
                     -round(float(final_score), 6),
@@ -2817,81 +3573,48 @@ def build_bindings_with_candidates(
         effective_top_k = max(0, int(top_k))
         if str(target.get("semantic_group") or "").strip() == "bathroom_sink":
             effective_top_k = max(effective_top_k, 200)
+        selection_pool_k = effective_top_k
+        if normalized_selection_mode == "cheapest_top20":
+            selection_pool_k = max(selection_pool_k, 20)
+        elif normalized_selection_mode == "cheapest":
+            selection_pool_k = len(scored)
         top = scored[:effective_top_k]
+        selection_scored = scored[:selection_pool_k]
 
-        top_candidates = []
-        for rank_key, row, reasons in top:
-            top_candidates.append(
-                {
-                    "rank_key": [x for x in rank_key[:-1]],
-                    "score": round(float(reasons.get("design_score") or 0.0), 6),
-                    "unique_key": row.get("unique_key"),
-                    "source_site": row.get("source_site"),
-                    "source_url": row.get("source_url"),
-                    "parsed_at": row.get("parsed_at"),
-                    "external_id": row.get("external_id"),
-                    "title": row.get("title"),
-                    "brand": row.get("brand"),
-                    "collection": row.get("collection"),
-                    "category_raw": row.get("category_raw"),
-                    "category_norm": row.get("category_norm"),
-                    "semantic_group": row.get("semantic_group"),
-                    "product_url": row.get("product_url"),
-                    "model_link_type": row.get("model_link_type"),
-                    "model_page_url": row.get("model_page_url"),
-                    "model_download_url": row.get("model_download_url"),
-                    "model_download_landing_url": row.get("model_download_landing_url"),
-                    "model_vendor_url": row.get("model_vendor_url"),
-                    "model_extraction_method": row.get("model_extraction_method"),
-                    "model_download_filename": row.get("model_download_filename"),
-                    "model_format": row.get("model_format"),
-                    "asset_status": row.get("asset_status"),
-                    "asset_format": row.get("asset_format"),
-                    "asset_local_path": row.get("asset_local_path"),
-                    "price_value": row.get("price_value"),
-                    "price_currency": row.get("price_currency"),
-                    "style": row.get("style"),
-                    "style_llm": row.get("style_llm"),
-                    "style_llm_confidence": row.get("style_llm_confidence"),
-                    "style_llm_secondary": row.get("style_llm_secondary"),
-                    "style_llm_quality_score": row.get("style_llm_quality_score"),
-                    "style_llm_quality_flags": row.get("style_llm_quality_flags"),
-                    "style_llm_evidence": row.get("style_llm_evidence"),
-                    "style_llm_rationale": row.get("style_llm_rationale"),
-                    "color": row.get("color"),
-                    "materials": row.get("materials"),
-                    "room": row.get("room"),
-                    "availability": row.get("availability"),
-                    "images_json": row.get("images_json"),
-                    "extra_json": row.get("extra_json"),
-                    "width_cm": row.get("width_cm"),
-                    "depth_cm": row.get("depth_cm"),
-                    "height_cm": row.get("height_cm"),
-                    "description": row.get("description"),
-                    "image_color_features": row.get("image_color_features"),
-                    "selection_mode": normalized_selection_mode,
-                    "final_score": reasons.get("final_score"),
-                    "score_breakdown": reasons,
-                    "rich_card": _row_is_rich(row),
-                }
-            )
+        top_candidates = [
+            _candidate_from_scored(rank_key, row, reasons, selection_mode=normalized_selection_mode)
+            for rank_key, row, reasons in top
+        ]
+        selection_candidates = [
+            _candidate_from_scored(rank_key, row, reasons, selection_mode=normalized_selection_mode)
+            for rank_key, row, reasons in selection_scored
+        ]
 
         binding["candidate_count"] = len(top_candidates)
+        binding["selection_pool_count"] = len(selection_candidates)
+        binding["selection_pool_policy"] = (
+            "lowest_price_among_all_suitable_pool"
+            if normalized_selection_mode == "cheapest"
+            else "lowest_price_among_top20_suitable_pool"
+            if normalized_selection_mode == "cheapest_top20"
+            else "top_k_suitability_order"
+        )
         llm_rerank_info = None
-        if top_candidates:
+        if top_candidates and normalized_selection_mode not in PRICE_SELECTION_MODES:
             top_candidates, llm_rerank_info = _llm_rerank_candidates(
                 target=target,
                 top_candidates=top_candidates,
                 context=context,
                 llm_settings=llm_settings,
             )
+            selection_candidates = top_candidates
             if llm_rerank_info is not None:
                 binding["llm_rerank"] = llm_rerank_info
         binding["top_candidates"] = top_candidates
 
         accepted_candidates: list[tuple[int, dict[str, Any]]] = []
         rejection_notes: list[str] = []
-        for idx, candidate in enumerate(top_candidates):
+        for idx, candidate in enumerate(selection_candidates):
             is_acceptable, accept_info = _candidate_acceptability(target, candidate)
             candidate["acceptability"] = accept_info
             if is_acceptable:
@@ -2903,8 +3626,25 @@ def build_bindings_with_candidates(
 
         if accepted_candidates:
             matched_count += 1
-            chosen_index, chosen_candidate = accepted_candidates[0]
+            chosen_index, chosen_candidate, selection_policy_info = _choose_accepted_candidate_for_mode(
+                accepted_candidates,
+                normalized_selection_mode,
+            )
+            chosen_candidate["generation_reference"] = _build_generation_reference(chosen_candidate, target)
+            chosen_candidate["selection"] = _selection_diagnostics(chosen_candidate, normalized_selection_mode)
+            chosen_candidate["selection_policy"] = selection_policy_info
             binding["chosen_candidate"] = chosen_candidate
+            binding["selected_supplier_item"] = {
+                "unique_key": chosen_candidate.get("unique_key"),
+                "title": chosen_candidate.get("title"),
+                "category": chosen_candidate.get("semantic_group") or chosen_candidate.get("category_norm"),
+                "price": chosen_candidate.get("price_value"),
+                "dimensions_m": _candidate_dimensions_m(chosen_candidate),
+                "image_urls": _candidate_images(chosen_candidate),
+            }
+            binding["selection"] = _selection_diagnostics(chosen_candidate, normalized_selection_mode)
+            binding["selection_policy"] = selection_policy_info
+            binding["generation_reference"] = chosen_candidate["generation_reference"]
             binding["selection_notes"].append(f"selected_candidate_index:{chosen_index + 1}")
             if isinstance(llm_rerank_info, dict) and llm_rerank_info.get("status") == "applied":
                 binding["selection_status"] = (
@@ -2919,9 +3659,15 @@ def build_bindings_with_candidates(
             if chosen_index == 0:
                 binding["selection_notes"].append("top1_selected_by_similarity_order")
             else:
-                binding["selection_notes"].append("selected_first_acceptable_candidate_not_top1")
+                binding["selection_notes"].append(
+                    "selected_by_price_policy_not_top1"
+                    if normalized_selection_mode in PRICE_SELECTION_MODES
+                    else "selected_first_acceptable_candidate_not_top1"
+                )
             if rejection_notes:
                 binding["selection_notes"].append("rejected_before_selection:" + " | ".join(rejection_notes))
+            if hard_rejection_notes:
+                binding["selection_notes"].append("hard_dimension_rejections:" + " | ".join(hard_rejection_notes))
         else:
             if top_candidates:
                 binding["selection_status"] = "no_acceptable_candidates_found"
@@ -2931,7 +3677,12 @@ def build_bindings_with_candidates(
             else:
                 binding["selection_status"] = "no_candidates_found"
                 binding["selection_notes"].append("no_supplier_candidate_inside_bbox_with_similar_size")
+            if hard_rejection_notes:
+                binding["selection_notes"].append("hard_dimension_rejections:" + " | ".join(hard_rejection_notes))
 
+        binding["rejection_summary"] = dict(sorted(rejection_summary.items()))
+        if isinstance(binding.get("selection"), dict):
+            binding["selection"]["rejection_summary"] = binding["rejection_summary"]
         bindings.append(binding)
 
     return {
@@ -2953,7 +3704,19 @@ def build_bindings_with_candidates(
             "ranking_order": ["category_family", "bbox_fit_required", "width", "height", "depth", "strategy_price_style", "query_match", "user_preferences", "prompt_color", "style_llm", "design", "real_asset"],
             "category_policy": "exact_group_or_same_family",
             "bbox_fit_policy": "strict_bbox_or_rescalable_anchor_fit_with_group_limits",
-            "final_selection_policy": "llm_or_heuristic_top1_sets_candidate_order_asset_acquisition_uses_first_acceptable_with_real_mesh_else_keep_generated",
+            "supplier_reference_policy": (
+                "Supplier selection optimizes for visual/semantic reference quality; ready 3D assets are optional tie-breakers."
+                if normalized_selection_mode in {"best_match", "best_match_v2", "best_visual_reference", "cheapest", "cheapest_top20"}
+                else "Legacy mode may give stronger priority to ready supplier assets."
+            ),
+            "asset_policy": "asset_is_optional_tiebreaker" if normalized_selection_mode in {"best_match", "best_match_v2", "best_visual_reference", "cheapest", "cheapest_top20"} else "legacy_reuse_bonus",
+            "final_selection_policy": (
+                "lowest_price_after_suitability_gates"
+                if normalized_selection_mode == "cheapest"
+                else "lowest_price_among_top20_suitable_after_gates"
+                if normalized_selection_mode == "cheapest_top20"
+                else "llm_or_heuristic_top1_sets_candidate_order_asset_acquisition_uses_first_acceptable_with_real_mesh_else_keep_generated"
+            ),
             "prompt_text": context.get("prompt_text"),
             "room_style_hint": context.get("room_style_hint"),
             "user_preferences": context.get("user_preferences"),
@@ -2988,9 +3751,27 @@ def build_cli() -> argparse.ArgumentParser:
         "--selection-strategy",
         choices=sorted(SUPPLIER_SELECTION_STRATEGIES),
         default="balanced",
-        help="Supplier candidate ranking strategy: cheapest, cheap_style, style, or balanced.",
+        help="Legacy pre-score ordering strategy. Use --selection-mode best_visual_reference for reference-first selection.",
     )
-    ap.add_argument("--selection-mode", choices=["cheapest", "optimal", "best_match"], default=None)
+    ap.add_argument(
+        "--selection-mode",
+        choices=[
+            "cheapest",
+            "min_price",
+            "lowest_price",
+            "cheapest_top20",
+            "cheap_top20",
+            "optimal",
+            "best_match",
+            "best_match_v1",
+            "best_match_v2",
+            "best_visual_reference",
+            "best_suitable",
+            "most_suitable",
+            "legacy_asset_priority",
+        ],
+        default=None,
+    )
     ap.add_argument("--room-design-spec", default=None, help="Optional room_design_spec.json for design-aware scoring")
     ap.add_argument("--user-preferences-json", default=None, help="Optional JSON with global/by_target_id/by_semantic_group manual constraints")
     ap.add_argument("--max-price-rub", type=float, default=None, help="Global max acceptable price in RUB")

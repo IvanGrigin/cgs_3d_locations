@@ -34,6 +34,8 @@ COLLISION_IGNORE_CATEGORIES = {
     "mirror",
     "wall_hooks",
     "ceiling_light",
+    "curtain",
+    "headboard",
     "floor_lamp",
     "table_lamp",
     "plant",
@@ -45,7 +47,35 @@ COLLISION_IGNORE_CATEGORIES = {
     "decor_tray",
     "storage_basket",
     "umbrella_stand",
+    "bath_mat",
+    "towel_rack",
+    "toilet_paper_holder",
+    "hygiene_shower",
+    "soap_dispenser",
+    "toothbrush_cup",
+    "shampoo_bottle",
+    "air_freshener",
 }
+
+
+def _default_accessory_slots(category: str) -> list[dict[str, Any]]:
+    """Small semantic slots used by later accessory/catalog stages."""
+    category = str(category or "").strip().lower()
+    if category in {"bed"}:
+        names = ["top.pillow_left", "top.pillow_right", "top.blanket", "side.left", "side.right"]
+    elif category in {"sofa"}:
+        names = ["seat.left", "seat.center", "seat.right", "front.coffee_table"]
+    elif category in {"desk", "console_table", "dresser", "vanity", "sink"}:
+        names = ["top.left", "top.center", "top.right", "top.back"]
+    elif category in {"nightstand", "side_table", "coffee_table", "tv_stand"}:
+        names = ["top.left", "top.center", "top.right"]
+    elif category in {"bookshelf", "shelf", "wardrobe", "wardrobe_module"}:
+        names = ["shelf.low", "shelf.mid", "shelf.high", "top"]
+    elif category in {"dining_table"}:
+        names = ["top.center", "top.side_a", "top.side_b"]
+    else:
+        names = ["top.center"]
+    return [{"id": name, "surface": name.split(".", 1)[0]} for name in names]
 
 
 def clamp_center_inside_room_for_aabb(
@@ -86,6 +116,42 @@ def clamp_center_inside_room_for_aabb(
         if object_footprint_inside_polygon(candidate, size_m[:2], yaw_deg, polygon):
             return candidate
     return clamped
+
+
+def sanitize_aabb_for_room(aabb: AABB, ctx: RoomContext, *, eps: float = 1e-8) -> AABB:
+    """Snap tiny float drift to zero and clamp AABB to room XY/Z bounds."""
+    x_min, y_min, x_max, y_max = ctx.bounds
+    ceiling = max(float(ctx.ceiling_height_m), 0.0)
+
+    def clean(value: float) -> float:
+        return 0.0 if abs(value) <= eps else float(value)
+
+    sx_min = clamp(clean(aabb.x_min), x_min, x_max)
+    sx_max = clamp(clean(aabb.x_max), x_min, x_max)
+    sy_min = clamp(clean(aabb.y_min), y_min, y_max)
+    sy_max = clamp(clean(aabb.y_max), y_min, y_max)
+    sz_min = clamp(clean(aabb.z_min), 0.0, ceiling)
+    sz_max = clamp(clean(aabb.z_max), 0.0, ceiling)
+    if abs(sx_min) <= eps:
+        sx_min = 0.0
+    if abs(sx_max) <= eps:
+        sx_max = 0.0
+    if abs(sy_min) <= eps:
+        sy_min = 0.0
+    if abs(sy_max) <= eps:
+        sy_max = 0.0
+    if abs(sz_min) <= eps:
+        sz_min = 0.0
+    if abs(sz_max) <= eps:
+        sz_max = 0.0
+    return AABB(
+        x_min=min(sx_min, sx_max),
+        x_max=max(sx_min, sx_max),
+        y_min=min(sy_min, sy_max),
+        y_max=max(sy_min, sy_max),
+        z_min=min(sz_min, sz_max),
+        z_max=max(sz_min, sz_max),
+    )
 
 
 @dataclass
@@ -136,6 +202,7 @@ class PlacementEngine:
         allow_collision: bool = False,
         margin: float = 0.03,
         ignore_door_clearance: bool = False,
+        ignore_window_clearance: bool = False,
     ) -> tuple[bool, str]:
         if not object_footprint_inside_polygon(center, size_m[:2], yaw_deg, self.ctx.polygon):
             return False, "outside_room_polygon"
@@ -146,6 +213,11 @@ class PlacementEngine:
             for zone in self.ctx.door_clearance_zones:
                 if aabb.intersects_xy(zone, margin=0.0):
                     return False, "door_clearance_collision"
+
+        if not ignore_window_clearance:
+            for zone in self.ctx.window_clearance_zones:
+                if aabb.intersects_xy(zone, margin=0.0):
+                    return False, "window_clearance_collision"
 
         if allow_collision:
             return True, "ok"
@@ -170,30 +242,43 @@ class PlacementEngine:
         wall_contact_side: str | None = None,
         extra_meta: dict[str, Any] | None = None,
         constraints: dict[str, Any] | None = None,
+        front_target: str | None = None,
     ) -> dict[str, Any]:
         size = [float(spec.size_m[0]), float(spec.size_m[1]), float(spec.size_m[2])]
         z = z_center if z_center is not None else size[2] * 0.5
         yaw = normalize_angle_deg(yaw_deg)
-        aabb = aabb_from_box([center.x, center.y, z], size, yaw)
+        aabb = sanitize_aabb_for_room(aabb_from_box([center.x, center.y, z], size, yaw), self.ctx)
         item_category = category or spec.category
         meta = {
             "procedural": True,
             "density_layer": layer or spec.layer,
             "replace_with_supplier": spec.replace_with_supplier,
             "allow_collision": bool(spec.allow_collision),
+            "support_surface": bool(spec.support_surface),
+            "front_axis_local": "+Y",
         }
+        if spec.support_surface:
+            meta.setdefault("accessory_surface", True)
+            meta.setdefault("accessory_slots", _default_accessory_slots(item_category))
+        target = front_target or spec.front_target_hint
+        if target:
+            meta["front_target"] = target
         if extra_meta:
             meta.update(extra_meta)
+            if extra_meta.get("front_target"):
+                meta["front_target"] = extra_meta["front_target"]
 
         return {
             "id": self.next_id(item_category),
             "name": name or spec.name,
             "category": item_category,
+            "semantic_group": item_category,
             "position_m": [center.x, center.y, z],
             "size_m": size,
             "rotation_deg": yaw,
             "yaw_deg": yaw,
             "yaw_rad": math.radians(yaw),
+            "rotation": [0.0, 0.0, yaw],
             "aabb": aabb.to_json(),
             "mount_type": mount_type or spec.mount_type,
             "wall_contact_side": wall_contact_side,
@@ -223,10 +308,12 @@ class PlacementEngine:
         allow_collision: bool | None = None,
         margin: float = 0.03,
         ignore_door_clearance: bool = False,
+        ignore_window_clearance: bool = False,
         mount_type: str | None = None,
         wall_contact_side: str | None = None,
         extra_meta: dict[str, Any] | None = None,
         constraints: dict[str, Any] | None = None,
+        front_target: str | None = None,
     ) -> dict[str, Any] | None:
         collision_allowed = spec.allow_collision if allow_collision is None else allow_collision
         ok, reason = self.can_place(
@@ -236,6 +323,7 @@ class PlacementEngine:
             allow_collision=collision_allowed,
             margin=margin,
             ignore_door_clearance=ignore_door_clearance,
+            ignore_window_clearance=ignore_window_clearance,
         )
         if not ok:
             self.rejected.append(
@@ -262,6 +350,7 @@ class PlacementEngine:
             wall_contact_side=wall_contact_side,
             extra_meta=extra_meta,
             constraints=constraints,
+            front_target=front_target,
         )
         self.placements.append(item)
         return item
@@ -279,7 +368,9 @@ class PlacementEngine:
         allow_collision: bool | None = None,
         margin: float = 0.03,
         ignore_door_clearance: bool = False,
+        ignore_window_clearance: bool = False,
         extra_meta: dict[str, Any] | None = None,
+        front_target: str | None = None,
     ) -> dict[str, Any] | None:
         wall = next((w for w in self.ctx.walls if w.id == wall_id), None)
         if wall is None:
@@ -302,8 +393,10 @@ class PlacementEngine:
             allow_collision=allow_collision,
             margin=margin,
             ignore_door_clearance=ignore_door_clearance,
+            ignore_window_clearance=ignore_window_clearance,
             wall_contact_side="back",
             extra_meta={**(extra_meta or {}), "wall_id": wall_id, "wall_along_m": along},
+            front_target=front_target,
         )
 
     def add_on_top(
@@ -336,6 +429,7 @@ class PlacementEngine:
             layer=layer,
             allow_collision=True,
             ignore_door_clearance=True,
+            ignore_window_clearance=True,
             extra_meta={"parent_id": parent.get("id"), "support_relation": "on_top"},
         )
 
@@ -350,6 +444,9 @@ class PlacementEngine:
         category: str | None = None,
         layer: str | None = None,
         allow_collision: bool | None = None,
+        ignore_door_clearance: bool = False,
+        ignore_window_clearance: bool = False,
+        front_target: str | None = None,
     ) -> dict[str, Any] | None:
         if not anchor:
             return None
@@ -366,7 +463,10 @@ class PlacementEngine:
             category=category,
             layer=layer,
             allow_collision=allow_collision,
+            ignore_door_clearance=ignore_door_clearance,
+            ignore_window_clearance=ignore_window_clearance,
             extra_meta={"anchor_id": anchor.get("id"), "placement_relation": "near"},
+            front_target=front_target,
         )
 
     def add_wall_art(
@@ -397,9 +497,11 @@ class PlacementEngine:
             layer=layer,
             allow_collision=True,
             ignore_door_clearance=True,
+            ignore_window_clearance=True,
             mount_type="wall",
             wall_contact_side="back",
             extra_meta={"wall_id": wall_id, "wall_along_m": along},
+            front_target="room_center",
         )
 
     def add_ceiling_light(self, category: str = "ceiling_light", name: str = "Ceiling light") -> dict[str, Any]:
@@ -408,15 +510,33 @@ class PlacementEngine:
         size = (0.45, 0.45, 0.18)
         spec = ObjectSpec(category=category, name=name, size_m=size, layer="lighting", mount_type="ceiling", allow_collision=True)
         center = self.ctx.centroid
+        z_center = self.ctx.ceiling_height_m - size[2] * 0.5
         item = self.make_item(
             spec,
             center,
             0.0,
-            z_center=max(2.2, self.ctx.ceiling_height_m - size[2] * 0.5),
+            z_center=z_center,
             mount_type="ceiling",
             extra_meta={"ceiling_mounted": True},
+            front_target="room_center",
         )
         self.placements.append(item)
+        return item
+
+    def move_item_xy(self, item: dict[str, Any] | None, x: float, y: float) -> dict[str, Any] | None:
+        """Move an existing item in XY and recompute its AABB from its own pose."""
+        if not item:
+            return None
+        pos = item.get("position_m")
+        if not isinstance(pos, list) or len(pos) < 3:
+            pos = [0.0, 0.0, 0.0]
+            item["position_m"] = pos
+        pos[0] = float(x)
+        pos[1] = float(y)
+
+        size = item.get("size_m") or [0.0, 0.0, 0.0]
+        yaw = as_float(item.get("yaw_deg", item.get("rotation_deg")), 0.0)
+        item["aabb"] = sanitize_aabb_for_room(aabb_from_box(pos, size, yaw), self.ctx).to_json()
         return item
 
     def add_corner_object(self, spec: ObjectSpec, *, preferred_index: int = 0, category: str | None = None, name: str | None = None) -> dict[str, Any] | None:
@@ -451,5 +571,5 @@ class PlacementEngine:
         cloned["size_m"] = [float(new_size_m[0]), float(new_size_m[1]), float(new_size_m[2])]
         pos = cloned.get("position_m") or [0.0, 0.0, 0.0]
         yaw = as_float(cloned.get("yaw_deg", cloned.get("rotation_deg")), 0.0)
-        cloned["aabb"] = aabb_from_box(pos, new_size_m, yaw).to_json()
+        cloned["aabb"] = sanitize_aabb_for_room(aabb_from_box(pos, new_size_m, yaw), self.ctx).to_json()
         return cloned

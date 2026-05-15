@@ -87,11 +87,11 @@ class WallMaterialSelection:
 
 class WallPromptAnalyzer:
     COLORS = [
-        ("white", ["бел", "white", "молоч"]),
+        ("white", ["бел", "white", "молоч", "ivory"]),
         ("gray", ["сер", "gray", "grey", "графит"]),
-        ("beige", ["беж", "beige", "крем", "песоч"]),
+        ("beige", ["беж", "beige", "крем", "песоч", "ivory"]),
         ("brown", ["корич", "brown"]),
-        ("green", ["зелен", "green", "олив"]),
+        ("green", ["зелен", "green", "олив", "sage", "mint", "emerald", "шалф", "мят"]),
         ("blue", ["син", "blue", "голуб"]),
         ("pink", ["роз", "pink"]),
         ("red", ["красн", "red"]),
@@ -346,7 +346,7 @@ class WallMaterialSelector:
         style_score, style_penalties = self._style_score(m, r)
         room_score, room_penalties = self._room_score(m, r)
         visual_score, visual_penalties = self._visual_score(m)
-        final = 0.34 * prompt_score + 0.28 * style_score + 0.16 * room_score + 0.22 * visual_score
+        final = 0.46 * prompt_score + 0.24 * style_score + 0.12 * room_score + 0.18 * visual_score
         return WallMaterialCandidate(
             m,
             _clamp(final),
@@ -370,6 +370,9 @@ class WallMaterialSelector:
         if m.color in r.preferred_colors:
             score += 0.22
             matched.append(m.color or "")
+        elif r.preferred_colors:
+            score -= 0.16
+            penalties.append(f"explicit_color_mismatch:{m.color}")
         if m.tone in r.preferred_tones:
             score += 0.16
             matched.append(m.tone or "")

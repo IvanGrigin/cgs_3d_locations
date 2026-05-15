@@ -905,6 +905,15 @@ def apply_curtains_to_scene(
         return out, {"added_count": 0, "skipped_reason": "missing_room"}
     windows = room.get("windows")
     if not isinstance(windows, list) or not windows:
+        openings = room.get("openings")
+        if isinstance(openings, dict):
+            windows = openings.get("windows")
+        elif isinstance(openings, list):
+            windows = [
+                item for item in openings
+                if isinstance(item, dict) and str(item.get("type") or "").strip().lower() == "window"
+            ]
+    if not isinstance(windows, list) or not windows:
         return out, {"added_count": 0, "skipped_reason": "missing_windows"}
     walls = room.get("walls")
     if not isinstance(walls, list):
@@ -943,7 +952,7 @@ def apply_curtains_to_scene(
             )
 
     added: list[dict[str, Any]] = []
-    ceiling_height = float(room.get("ceiling_height") or 2.8)
+    ceiling_height = float(room.get("ceiling_height") or room.get("ceiling_height_m") or room.get("height_m") or 2.8)
     floor_z = float(room.get("floor_z") or 0.0)
     for idx, window in enumerate(windows):
         if not isinstance(window, dict):
@@ -969,12 +978,19 @@ def apply_curtains_to_scene(
 
         win_s = float(window.get("s") or 0.0)
         win_width = float(window.get("width") or 1.4)
-        win_z0 = float(window.get("z0") or 0.8)
+        win_z0 = float(window.get("z0") if window.get("z0") is not None else window.get("sill_height") or 0.8)
         win_height = float(window.get("height") or 1.2)
-        curtain_width = max(win_width + 0.45, win_width * 1.25)
-        curtain_depth = 0.10
-        z_max = min(ceiling_height - 0.06, max(win_z0 + win_height + 0.25, ceiling_height - 0.18))
-        z_min = max(floor_z + 0.035, z_max - max(1.8, min(3.2, z_max - floor_z - 0.035)))
+        wall_margin = min(0.12, max(0.04, length * 0.03))
+        max_curtain_width = max(0.40, length - wall_margin * 2.0)
+        curtain_width = min(max(win_width + 0.30, win_width * 1.15), max_curtain_width)
+        curtain_depth = min(0.10, max(0.055, length * 0.025))
+        z_max = min(
+            floor_z + ceiling_height - 0.08,
+            max(floor_z + win_z0 + win_height + 0.18, floor_z + ceiling_height - 0.25),
+        )
+        z_min = max(floor_z + 0.035, min(floor_z + win_z0 - 0.12, z_max - 1.20))
+        if (z_max - z_min) > max(2.65, ceiling_height - 0.16):
+            z_min = max(floor_z + 0.035, z_max - max(2.65, ceiling_height - 0.16))
         center_s = min(max(win_s + win_width * 0.5, curtain_width * 0.5), max(length - curtain_width * 0.5, curtain_width * 0.5))
         center = (x0 + ux * center_s + inward[0] * 0.075, y0 + uy * center_s + inward[1] * 0.075)
         yaw_deg = math.degrees(math.atan2(uy, ux))
@@ -1039,6 +1055,13 @@ def apply_curtains_to_scene(
                 } if model_item else None,
                 "window_id": window.get("id"),
                 "wall_id": window.get("wall_id"),
+                "curtain_fit": {
+                    "wall_length_m": round(length, 4),
+                    "window_width_m": round(win_width, 4),
+                    "curtain_width_m": round(curtain_width, 4),
+                    "curtain_depth_m": round(curtain_depth, 4),
+                    "curtain_height_m": round(z_max - z_min, 4),
+                },
                 "product": {
                     "sku": product.get("sku"),
                     "name": product.get("name"),

@@ -12,6 +12,14 @@ from typing import Any
 
 
 STYLE_DEFAULTS: dict[str, dict[str, Any]] = {
+    "soft_classic": {
+        "secondary": ["contemporary", "soft traditional", "residential classic"],
+        "epoch": "contemporary",
+        "colors": ["cream", "beige", "warm white", "pale green", "light olive green", "light natural wood"],
+        "accent": ["pale yellow green", "soft sage", "white molding"],
+        "materials": ["soft fabric", "linen", "cotton", "matte painted wood", "light natural wood", "textured plaster"],
+        "forbidden": ["black", "red", "purple", "dark loft", "industrial", "brutalist", "high tech", "baroque", "rococo", "glossy black"],
+    },
     "scandinavian": {
         "secondary": ["minimalist", "cozy modern"],
         "epoch": "contemporary",
@@ -173,6 +181,9 @@ def _normalize_style(raw: Any) -> str:
 
 
 def _infer_style(prompt: str, room: dict[str, Any], style_profile: dict[str, Any] | None) -> str:
+    prompt_l = str(prompt or "").lower().replace("ё", "е")
+    if any(token in prompt_l for token in ("slightly classic", "soft classic", "classic residential", "classic, residential", "слегка класс")):
+        return "soft_classic"
     for value in [
         (style_profile or {}).get("style_label"),
         room.get("style_label"),
@@ -205,31 +216,61 @@ def _infer_room_type(prompt: str, room: dict[str, Any], style_profile: dict[str,
     return "room"
 
 
+def _split_prompt_palette_segments(prompt: str) -> tuple[str, str]:
+    positive_parts: list[str] = []
+    negative_parts: list[str] = []
+    marker = re.compile(r"\b(?:avoid|forbidden|do not use|don't use)\b", re.IGNORECASE)
+    for line in str(prompt or "").splitlines():
+        match = marker.search(line)
+        if not match:
+            positive_parts.append(line)
+            continue
+        before = line[: match.start()]
+        after = line[match.end() :]
+        if before.strip():
+            positive_parts.append(before)
+        negative_parts.append(after or line)
+    return " ".join(positive_parts), " ".join(negative_parts)
+
+
 def _palette_from_inputs(prompt: str, room: dict[str, Any], style_profile: dict[str, Any], style_defaults: dict[str, Any]) -> dict[str, list[str]]:
     preferred = list(style_profile.get("preferred_colors") or [])
     material_hint = list(style_profile.get("material_family") or [])
-    hint_text = " ".join([prompt, str(room.get("style_hint") or ""), " ".join(preferred), " ".join(material_hint)])
+    raw_prompt = str(prompt or "")
+    positive_prompt, negative_prompt = _split_prompt_palette_segments(raw_prompt)
+    hint_text = " ".join([positive_prompt, str(room.get("style_hint") or ""), " ".join(preferred), " ".join(material_hint)])
     toks = _tokens(hint_text)
+    negative_toks = _tokens(negative_prompt)
     detected: list[str] = []
     aliases = {
-        "white": {"white", "warm_white", "белый", "белая", "cream", "ivory"},
+        "white": {"white", "warm_white", "warm", "белый", "белая", "ivory"},
+        "white_warm": {"cream", "ivory", "milk", "молочный"},
         "black": {"black", "черный", "черная", "dark", "темный"},
         "gray": {"gray", "grey", "серый", "silver"},
         "beige": {"beige", "sand", "cream", "бежевый"},
-        "brown": {"brown", "wood", "oak", "walnut", "коричневый"},
+        "wood_light": {"wood", "oak", "natural", "light", "wooden", "дерево", "дуб"},
+        "brown": {"brown", "walnut", "коричневый"},
         "blue": {"blue", "navy", "синий", "голубой"},
-        "green": {"green", "sage", "olive", "зеленый"},
+        "green": {"green", "sage", "olive", "зеленый", "pale", "yellow", "зелёный"},
+        "olive_green": {"olive", "sage"},
         "red": {"red", "terracotta", "burgundy", "красный"},
+        "purple": {"purple", "violet", "фиолетовый"},
     }
     for color, variants in aliases.items():
-        if toks & variants and color not in detected:
+        if toks & variants and not (negative_toks & variants) and color not in detected:
             detected.append(color)
     base = detected or list(style_defaults.get("colors") or ["white", "beige", "gray"])
+    forbidden_colors = []
+    for color, variants in aliases.items():
+        if negative_toks & variants and color not in forbidden_colors:
+            forbidden_colors.append(color)
     return {
         "primary": base[:3],
         "secondary": (base[3:] + list(style_defaults.get("colors") or []))[:4],
         "accent": list(style_defaults.get("accent") or [])[:3],
-        "forbidden": ["neon", "bright saturated colors", *list(style_defaults.get("forbidden") or [])[:3]],
+        "preferred_colors": base[:6],
+        "forbidden": ["neon", "bright saturated colors", *forbidden_colors, *list(style_defaults.get("forbidden") or [])[:5]],
+        "forbidden_colors": forbidden_colors,
     }
 
 

@@ -144,8 +144,7 @@ def generate_corridor(ctx: RoomContext, *, density: Density, seed: int | None = 
             else:
                 x = ctx.centroid.x
                 y = ctx.bounds[1] + ctx.depth_m * (i + 1) / (lights + 1)
-            light["position_m"][0] = x
-            light["position_m"][1] = y
+            engine.move_item_xy(light, x, y)
 
     report = {
         "generator": "corridor_generator",

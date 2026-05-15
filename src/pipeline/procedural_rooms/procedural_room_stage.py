@@ -6,17 +6,21 @@ import json
 from pathlib import Path
 from typing import Any
 
+from .bathroom_generator import generate_bathroom
 from .bedroom_generator import generate_bedroom
 from .corridor_generator import generate_corridor
 from .living_room_generator import generate_living_room
 from .object_specs import normalize_density
 from .room_context import build_room_context
+from .semantic_polish import apply_procedural_semantic_polish
+from .toilet_generator import generate_toilet
 from .validation import validate_placements
 
 
 REMOVABLE_GENERATED_CATEGORIES = {
     "bed",
     "headboard",
+    "curtain",
     "nightstand",
     "wardrobe",
     "wardrobe_module",
@@ -57,10 +61,25 @@ REMOVABLE_GENERATED_CATEGORIES = {
     "wall_hooks",
     "umbrella_stand",
     "entry_bench",
+    "toilet",
+    "sink",
+    "bathtub",
+    "shower",
+    "vanity",
+    "washing_machine",
+    "laundry_basket",
+    "bath_mat",
+    "towel_rack",
+    "toilet_paper_holder",
+    "hygiene_shower",
+    "soap_dispenser",
+    "toothbrush_cup",
+    "shampoo_bottle",
+    "air_freshener",
 }
 
 
-SUPPORTED_ROOM_TYPES = {"bedroom", "living_room", "corridor"}
+SUPPORTED_ROOM_TYPES = {"bedroom", "living_room", "corridor", "bathroom", "toilet"}
 
 
 def read_json(path: str | Path) -> Any:
@@ -137,13 +156,17 @@ def _build_placement_v1(scene: dict[str, Any], placements: list[dict[str, Any]],
             "placer": meta.get("placer", "procedural_room_stage"),
             "mode": mode,
             "procedural_room_stage": True,
+            "items_are_canonical": True,
+            "placements_are_legacy_alias": True,
         }
     )
     return {
         "schema": "placement.v1",
         "placer": "procedural_room_stage",
         "mode": mode,
+        "room": copy.deepcopy(scene.get("room") if isinstance(scene.get("room"), dict) else {}),
         "placements": placements,
+        "items": copy.deepcopy(placements),
         "meta": meta,
     }
 
@@ -156,6 +179,10 @@ def _dispatch_generator(ctx: Any, density: str, seed: int | None) -> tuple[list[
         return generate_living_room(ctx, density=d, seed=seed)
     if ctx.room_type == "corridor":
         return generate_corridor(ctx, density=d, seed=seed)
+    if ctx.room_type == "bathroom":
+        return generate_bathroom(ctx, density=d, seed=seed)
+    if ctx.room_type == "toilet":
+        return generate_toilet(ctx, density=d, seed=seed)
     return [], {"status": "unsupported_room_type", "room_type": ctx.room_type}
 
 
@@ -168,6 +195,21 @@ def _counts_by_field(items: list[dict[str, Any]], field: str, *, meta: bool = Fa
         value = str(source.get(field) or "unknown").strip() or "unknown"
         counts[value] = counts.get(value, 0) + 1
     return dict(sorted(counts.items()))
+
+
+def _summarize_rejected(rejected: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    counts: dict[tuple[str, str], int] = {}
+    for item in rejected:
+        if not isinstance(item, dict):
+            continue
+        category = str(item.get("category") or "unknown").strip() or "unknown"
+        reason = str(item.get("reason") or "unknown").strip() or "unknown"
+        key = (category, reason)
+        counts[key] = counts.get(key, 0) + 1
+    return [
+        {"category": category, "reason": reason, "count": count}
+        for (category, reason), count in sorted(counts.items(), key=lambda entry: (entry[0][0], entry[0][1]))
+    ]
 
 
 def apply_procedural_room_stage(
@@ -226,8 +268,14 @@ def apply_procedural_room_stage(
     final_placements = kept_placements + generated
 
     output_scene = copy.deepcopy(scene)
+    output_scene["schema"] = output_scene.get("schema") or "scene.v1"
     output_scene["placements"] = final_placements
+    if "items" in output_scene or output_scene.get("schema") == "scene.v1":
+        output_scene["items"] = copy.deepcopy(final_placements)
     output_scene.setdefault("meta", {})
+    if isinstance(output_scene["meta"], dict):
+        output_scene["meta"]["items_are_canonical"] = True
+        output_scene["meta"]["placements_are_legacy_alias"] = True
     if isinstance(output_scene["meta"], dict):
         output_scene["meta"]["procedural_room_stage"] = {
             "enabled": True,
@@ -237,14 +285,60 @@ def apply_procedural_room_stage(
             "generated_count": len(generated),
         }
 
+    output_scene, semantic_polish_report = apply_procedural_semantic_polish(
+        output_scene,
+        room_type=ctx.room_type,
+        size_class=ctx.size_class,
+        density=normalize_density(density),
+    )
+    final_placements = _extract_placements(output_scene)
+    if output_scene.get("schema") == "scene.v1" or "items" in output_scene:
+        output_scene["items"] = copy.deepcopy(final_placements)
+    if isinstance(output_scene.get("meta"), dict):
+        output_scene["meta"]["items_are_canonical"] = True
+        output_scene["meta"]["placements_are_legacy_alias"] = True
+    generated_after_polish = [
+        item
+        for item in final_placements
+        if isinstance(item, dict)
+        and (
+            (isinstance(item.get("meta"), dict) and item["meta"].get("procedural"))
+            or str((item.get("source") if isinstance(item.get("source"), dict) else {}).get("placement_source", "")).startswith(
+                "procedural_room_stage"
+            )
+        )
+    ]
+    if isinstance(output_scene.get("meta"), dict) and isinstance(output_scene["meta"].get("procedural_room_stage"), dict):
+        output_scene["meta"]["procedural_room_stage"]["generated_count_before_semantic_polish"] = len(generated)
+        output_scene["meta"]["procedural_room_stage"]["generated_count_after_semantic_polish"] = len(generated_after_polish)
+        output_scene["meta"]["procedural_room_stage"]["generated_count"] = len(generated_after_polish)
+        output_scene["meta"]["procedural_room_stage"]["final_count"] = len(final_placements)
+
     stem = f"procedural_room.{tag}"
     output_scene_json = out_dir / f"scene_{stem}.v1.json"
     output_placement_json = out_dir / f"placement_{stem}.v1.json"
     report_json = out_dir / f"procedural_room_report.{tag}.json"
+    rejected_debug_json = out_dir / f"rejected_candidates.{tag}.debug.json"
 
     placement_v1 = _build_placement_v1(output_scene, final_placements, mode=f"procedural_room_{tag}")
 
     validation = validate_placements(ctx, final_placements)
+    generator_report_public = copy.deepcopy(generator_report)
+    rejected_candidates = generator_report_public.pop("rejected", None)
+    if isinstance(rejected_candidates, list):
+        generator_report_public["rejected_count"] = len(rejected_candidates)
+        generator_report_public["rejected_summary"] = _summarize_rejected(rejected_candidates)
+        if rejected_candidates:
+            write_json(
+                rejected_debug_json,
+                {
+                    "schema": "procedural_rejected_candidates_debug/v1",
+                    "count": len(rejected_candidates),
+                    "rejected": rejected_candidates,
+                },
+            )
+            generator_report_public["rejected_debug_json"] = str(rejected_debug_json)
+
     report = {
         "schema": "procedural_room_report/v1",
         "skipped": False,
@@ -260,11 +354,14 @@ def apply_procedural_room_stage(
         "output_placement_json": str(output_placement_json),
         "removed_existing_count": removed_existing_count,
         "kept_existing_count": len(kept_placements),
-        "generated_count": len(generated),
-        "counts_by_layer": _counts_by_field(generated, "density_layer", meta=True),
-        "counts_by_category": _counts_by_field(generated, "category"),
+        "generated_count": len(generated_after_polish),
+        "generated_count_before_semantic_polish": len(generated),
+        "generated_count_after_semantic_polish": len(generated_after_polish),
+        "counts_by_layer": _counts_by_field(generated_after_polish, "density_layer", meta=True),
+        "counts_by_category": _counts_by_field(generated_after_polish, "category"),
         "final_count": len(final_placements),
-        "generator": generator_report,
+        "semantic_polish": semantic_polish_report,
+        "generator": generator_report_public,
         "validation": validation,
         "warnings": [],
     }

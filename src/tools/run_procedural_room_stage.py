@@ -56,11 +56,112 @@ def build_scene_from_room(room_json: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _batch_jobs(payload: Any) -> list[dict[str, Any]]:
+    if isinstance(payload, list):
+        return [job for job in payload if isinstance(job, dict)]
+    if isinstance(payload, dict):
+        jobs = payload.get("jobs")
+        if isinstance(jobs, list):
+            return [job for job in jobs if isinstance(job, dict)]
+        rooms = payload.get("rooms")
+        if isinstance(rooms, list):
+            return [job for job in rooms if isinstance(job, dict)]
+    return []
+
+
+def _job_scene_path(job: dict[str, Any], job_out_dir: Path) -> Path:
+    if job.get("scene"):
+        return Path(str(job["scene"]))
+    if job.get("room_json"):
+        room_payload = read_json(str(job["room_json"]))
+        scene = build_scene_from_room(room_payload)
+    else:
+        room_payload = {"room": job.get("room")} if isinstance(job.get("room"), dict) else job
+        scene = build_scene_from_room(room_payload)
+    scene_path = job_out_dir / "input_scene_from_room.v1.json"
+    write_json(scene_path, scene)
+    return scene_path
+
+
+def run_batch(args: argparse.Namespace) -> dict[str, Any]:
+    payload = read_json(args.batch_file)
+    jobs = _batch_jobs(payload)
+    out_dir = Path(args.out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    batch_defaults = payload if isinstance(payload, dict) else {}
+    reports: list[dict[str, Any]] = []
+    for index, job in enumerate(jobs, start=1):
+        job_id = str(job.get("id") or job.get("tag") or f"room_{index:02d}")
+        tag = str(job.get("tag") or job_id)
+        job_out_dir = out_dir / tag
+        job_out_dir.mkdir(parents=True, exist_ok=True)
+        scene_path = _job_scene_path(job, job_out_dir)
+        report = apply_procedural_room_stage(
+            scene_json_path=scene_path,
+            out_dir=job_out_dir,
+            prompt=str(job.get("prompt", args.prompt or "")),
+            policy=str(job.get("policy", batch_defaults.get("policy", args.policy))),
+            density=str(job.get("density", batch_defaults.get("density", args.density))),
+            replace_existing=bool(job.get("replace_existing", batch_defaults.get("replace_existing", args.replace_existing))),
+            seed=int(job.get("seed", args.seed + index if args.seed is not None else index)),
+            tag=tag,
+        )
+        report["batch_job_id"] = job_id
+        reports.append(report)
+
+    scene_bundle: list[dict[str, Any]] = []
+    placement_bundle: list[dict[str, Any]] = []
+    for report in reports:
+        scene_path = report.get("output_scene_json")
+        placement_path = report.get("output_placement_json")
+        if scene_path:
+            try:
+                scene_bundle.append(read_json(str(scene_path)))
+            except Exception:
+                pass
+        if placement_path:
+            try:
+                placement_bundle.append(read_json(str(placement_path)))
+            except Exception:
+                pass
+
+    scene_bundle_json = out_dir / "scene_bundle.v1.array.json"
+    placement_bundle_json = out_dir / "placement_bundle.v1.array.json"
+    write_json(scene_bundle_json, scene_bundle)
+    write_json(placement_bundle_json, placement_bundle)
+
+    summary = {
+        "schema": "procedural_room_batch_report/v1",
+        "batch_file": str(args.batch_file),
+        "out_dir": str(out_dir),
+        "job_count": len(jobs),
+        "scene_bundle_json": str(scene_bundle_json),
+        "placement_bundle_json": str(placement_bundle_json),
+        "reports": reports,
+        "summary": [
+            {
+                "id": report.get("batch_job_id"),
+                "room_type": report.get("room_type"),
+                "generated_count": report.get("generated_count"),
+                "accessibility_ok": (report.get("validation") or {}).get("accessibility_ok"),
+                "output_scene_json": report.get("output_scene_json"),
+                "output_placement_json": report.get("output_placement_json"),
+                "report_json": report.get("report_json"),
+            }
+            for report in reports
+        ],
+    }
+    write_json(out_dir / "procedural_room_batch_report.json", summary)
+    return summary
+
+
 def build_cli() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Run procedural room stage on a scene.v1.json or room.json.")
+    parser = argparse.ArgumentParser(description="Run procedural room stage on a scene.v1.json, room.json, or batch JSON.")
     src = parser.add_mutually_exclusive_group(required=True)
     src.add_argument("--scene", help="Input scene.v1.json")
     src.add_argument("--room", help="Input room.json; a temporary scene.v1 wrapper is created")
+    src.add_argument("--batch-file", help="Batch JSON with jobs containing inline room objects or room_json/scene paths")
     parser.add_argument("--out-dir", required=True, help="Output directory")
     parser.add_argument("--prompt", default="", help="Prompt used for ambiguous room type normalization")
     parser.add_argument("--policy", default="always", choices=["auto", "always", "never"])
@@ -75,6 +176,11 @@ def main() -> None:
     args = build_cli().parse_args()
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
+
+    if args.batch_file:
+        report = run_batch(args)
+        print(json.dumps(report, ensure_ascii=False, indent=2))
+        return
 
     if args.scene:
         scene_path = Path(args.scene)
