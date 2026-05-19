@@ -354,6 +354,93 @@ def _has_target_like(items: list[Any], tokens: tuple[str, ...]) -> bool:
     return False
 
 
+_INFINIGEN_KITCHEN_TOKENS = (
+    "kitchenspacefactory",
+    "kitchenfactory",
+    "kitchencabinet",
+    "singlecabinetfactory",
+    "cabinetfactory",
+    "countertop",
+    "kitchen_counter",
+    "kitchen counter",
+    "kitchen_set",
+    "kitchen cabinet",
+    "base cabinet",
+    "wall cabinet",
+    "ovenfactory",
+    "beveragefridgefactory",
+    "refrigeratorfactory",
+    "fridgefactory",
+    "dishwasherfactory",
+    "sinkfactory",
+    "stovefactory",
+    "cooktopfactory",
+    "rangehoodfactory",
+    "hoodfactory",
+    "microwavefactory",
+)
+
+
+def _item_text_for_matching(item: dict[str, Any]) -> str:
+    meta = item.get("meta") if isinstance(item.get("meta"), dict) else {}
+    source = item.get("source") if isinstance(item.get("source"), dict) else {}
+    parts = [
+        item.get("id"),
+        item.get("name"),
+        item.get("category"),
+        item.get("semantic_group"),
+        item.get("type"),
+        source.get("blend_object_name"),
+        source.get("source_object_name"),
+        meta.get("source_target_id"),
+        meta.get("companion_role"),
+    ]
+    return " ".join(str(x or "") for x in parts).lower()
+
+
+def _is_infinigen_kitchen_object(item: Any) -> bool:
+    if not isinstance(item, dict):
+        return False
+    meta = item.get("meta") if isinstance(item.get("meta"), dict) else {}
+    if bool(meta.get("kitchen_stage_generated")) or meta.get("procedural_assembly") == "kitchen":
+        return True
+    if is_kitchen_target(item):
+        return True
+    text = _item_text_for_matching(item)
+    return any(token in text for token in _INFINIGEN_KITCHEN_TOKENS)
+
+
+def _is_kitchen_stage_dining_object(item: Any) -> bool:
+    if not isinstance(item, dict):
+        return False
+    meta = item.get("meta") if isinstance(item.get("meta"), dict) else {}
+    role = str(meta.get("companion_role") or "").lower()
+    if role in {"dining_table", "dining_chair"}:
+        return True
+    text = _item_text_for_matching(item)
+    return any(token in text for token in ("kitchen_dining_table", "kitchen_dining_chair"))
+
+
+def _remove_existing_kitchen_stage_objects(items: list[Any], *, remove_dining: bool) -> tuple[list[Any], list[dict[str, Any]]]:
+    kept: list[Any] = []
+    removed: list[dict[str, Any]] = []
+    for item in items:
+        remove = _is_infinigen_kitchen_object(item) or (remove_dining and _is_kitchen_stage_dining_object(item))
+        if remove:
+            if isinstance(item, dict):
+                removed.append(
+                    {
+                        "id": item.get("id"),
+                        "name": item.get("name"),
+                        "category": item.get("category"),
+                        "semantic_group": item.get("semantic_group"),
+                    }
+                )
+            continue
+        kept.append(item)
+    return kept, removed
+
+
 def _has_companion_role(items: list[Any], role: str) -> bool:
     for item in items:
         if not isinstance(item, dict):
@@ -765,6 +852,15 @@ def _target_item(
     }
 
 
+def _chair_yaw_back_away_from_table(chair_xy: tuple[float, float], table_xy: tuple[float, float]) -> float:
+    """Yaw where generated chair local +Y/back side points away from the table."""
+    away_x = float(chair_xy[0]) - float(table_xy[0])
+    away_y = float(chair_xy[1]) - float(table_xy[1])
+    if abs(away_x) < 1e-6 and abs(away_y) < 1e-6:
+        return 0.0
+    return math.degrees(math.atan2(-away_x, away_y)) % 360.0
+
+
 def _dimension_m_from_row(row: dict[str, Any] | None, key: str, default: float) -> float:
     if not row:
         return default
@@ -950,40 +1046,49 @@ def _append_kitchen_companion_targets(
         if not _has_target_like(items, ("kitchen_dining_chair", "dining chair", "стул")):
             if compact_dining:
                 chair_specs = [
-                    ("kitchen_dining_chair_001", table_cx, table_cy - 0.50, 0.0),
-                    ("kitchen_dining_chair_002", table_cx, table_cy + 0.50, 180.0),
+                    ("kitchen_dining_chair_001", table_cx, table_cy - 0.50),
+                    ("kitchen_dining_chair_002", table_cx, table_cy + 0.50),
                 ]
                 chair_size = (0.38, 0.38, 0.84)
             else:
                 chair_specs = [
-                    ("kitchen_dining_chair_001", table_cx - 0.52, table_cy, 90.0),
-                    ("kitchen_dining_chair_002", table_cx + 0.52, table_cy, 270.0),
+                    ("kitchen_dining_chair_001", table_cx - 0.52, table_cy),
+                    ("kitchen_dining_chair_002", table_cx + 0.52, table_cy),
                 ]
                 chair_size = (0.48, 0.48, 0.88)
             if not compact_dining and width >= 3.0 and depth >= 2.8:
                 chair_specs.extend(
                     [
-                        ("kitchen_dining_chair_003", table_cx, table_cy - 0.46, 0.0),
-                        ("kitchen_dining_chair_004", table_cx, table_cy + 0.46, 180.0),
+                        ("kitchen_dining_chair_003", table_cx, table_cy - 0.46),
+                        ("kitchen_dining_chair_004", table_cx, table_cy + 0.46),
                     ]
                 )
             if chair_count_override is not None:
                 chair_specs = chair_specs[:chair_count_override]
-            for chair_id, cx, cy, yaw in chair_specs:
+            for chair_id, cx, cy in chair_specs:
                 chair_half_x = chair_size[0] / 2.0
                 chair_half_y = chair_size[1] / 2.0
                 min_chair_cx = chair_half_x + 0.05
                 max_chair_cx = width - chair_half_x - 0.05
                 min_chair_cy = kitchen_depth + chair_half_y + 0.04
                 max_chair_cy = depth - chair_half_y - 0.04
+                clamped_xy = (min(max(cx, min_chair_cx), max_chair_cx), min(max(cy, min_chair_cy), max_chair_cy))
+                yaw = _chair_yaw_back_away_from_table(clamped_xy, (table_cx, table_cy))
                 chair = _target_item(
                     item_id=chair_id,
                     name="Dining chair",
                     category="chair",
-                    center_xy=(min(max(cx, min_chair_cx), max_chair_cx), min(max(cy, min_chair_cy), max_chair_cy)),
+                    center_xy=clamped_xy,
                     size=chair_size,
                     yaw_deg=yaw,
-                    meta={"kitchen_stage_generated": True, "companion_role": "dining_chair", "support_group": "kitchen_dining"},
+                    meta={
+                        "kitchen_stage_generated": True,
+                        "companion_role": "dining_chair",
+                        "support_group": "kitchen_dining",
+                        "affordance": "table_chair",
+                        "target_table_id": table["id"],
+                        "orientation_rule": "chair_back_farther_from_table_than_center",
+                    },
                 )
                 items.append(chair)
                 additions.append({"id": chair["id"], "category": chair["category"], "role": "dining_chair"})
@@ -1195,10 +1300,16 @@ def _replace_kitchens_in_doc(
     if not isinstance(items, list):
         return out, [], []
 
-    targets = [item for item in items if isinstance(item, dict) and is_kitchen_target(item)]
-    if not targets and add_if_missing:
-        targets = [_default_kitchen_target(room, prompt_text)]
-        items.append(targets[0])
+    if add_if_missing:
+        items, removed_items = _remove_existing_kitchen_stage_objects(items, remove_dining=add_dining)
+        out[key] = items
+        target = _default_kitchen_target(room, prompt_text)
+        target.setdefault("meta", {})["removed_infinigen_kitchen_item_count"] = len(removed_items)
+        target.setdefault("meta", {})["removed_infinigen_kitchen_items"] = removed_items[:40]
+        targets = [target]
+        items.append(target)
+    else:
+        targets = [item for item in items if isinstance(item, dict) and is_kitchen_target(item)]
 
     replacements: list[dict[str, Any]] = []
     for target in targets:
@@ -1230,6 +1341,7 @@ def _replace_kitchens_in_doc(
                 "price_estimate": assembly.get("price_estimate"),
                 "appliances": _appliance_summary(assembly),
                 "warnings": assembly.get("warnings") or [],
+                "removed_infinigen_kitchen_item_count": (target.get("meta") or {}).get("removed_infinigen_kitchen_item_count", 0),
             }
         )
         replacement_item = _assembly_to_scene_item(assembly, target)

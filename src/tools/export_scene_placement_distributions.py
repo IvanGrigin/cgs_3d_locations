@@ -420,7 +420,7 @@ def room_info(scene: dict[str, Any] | None) -> dict[str, Any]:
 
     return {
         "room_id": as_str(room.get("id") or room.get("name")),
-        "room_type": as_str(room.get("room_type") or room.get("type")),
+        "room_type": as_str(room.get("room_type") or room.get("type") or room.get("type_hint")),
         "width": width,
         "depth": depth,
         "area": area,
@@ -504,6 +504,10 @@ def raw_creator_from_obj(obj: dict[str, Any]) -> tuple[str, str]:
 
 def normalize_creator(raw: str, path_text: str = "") -> tuple[str, str, str]:
     text = f"{raw} {path_text}".lower()
+    if "procedural_room_stage" in text or "procedural_room" in text:
+        return "procedural", "procedural_room_stage", raw
+    if "procedural" in text:
+        return "procedural", "procedural", raw
     if "3dfront" in text or "3d-front" in text or "scene_gt" in text:
         return "3dfront", "3dfront_processed_gt", raw
     if "infinigen" in text:

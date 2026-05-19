@@ -1506,6 +1506,19 @@ def maybe_apply_curtains_to_supplier_scene(
     if policy not in {"auto", "always", "never"}:
         policy = "auto"
     if policy == "never":
+        scene = read_json(supplier_scene)
+        stripped_placeholder_curtains = 0
+        if isinstance(scene, dict):
+            scene, stripped_placeholder_curtains = _strip_generated_placeholder_curtains(scene)
+        if stripped_placeholder_curtains > 0:
+            scene_out_path = out_dir / f"{supplier_scene.stem}.no_curtains.v1.json"
+            write_curtain_json(scene_out_path, scene)
+            return scene_out_path, {
+                "added_count": 0,
+                "skipped_reason": "policy_never",
+                "policy": policy,
+                "stripped_placeholder_curtain_count": stripped_placeholder_curtains,
+            }
         return supplier_scene, {"added_count": 0, "skipped_reason": "policy_never", "policy": policy}
 
     scene = read_json(supplier_scene)

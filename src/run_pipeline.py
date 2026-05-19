@@ -13,6 +13,7 @@ import secrets
 import shutil
 import subprocess
 import sys
+import time
 from copy import deepcopy
 from datetime import datetime
 from pathlib import Path
@@ -166,6 +167,72 @@ except ImportError:
     )
     from style_profiles import attach_style_hint_to_room_json
     from style_prompt_analyzer import analyze_prompt_to_style_profile
+
+
+def _append_pipeline_timing(
+    run_dir: Path,
+    *,
+    stage: str,
+    started: datetime,
+    duration_sec: float,
+    status: str,
+    **extra: Any,
+) -> None:
+    path = run_dir / "pipeline_stage_timings.json"
+    if path.is_file():
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            data = {}
+    else:
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+    rows = data.get("stages")
+    if not isinstance(rows, list):
+        rows = []
+        data["stages"] = rows
+    entry = {
+        "stage": stage,
+        "status": status,
+        "started_at": started.isoformat(timespec="seconds"),
+        "finished_at": datetime.now().isoformat(timespec="seconds"),
+        "duration_sec": round(float(duration_sec), 3),
+    }
+    entry.update({k: v for k, v in extra.items() if v is not None})
+    rows.append(entry)
+    data["updated_at"] = datetime.now().isoformat(timespec="seconds")
+    data["duration_sec"] = round(sum(float(row.get("duration_sec") or 0.0) for row in rows), 3)
+    write_json(path, data)
+
+
+class _PipelineStageTimer:
+    def __init__(self, run_dir: Path, stage: str, **extra: Any) -> None:
+        self.run_dir = run_dir
+        self.stage = stage
+        self.extra = extra
+        self.started = datetime.now()
+        self.t0 = 0.0
+
+    def __enter__(self) -> "_PipelineStageTimer":
+        self.started = datetime.now()
+        self.t0 = time.perf_counter()
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> bool:
+        _append_pipeline_timing(
+            self.run_dir,
+            stage=self.stage,
+            started=self.started,
+            duration_sec=time.perf_counter() - self.t0,
+            status="failed" if exc_type else "ok",
+            **self.extra,
+        )
+        return False
+
+
+def _pipeline_stage(run_dir: Path, stage: str, **extra: Any) -> _PipelineStageTimer:
+    return _PipelineStageTimer(run_dir, stage, **extra)
 
 
 def _build_layout_selection_stub_for_artifacts(
@@ -775,6 +842,64 @@ def _write_supplier_variants_manifest(
     out_path = run_dir / "supplier_variants.manifest.json"
     write_json(out_path, out)
     return out_path
+
+
+def _room_surface_payloads(scene_json_path: Path) -> dict[str, Any]:
+    data = json.loads(scene_json_path.read_text(encoding="utf-8"))
+    room = data.get("room") if isinstance(data, dict) and isinstance(data.get("room"), dict) else {}
+    return {
+        key: deepcopy(room[key])
+        for key in ("floor_material", "wall_material", "curtains")
+        if key in room
+    }
+
+
+def _apply_room_surface_payloads(scene_json_path: Path, payloads: dict[str, Any], out_path: Path) -> Path:
+    data = json.loads(scene_json_path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        return scene_json_path
+    if not payloads:
+        return scene_json_path
+    if isinstance(data.get("room"), dict):
+        data["room"].update(deepcopy(payloads))
+    if isinstance(data.get("rooms"), list):
+        for room in data["rooms"]:
+            if isinstance(room, dict):
+                room.update(deepcopy(payloads))
+    write_json(out_path, data)
+    return out_path
+
+
+def _sync_supplier_variant_surface_scene_paths(
+    *,
+    run_dir: Path,
+    variants: dict[str, Any],
+    final_supplier_scene_path: Path | None,
+) -> None:
+    if not variants or not final_supplier_scene_path or not final_supplier_scene_path.is_file():
+        return
+    payloads = _room_surface_payloads(final_supplier_scene_path)
+    if not payloads:
+        return
+    final_resolved = final_supplier_scene_path.expanduser().resolve()
+    for mode_name, info in variants.items():
+        rebind = info.get("rebind") if isinstance(info.get("rebind"), dict) else None
+        if not rebind:
+            continue
+        scene_raw = rebind.get("scene_v1")
+        if not scene_raw:
+            continue
+        scene_path = Path(str(scene_raw)).expanduser().resolve()
+        rebind["scene_v1_before_surface_sync"] = str(scene_path)
+        if scene_path == final_resolved:
+            rebind["surface_materials_synced"] = True
+            continue
+        if not scene_path.is_file():
+            continue
+        synced_path = (run_dir / f"{scene_path.stem}.surface_materials_synced.v1.json").resolve()
+        rebind["scene_v1"] = str(_apply_room_surface_payloads(scene_path, payloads, synced_path).resolve())
+        rebind["surface_materials_synced"] = True
+        rebind["surface_material_source_scene_v1"] = str(final_resolved)
 
 
 def _parse_supplier_build_modes(raw: str | None, selection_modes: list[str]) -> list[str]:
@@ -2044,6 +2169,15 @@ def run_pipeline_for_mode(
 ) -> ModeOutputs:
     print(f"\n====== РЕЖИМ {layout_mode.upper()} ======")
     print(f"📁 mode_run_dir: {run_dir}")
+    _append_pipeline_timing(
+        run_dir,
+        stage="pipeline_mode_start",
+        started=datetime.now(),
+        duration_sec=0.0,
+        status="ok",
+        layout_mode=layout_mode,
+        placer=str(args.placer),
+    )
 
     placer_spec = PLACER_SPECS[args.placer]
     chooser_required = bool(placer_spec.get("requires_object_selection", True))
@@ -2075,22 +2209,24 @@ def run_pipeline_for_mode(
     objects_path: Optional[Path] = None
     normalized_objects_path: Optional[Path] = None
     if chooser_required:
-        objects_path = run_choose_stage(
-            args=args,
-            cfg_runtime=cfg_runtime,
-            room_path=effective_room_path,
-            prompt_text=chooser_prompt_text,
-            run_dir=run_dir,
-            seed=chooser_seed,
-        )
+        with _pipeline_stage(run_dir, "chooser"):
+            objects_path = run_choose_stage(
+                args=args,
+                cfg_runtime=cfg_runtime,
+                room_path=effective_room_path,
+                prompt_text=chooser_prompt_text,
+                run_dir=run_dir,
+                seed=chooser_seed,
+            )
 
         normalized_objects_path = run_dir / "objects.v1.json"
-        normalize_json_artifact(
-            cfg_runtime=cfg_runtime,
-            input_path=objects_path,
-            output_path=normalized_objects_path,
-            target="objects",
-        )
+        with _pipeline_stage(run_dir, "normalize_objects"):
+            normalize_json_artifact(
+                cfg_runtime=cfg_runtime,
+                input_path=objects_path,
+                output_path=normalized_objects_path,
+                target="objects",
+            )
     else:
         print(f"⏭ Пропуск chooser для placer={args.placer}")
 
@@ -2142,13 +2278,14 @@ def run_pipeline_for_mode(
     manifest_path = run_dir / "run_manifest.json"
     write_json(manifest_path, run_manifest)
 
-    maybe_run_semantic_room_planner_stage(
-        args=args,
-        room_path=effective_room_path,
-        prompt_text=effective_prompt_text,
-        run_dir=run_dir,
-        manifest_path=manifest_path,
-    )
+    with _pipeline_stage(run_dir, "semantic_room_planner"):
+        maybe_run_semantic_room_planner_stage(
+            args=args,
+            room_path=effective_room_path,
+            prompt_text=effective_prompt_text,
+            run_dir=run_dir,
+            manifest_path=manifest_path,
+        )
 
     if args.placer == "lego_gen":
         if normalized_objects_path is None:
@@ -2353,6 +2490,14 @@ def run_pipeline_for_mode(
                 manifest["supplier_replacement_reports"] = supplier_report_info
         write_json(manifest_path, manifest)
         variants = manifest.get("supplier_variants") if isinstance(manifest.get("supplier_variants"), dict) else {}
+        _sync_supplier_variant_surface_scene_paths(
+            run_dir=run_dir,
+            variants=variants,
+            final_supplier_scene_path=supplier_scene_for_render if supplier_scene_for_render and supplier_scene_for_render.is_file() else None,
+        )
+        if variants:
+            manifest["supplier_variants"] = variants
+            write_json(manifest_path, manifest)
 
         if args.skip_blender:
             _mark_supplier_blender_skipped(variants, reason="skip_blender")
@@ -2468,47 +2613,60 @@ def run_pipeline_for_mode(
             }
             write_json(run_dir / f"attempt_{attempt:02d}.json", attempt_info)
 
-            execute_placer(
-                cfg_runtime=cfg_runtime,
-                args=args,
-                room_path=effective_room_path,
-                objects_path=objects_path,
-                layout_mode=layout_mode,
-                seed=attempt_seed,
-                out_path=placement_out,
-                run_dir=run_dir,
-                prompt_text=effective_prompt_text,
+            can_reuse_placement = (
+                bool(getattr(args, "skip_existing_placement", False))
+                and placement_out.is_file()
+                and (run_dir / "infinigen_clean_scene.blend").is_file()
             )
+            if can_reuse_placement:
+                print(f"⏭ reuse existing placement/blend for {layout_mode}: {placement_out}")
+            else:
+                with _pipeline_stage(run_dir, "placement_execute", attempt=attempt, placer=str(args.placer)):
+                    execute_placer(
+                        cfg_runtime=cfg_runtime,
+                        args=args,
+                        room_path=effective_room_path,
+                        objects_path=objects_path,
+                        layout_mode=layout_mode,
+                        seed=attempt_seed,
+                        out_path=placement_out,
+                        run_dir=run_dir,
+                        prompt_text=effective_prompt_text,
+                    )
 
-            base_artifacts = build_scene_artifacts(
-                cfg_runtime=cfg_runtime,
-                room_path=effective_room_path,
-                run_dir=run_dir,
-                layout_mode=layout_mode,
-                placement_out=placement_out,
-                variant_suffix="",
-            )
-            base_artifacts, kitchen_info = _maybe_apply_kitchen_stage(
-                args=args,
-                artifacts=base_artifacts,
-                run_dir=run_dir,
-                room_path=effective_room_path,
-                prompt_text=effective_prompt_text,
-                suffix="base",
-            )
-            base_artifacts = maybe_apply_procedural_room_stage(
-                args=args,
-                artifacts=base_artifacts,
-                run_dir=run_dir,
-                prompt_text=effective_prompt_text,
-                manifest_path=manifest_path,
-                tag="base",
-            )
-            base_selection_stub = _build_layout_selection_stub_for_artifacts(
-                artifacts=base_artifacts,
-                run_dir=run_dir,
-                prefix="base",
-            )
+            with _pipeline_stage(run_dir, "build_scene_artifacts_base"):
+                base_artifacts = build_scene_artifacts(
+                    cfg_runtime=cfg_runtime,
+                    room_path=effective_room_path,
+                    run_dir=run_dir,
+                    layout_mode=layout_mode,
+                    placement_out=placement_out,
+                    variant_suffix="",
+                )
+            with _pipeline_stage(run_dir, "kitchen_stage_base"):
+                base_artifacts, kitchen_info = _maybe_apply_kitchen_stage(
+                    args=args,
+                    artifacts=base_artifacts,
+                    run_dir=run_dir,
+                    room_path=effective_room_path,
+                    prompt_text=effective_prompt_text,
+                    suffix="base",
+                )
+            with _pipeline_stage(run_dir, "procedural_room_stage_base"):
+                base_artifacts = maybe_apply_procedural_room_stage(
+                    args=args,
+                    artifacts=base_artifacts,
+                    run_dir=run_dir,
+                    prompt_text=effective_prompt_text,
+                    manifest_path=manifest_path,
+                    tag="base",
+                )
+            with _pipeline_stage(run_dir, "layout_selection_stub_base"):
+                base_selection_stub = _build_layout_selection_stub_for_artifacts(
+                    artifacts=base_artifacts,
+                    run_dir=run_dir,
+                    prefix="base",
+                )
 
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
             manifest["base"] = {
@@ -2525,6 +2683,9 @@ def run_pipeline_for_mode(
             write_json(manifest_path, manifest)
 
             print(f"✅ placement stage success: {layout_mode}")
+            if bool(getattr(args, "stop_after_placement", False)):
+                print("⏹ stop-after-placement: placement + Infinigen blend ready; skipping supplier/postprocess/render")
+                return ModeOutputs(base_artifacts=base_artifacts, lego_artifacts=None)
             break
 
         except Exception as e:
@@ -2542,18 +2703,19 @@ def run_pipeline_for_mode(
 
     supplier_scene_for_render: Optional[Path] = None
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    supplier_scene_for_render, supplier_info, supplier_assets_info, supplier_report_info, manifest = _run_supplier_modes_for_artifacts(
-        args=args,
-        run_dir=run_dir,
-        artifacts=base_artifacts,
-        layout_targets_json_path=base_selection_stub["layout_targets_json"],
-        prompt_text=effective_prompt_text,
-        style_profile=style_profile,
-        style_supplier_preferences_path=style_supplier_preferences_path,
-        manifest=manifest,
-        manifest_path=manifest_path,
-        manifest_key="supplier_variants",
-    )
+    with _pipeline_stage(run_dir, "supplier_modes"):
+        supplier_scene_for_render, supplier_info, supplier_assets_info, supplier_report_info, manifest = _run_supplier_modes_for_artifacts(
+            args=args,
+            run_dir=run_dir,
+            artifacts=base_artifacts,
+            layout_targets_json_path=base_selection_stub["layout_targets_json"],
+            prompt_text=effective_prompt_text,
+            style_profile=style_profile,
+            style_supplier_preferences_path=style_supplier_preferences_path,
+            manifest=manifest,
+            manifest_path=manifest_path,
+            manifest_key="supplier_variants",
+        )
     if supplier_info is not None:
         manifest["supplier_rebind"] = supplier_info
         manifest["supplier_assets"] = supplier_assets_info
@@ -2561,144 +2723,165 @@ def run_pipeline_for_mode(
         write_json(manifest_path, manifest)
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     base_scene_for_render = choose_scene_for_render(base_artifacts)
-    base_scene_for_render, base_repair_info = maybe_repair_scene_json(
-        args=args,
-        scene_json_path=base_scene_for_render,
-        run_dir=run_dir,
-        tag="base",
-    )
+    with _pipeline_stage(run_dir, "scene_repair_base"):
+        base_scene_for_render, base_repair_info = maybe_repair_scene_json(
+            args=args,
+            scene_json_path=base_scene_for_render,
+            run_dir=run_dir,
+            tag="base",
+        )
     if base_repair_info is not None:
         manifest["scene_repair_base"] = base_repair_info
-    base_scene_for_render, base_layout_post_info = _maybe_apply_layout_postprocess(
-        args=args,
-        scene_json_path=base_scene_for_render,
-        run_dir=run_dir,
-        tag="base",
-    )
+    with _pipeline_stage(run_dir, "layout_postprocess_base"):
+        base_scene_for_render, base_layout_post_info = _maybe_apply_layout_postprocess(
+            args=args,
+            scene_json_path=base_scene_for_render,
+            run_dir=run_dir,
+            tag="base",
+        )
     if base_layout_post_info is not None:
         manifest["layout_postprocess_base"] = base_layout_post_info
-    base_scene_for_render, base_flooring_info = _maybe_apply_flooring_to_scene(
-        args=args,
-        run_dir=run_dir,
-        scene_json_path=base_scene_for_render,
-        prompt_text=prompt_text,
-        style_profile=style_profile,
-        room_id="room_001",
-        suffix=".base",
-    )
+    with _pipeline_stage(run_dir, "flooring_base"):
+        base_scene_for_render, base_flooring_info = _maybe_apply_flooring_to_scene(
+            args=args,
+            run_dir=run_dir,
+            scene_json_path=base_scene_for_render,
+            prompt_text=prompt_text,
+            style_profile=style_profile,
+            room_id="room_001",
+            suffix=".base",
+        )
     if base_flooring_info is not None:
         manifest["flooring_base"] = base_flooring_info
         if isinstance(manifest.get("base"), dict):
             manifest["base"]["scene_v1_flooring"] = base_flooring_info.get("scene_v1")
-    base_scene_for_render, base_wall_info = _maybe_apply_wall_material_to_scene(
-        args=args,
-        run_dir=run_dir,
-        scene_json_path=base_scene_for_render,
-        prompt_text=prompt_text,
-        style_profile=style_profile,
-        room_id="room_001",
-        suffix=".base",
-    )
+    with _pipeline_stage(run_dir, "wall_material_base"):
+        base_scene_for_render, base_wall_info = _maybe_apply_wall_material_to_scene(
+            args=args,
+            run_dir=run_dir,
+            scene_json_path=base_scene_for_render,
+            prompt_text=prompt_text,
+            style_profile=style_profile,
+            room_id="room_001",
+            suffix=".base",
+        )
     if base_wall_info is not None:
         manifest["wall_material_base"] = base_wall_info
         if isinstance(manifest.get("base"), dict):
             manifest["base"]["scene_v1_wall_material"] = base_wall_info.get("scene_v1")
-    base_scene_for_render, base_curtain_info = _maybe_apply_curtains_to_scene(
-        args=args,
-        run_dir=run_dir,
-        scene_json_path=base_scene_for_render,
-        prompt_text=prompt_text,
-        style_profile=style_profile,
-        suffix=".base",
-    )
+    with _pipeline_stage(run_dir, "curtains_base"):
+        base_scene_for_render, base_curtain_info = _maybe_apply_curtains_to_scene(
+            args=args,
+            run_dir=run_dir,
+            scene_json_path=base_scene_for_render,
+            prompt_text=prompt_text,
+            style_profile=style_profile,
+            suffix=".base",
+        )
     if base_curtain_info is not None:
         manifest["curtains_base"] = base_curtain_info
         if isinstance(manifest.get("base"), dict):
             manifest["base"]["scene_v1_curtains"] = base_curtain_info.get("scene_v1")
-    surface_pricing_info = _write_surface_material_pricing(
-        run_dir=run_dir,
-        room_path=Path(effective_room_path).expanduser().resolve(),
-        flooring_info=base_flooring_info,
-        wall_info=base_wall_info,
-        pricing_stub_json=base_selection_stub.get("scene_pricing_stub_json"),
-        suffix=".base",
-    )
+    with _pipeline_stage(run_dir, "surface_material_pricing_base"):
+        surface_pricing_info = _write_surface_material_pricing(
+            run_dir=run_dir,
+            room_path=Path(effective_room_path).expanduser().resolve(),
+            flooring_info=base_flooring_info,
+            wall_info=base_wall_info,
+            pricing_stub_json=base_selection_stub.get("scene_pricing_stub_json"),
+            suffix=".base",
+        )
     if surface_pricing_info is not None:
         manifest["surface_materials_pricing_base"] = surface_pricing_info
     if supplier_scene_for_render and supplier_scene_for_render.is_file():
-        supplier_scene_for_render, supplier_repair_info = maybe_repair_scene_json(
-            args=args,
-            scene_json_path=supplier_scene_for_render,
-            run_dir=run_dir,
-            tag="supplier",
-        )
+        with _pipeline_stage(run_dir, "scene_repair_supplier"):
+            supplier_scene_for_render, supplier_repair_info = maybe_repair_scene_json(
+                args=args,
+                scene_json_path=supplier_scene_for_render,
+                run_dir=run_dir,
+                tag="supplier",
+            )
         if supplier_repair_info is not None:
             manifest["scene_repair_supplier"] = supplier_repair_info
-        supplier_scene_for_render, supplier_layout_post_info = _maybe_apply_layout_postprocess(
-            args=args,
-            scene_json_path=supplier_scene_for_render,
-            run_dir=run_dir,
-            tag="supplier",
-        )
+        with _pipeline_stage(run_dir, "layout_postprocess_supplier"):
+            supplier_scene_for_render, supplier_layout_post_info = _maybe_apply_layout_postprocess(
+                args=args,
+                scene_json_path=supplier_scene_for_render,
+                run_dir=run_dir,
+                tag="supplier",
+            )
         if supplier_layout_post_info is not None:
             manifest["layout_postprocess_supplier"] = supplier_layout_post_info
-        supplier_scene_for_render, supplier_flooring_info = _maybe_apply_flooring_to_scene(
-            args=args,
-            run_dir=run_dir,
-            scene_json_path=supplier_scene_for_render,
-            prompt_text=prompt_text,
-            style_profile=style_profile,
-            room_id="room_001",
-            suffix=".supplier",
-        )
+        with _pipeline_stage(run_dir, "flooring_supplier"):
+            supplier_scene_for_render, supplier_flooring_info = _maybe_apply_flooring_to_scene(
+                args=args,
+                run_dir=run_dir,
+                scene_json_path=supplier_scene_for_render,
+                prompt_text=prompt_text,
+                style_profile=style_profile,
+                room_id="room_001",
+                suffix=".supplier",
+            )
         if supplier_flooring_info is not None:
             manifest["flooring_supplier"] = supplier_flooring_info
             if isinstance(manifest.get("supplier_rebind"), dict):
                 manifest["supplier_rebind"]["scene_v1_flooring"] = supplier_flooring_info.get("scene_v1")
-        supplier_scene_for_render, supplier_wall_info = _maybe_apply_wall_material_to_scene(
-            args=args,
-            run_dir=run_dir,
-            scene_json_path=supplier_scene_for_render,
-            prompt_text=prompt_text,
-            style_profile=style_profile,
-            room_id="room_001",
-            suffix=".supplier",
-        )
+        with _pipeline_stage(run_dir, "wall_material_supplier"):
+            supplier_scene_for_render, supplier_wall_info = _maybe_apply_wall_material_to_scene(
+                args=args,
+                run_dir=run_dir,
+                scene_json_path=supplier_scene_for_render,
+                prompt_text=prompt_text,
+                style_profile=style_profile,
+                room_id="room_001",
+                suffix=".supplier",
+            )
         if supplier_wall_info is not None:
             manifest["wall_material_supplier"] = supplier_wall_info
             if isinstance(manifest.get("supplier_rebind"), dict):
                 manifest["supplier_rebind"]["scene_v1_wall_material"] = supplier_wall_info.get("scene_v1")
-        supplier_scene_for_render, supplier_curtain_info = _maybe_apply_curtains_to_scene(
-            args=args,
-            run_dir=run_dir,
-            scene_json_path=supplier_scene_for_render,
-            prompt_text=prompt_text,
-            style_profile=style_profile,
-            suffix=".supplier",
-        )
+        with _pipeline_stage(run_dir, "curtains_supplier"):
+            supplier_scene_for_render, supplier_curtain_info = _maybe_apply_curtains_to_scene(
+                args=args,
+                run_dir=run_dir,
+                scene_json_path=supplier_scene_for_render,
+                prompt_text=prompt_text,
+                style_profile=style_profile,
+                suffix=".supplier",
+            )
         if supplier_curtain_info is not None:
             manifest["curtains_supplier"] = supplier_curtain_info
             if isinstance(manifest.get("supplier_rebind"), dict):
                 manifest["supplier_rebind"]["scene_v1_curtains"] = supplier_curtain_info.get("scene_v1")
-        surface_pricing_info = _write_surface_material_pricing(
-            run_dir=run_dir,
-            room_path=Path(effective_room_path).expanduser().resolve(),
-            flooring_info=supplier_flooring_info,
-            wall_info=supplier_wall_info,
-            pricing_stub_json=None,
-            suffix=".supplier",
-        )
+        with _pipeline_stage(run_dir, "surface_material_pricing_supplier"):
+            surface_pricing_info = _write_surface_material_pricing(
+                run_dir=run_dir,
+                room_path=Path(effective_room_path).expanduser().resolve(),
+                flooring_info=supplier_flooring_info,
+                wall_info=supplier_wall_info,
+                pricing_stub_json=None,
+                suffix=".supplier",
+            )
         if surface_pricing_info is not None:
             manifest["surface_materials_pricing_supplier"] = surface_pricing_info
         if supplier_assets_info and supplier_assets_info.get("bindings_json"):
-            supplier_report_info = _write_supplier_replacement_reports_for_artifacts(
-                run_dir=run_dir,
-                bindings_json_path=Path(str(supplier_assets_info["bindings_json"])).expanduser().resolve(),
-                supplier_info=supplier_info or {},
-            )
+            with _pipeline_stage(run_dir, "supplier_replacement_reports"):
+                supplier_report_info = _write_supplier_replacement_reports_for_artifacts(
+                    run_dir=run_dir,
+                    bindings_json_path=Path(str(supplier_assets_info["bindings_json"])).expanduser().resolve(),
+                    supplier_info=supplier_info or {},
+                )
             manifest["supplier_replacement_reports"] = supplier_report_info
     write_json(manifest_path, manifest)
     variants = manifest.get("supplier_variants") if isinstance(manifest.get("supplier_variants"), dict) else {}
+    _sync_supplier_variant_surface_scene_paths(
+        run_dir=run_dir,
+        variants=variants,
+        final_supplier_scene_path=supplier_scene_for_render if supplier_scene_for_render and supplier_scene_for_render.is_file() else None,
+    )
+    if variants:
+        manifest["supplier_variants"] = variants
+        write_json(manifest_path, manifest)
 
     if args.skip_blender:
         _mark_supplier_blender_skipped(variants, reason="skip_blender")
@@ -2713,25 +2896,27 @@ def run_pipeline_for_mode(
         print(f"\n✅ УСПЕХ! РЕЖИМ {layout_mode}")
         return ModeOutputs(base_artifacts=base_artifacts, lego_artifacts=None)
 
-    run_blender_for_mode(
-        cfg_runtime=cfg_runtime,
-        args=args,
-        room_path=effective_room_path,
-        run_dir=run_dir,
-        layout_mode=layout_mode,
-        scene_json_path=base_scene_for_render,
-        variant_suffix="",
-    )
-
-    if variants and bool(getattr(args, "build_supplier_blend", False)):
-        _run_supplier_blender_variants(
+    with _pipeline_stage(run_dir, "blender_base"):
+        run_blender_for_mode(
             cfg_runtime=cfg_runtime,
             args=args,
+            room_path=effective_room_path,
             run_dir=run_dir,
             layout_mode=layout_mode,
-            effective_room_path=effective_room_path,
-            variants=variants,
+            scene_json_path=base_scene_for_render,
+            variant_suffix="",
         )
+
+    if variants and bool(getattr(args, "build_supplier_blend", False)):
+        with _pipeline_stage(run_dir, "blender_supplier_variants", variants=",".join(sorted(variants.keys()))):
+            _run_supplier_blender_variants(
+                cfg_runtime=cfg_runtime,
+                args=args,
+                run_dir=run_dir,
+                layout_mode=layout_mode,
+                effective_room_path=effective_room_path,
+                variants=variants,
+            )
         _refresh_supplier_reports_after_blender(run_dir=run_dir, variants=variants)
         manifest = _finalize_supplier_variant_artifacts(
             args=args,
@@ -2751,40 +2936,43 @@ def run_pipeline_for_mode(
         )
 
     if supplier_scene_for_render and supplier_scene_for_render.is_file() and not variants:
-        supplier_scene_for_render, topview_repair_info = _maybe_apply_topview_vlm_orientation_repair(
-            cfg_runtime=cfg_runtime,
-            args=args,
-            run_dir=run_dir,
-            scene_json_path=supplier_scene_for_render,
-            tag="supplier",
-        )
+        with _pipeline_stage(run_dir, "topview_vlm_orientation_repair_supplier"):
+            supplier_scene_for_render, topview_repair_info = _maybe_apply_topview_vlm_orientation_repair(
+                cfg_runtime=cfg_runtime,
+                args=args,
+                run_dir=run_dir,
+                scene_json_path=supplier_scene_for_render,
+                tag="supplier",
+            )
         if topview_repair_info is not None:
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
             manifest["topview_vlm_orientation_repair_supplier"] = topview_repair_info
             write_json(manifest_path, manifest)
-        run_blender_for_mode(
-            cfg_runtime=cfg_runtime,
-            args=args,
-            room_path=effective_room_path,
-            run_dir=run_dir,
-            layout_mode=layout_mode,
-            scene_json_path=supplier_scene_for_render,
-            variant_suffix="supplier",
-        )
+        with _pipeline_stage(run_dir, "blender_supplier"):
+            run_blender_for_mode(
+                cfg_runtime=cfg_runtime,
+                args=args,
+                room_path=effective_room_path,
+                run_dir=run_dir,
+                layout_mode=layout_mode,
+                scene_json_path=supplier_scene_for_render,
+                variant_suffix="supplier",
+            )
         supplier_blend_out, _ = blender_outputs_for_mode(
             args,
             run_dir,
             layout_mode,
             variant_suffix="supplier",
         )
-        supplier_gif_info = _render_supplier_room_gifs(
-            cfg_runtime=cfg_runtime,
-            args=args,
-            run_dir=run_dir,
-            layout_mode=layout_mode,
-            supplier_scene_json_path=supplier_scene_for_render,
-            supplier_blend_path=Path(str(supplier_blend_out)).expanduser().resolve(),
-        )
+        with _pipeline_stage(run_dir, "supplier_room_gifs"):
+            supplier_gif_info = _render_supplier_room_gifs(
+                cfg_runtime=cfg_runtime,
+                args=args,
+                run_dir=run_dir,
+                layout_mode=layout_mode,
+                supplier_scene_json_path=supplier_scene_for_render,
+                supplier_blend_path=Path(str(supplier_blend_out)).expanduser().resolve(),
+            )
         if supplier_gif_info is not None:
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
             manifest["supplier_room_gifs"] = supplier_gif_info
@@ -2828,6 +3016,8 @@ def build_cli() -> argparse.ArgumentParser:
     p.add_argument("--no-import-glb", action="store_true", help="Compat flag, ignored by current Blender scene builder")
     p.add_argument("--normalize-chandeliers", action="store_true", help="Postprocess ceiling chandeliers into symmetric coverage positions at least 1m from walls")
     p.add_argument("--repair-furniture-overlaps", action="store_true", help="Postprocess movable furniture to reduce AABB overlaps and room-boundary overflow")
+    p.add_argument("--stop-after-placement", action="store_true", help="Stop after placement extraction/download and canonical scene build.")
+    p.add_argument("--skip-existing-placement", action="store_true", help="Reuse existing placement_<mode>.json and infinigen_clean_scene.blend instead of running placer.")
 
     p.add_argument("--run-dir", default=None)
     p.add_argument("--keep-tmp", action="store_true")

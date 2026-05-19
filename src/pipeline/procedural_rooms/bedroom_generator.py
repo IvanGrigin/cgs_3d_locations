@@ -306,7 +306,385 @@ def _remove_placement(engine: PlacementEngine, item: dict[str, Any] | None) -> N
     engine.placements = [candidate for candidate in engine.placements if candidate.get("id") != item_id]
 
 
+def _bed_variants() -> list[ObjectSpec]:
+    base = BEDROOM_SPECS["single_bed"]
+    return [
+        _spec_with_size(base, (0.90, 2.00, 0.55), name="Single narrow bed"),
+        _spec_with_size(base, (1.05, 2.00, 0.55), name="Single bed"),
+        _spec_with_size(base, (1.40, 2.00, 0.55), name="Semi double bed"),
+        _spec_with_size(base, (1.60, 2.05, 0.55), name="Double bed"),
+        _spec_with_size(base, (1.80, 2.10, 0.55), name="Large double bed"),
+    ]
+
+
+def _nightstand_variants() -> list[ObjectSpec]:
+    base = BEDROOM_SPECS["nightstand"]
+    return [
+        _spec_with_size(base, (0.32, 0.34, 0.52), name="Small nightstand"),
+        _spec_with_size(base, (0.45, 0.42, 0.55), name="Nightstand"),
+    ]
+
+
+def _wardrobe_variants() -> list[ObjectSpec]:
+    base = BEDROOM_SPECS["wardrobe_module"]
+    return [
+        _spec_with_size(base, (0.60, 0.52, 2.10), name="Small wardrobe"),
+        _spec_with_size(base, (0.90, 0.58, 2.20), name="Medium wardrobe"),
+        _spec_with_size(base, (1.20, 0.62, 2.25), name="Large wardrobe"),
+        _spec_with_size(base, (1.50, 0.64, 2.35), name="Tall large wardrobe"),
+    ]
+
+
+def _desk_variants() -> list[ObjectSpec]:
+    base = BEDROOM_SPECS["desk"]
+    return [
+        _spec_with_size(base, (0.85, 0.50, 0.75), name="Small writing desk"),
+        _spec_with_size(base, (1.15, 0.58, 0.75), name="Writing desk"),
+        _spec_with_size(base, (1.45, 0.62, 0.75), name="Large writing desk"),
+    ]
+
+
+def _shelf_variants() -> list[ObjectSpec]:
+    base = ObjectSpec("shelf", "Shelf", (0.65, 0.32, 1.25), "storage", support_surface=True, requires_access=True, front_target_hint="room_center")
+    return [
+        _spec_with_size(base, (0.65, 0.32, 1.25), name="Small shelf"),
+        _spec_with_size(base, (0.85, 0.34, 1.65), name="Medium shelf"),
+        _spec_with_size(base, (0.90, 0.36, 2.05), name="Tall shelf"),
+    ]
+
+
+def _armchair_variants() -> list[ObjectSpec]:
+    base = ObjectSpec("armchair", "Armchair", (0.78, 0.78, 0.88), "secondary", front_target_hint="room_center")
+    return [
+        _spec_with_size(base, (0.66, 0.66, 0.84), name="Compact armchair"),
+        _spec_with_size(base, (0.82, 0.82, 0.90), name="Armchair"),
+    ]
+
+
+def _plant_variants() -> list[ObjectSpec]:
+    base = BEDROOM_SPECS["plant"]
+    return [
+        _spec_with_size(base, (0.30, 0.30, 0.85), name="Small indoor plant"),
+        _spec_with_size(base, (0.42, 0.42, 1.20), name="Indoor plant"),
+    ]
+
+
+def _far_bed_wall(ctx: RoomContext) -> Any | None:
+    candidates = [wall for wall in ctx.walls if not wall.has_door]
+    if not candidates:
+        candidates = list(ctx.walls)
+    if not candidates:
+        return None
+    door_point = _door_reference_point(ctx)
+    short_len = min(wall.length for wall in candidates)
+    short_candidates = [wall for wall in candidates if wall.length <= short_len + 0.45]
+    pool = short_candidates or candidates
+    if door_point is None:
+        return min(pool, key=lambda wall: (wall.has_window, wall.length))
+    return max(pool, key=lambda wall: ((wall.point_at(wall.length * 0.5) - door_point).length(), -wall.length))
+
+
+def _far_corner_from_door(ctx: RoomContext, wall: Any) -> bool:
+    door_point = _door_reference_point(ctx)
+    if door_point is None:
+        return True
+    return (wall.start - door_point).length() >= (wall.end - door_point).length()
+
+
+def _place_short_wall_group(
+    engine: PlacementEngine,
+    wall: Any,
+    *,
+    bed_spec: ObjectSpec,
+    nightstand_spec: ObjectSpec,
+    wardrobe_spec: ObjectSpec | None,
+    order: list[str],
+    from_start: bool,
+) -> dict[str, dict[str, Any]] | None:
+    snapshot = list(engine.placements)
+    gap = 0.06
+    cursor = 0.04 if from_start else wall.length - 0.04
+    placed: dict[str, dict[str, Any]] = {}
+
+    spec_by_role = {
+        "bed": bed_spec,
+        "nightstand": nightstand_spec,
+        "wardrobe": wardrobe_spec,
+    }
+    name_by_role = {
+        "bed": bed_spec.name,
+        "nightstand": nightstand_spec.name,
+        "wardrobe": wardrobe_spec.name if wardrobe_spec else "",
+    }
+
+    engine.placements = []
+    for role in order:
+        spec = spec_by_role.get(role)
+        if spec is None:
+            continue
+        width = spec.size_m[0]
+        if from_start:
+            along = cursor + width * 0.5
+            cursor += width + gap
+        else:
+            along = cursor - width * 0.5
+            cursor -= width + gap
+        if along < width * 0.5 or along > wall.length - width * 0.5:
+            engine.placements = snapshot
+            return None
+        item = engine.add_wall_aligned(
+            spec,
+            wall.id,
+            along,
+            name=name_by_role[role],
+            category="wardrobe" if role == "wardrobe" else role,
+            layer="primary" if role == "bed" else "secondary" if role == "nightstand" else "storage",
+            margin=0.035,
+            ignore_window_clearance=(role == "bed"),
+            front_target="room_center",
+            extra_meta={
+                "role": "main_bed" if role == "bed" else role,
+                "greedy_layout_role": role,
+                "greedy_short_wall_group": True,
+                "wall_id": wall.id,
+                "wall_along_m": along,
+            },
+        )
+        if item is None:
+            engine.placements = snapshot
+            return None
+        placed[role] = item
+
+    if "bed" not in placed or "nightstand" not in placed:
+        engine.placements = snapshot
+        return None
+    return placed
+
+
+def _try_short_wall_group(
+    engine: PlacementEngine,
+    ctx: RoomContext,
+    wall: Any,
+    *,
+    bed_spec: ObjectSpec,
+    nightstand_spec: ObjectSpec,
+    wardrobe_spec: ObjectSpec | None = None,
+) -> dict[str, dict[str, Any]] | None:
+    from_start = _far_corner_from_door(ctx, wall)
+    preferred_orders = (
+        [["bed", "nightstand", "wardrobe"], ["nightstand", "bed", "wardrobe"]]
+        if wardrobe_spec
+        else [["bed", "nightstand"], ["nightstand", "bed"]]
+    )
+    for order in preferred_orders:
+        for direction in (from_start, not from_start):
+            result = _place_short_wall_group(
+                engine,
+                wall,
+                bed_spec=bed_spec,
+                nightstand_spec=nightstand_spec,
+                wardrobe_spec=wardrobe_spec,
+                order=order,
+                from_start=direction,
+            )
+            if result is not None:
+                return result
+    return None
+
+
+def _add_bed_decor(engine: PlacementEngine, bed: dict[str, Any], nightstand: dict[str, Any] | None, density: Density) -> None:
+    bed_size = bed.get("size_m") if isinstance(bed.get("size_m"), list) else [1.0, 2.0, 0.55]
+    if density_rank(density) >= 1:
+        engine.add_near(
+            bed,
+            BEDROOM_SPECS["rug"],
+            local_offset_xy=(0.0, float(bed_size[1]) * 0.22),
+            allow_collision=True,
+            layer="textile",
+        )
+    if density_rank(density) >= 2:
+        for i, x in enumerate((-0.28, 0.28), start=1):
+            engine.add_on_top(bed, BEDROOM_SPECS["pillow"], local_offset_xy=(x, -float(bed_size[1]) * 0.35), name=f"Bed pillow {i}")
+        engine.add_on_top(bed, BEDROOM_SPECS["blanket"], local_offset_xy=(0.0, float(bed_size[1]) * 0.18), name="Bed blanket")
+        if nightstand:
+            engine.add_on_top(nightstand, BEDROOM_SPECS["table_lamp"], local_offset_xy=(0.0, 0.0))
+    if density_rank(density) >= 3:
+        for i, x in enumerate((-0.42, 0.42), start=1):
+            engine.add_on_top(bed, BEDROOM_SPECS["pillow"], local_offset_xy=(x, -float(bed_size[1]) * 0.35), name=f"Decorative pillow {i}")
+        engine.add_on_top(bed, BEDROOM_SPECS["blanket"], local_offset_xy=(0.0, float(bed_size[1]) * 0.34), name="Layered bed throw")
+
+
+def _try_wall_item(engine: PlacementEngine, ctx: RoomContext, spec: ObjectSpec, *, avoid_wall_ids: set[str], category: str | None = None) -> dict[str, Any] | None:
+    walls = sorted([wall for wall in ctx.walls if wall.id not in avoid_wall_ids and not wall.has_door], key=lambda wall: wall.length, reverse=True)
+    for wall in walls:
+        for ratio in (0.5, 0.28, 0.72):
+            snapshot = list(engine.placements)
+            item = engine.add_wall_aligned(spec, wall.id, wall.length * ratio, category=category, layer=spec.layer, margin=0.04, front_target="room_center")
+            if item:
+                return item
+            engine.placements = snapshot
+    return None
+
+
+def _fill_long_wall(engine: PlacementEngine, ctx: RoomContext, bed_wall_id: str) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    for desk_spec in reversed(_desk_variants()):
+        for wall in sorted([w for w in ctx.walls if w.id != bed_wall_id and not w.has_door], key=lambda w: w.length, reverse=True):
+            for ratio in (0.5, 0.32, 0.68):
+                snapshot = list(engine.placements)
+                desk = engine.add_wall_aligned(
+                    desk_spec,
+                    wall.id,
+                    wall.length * ratio,
+                    offset_from_wall_m=desk_spec.size_m[1] * 0.5 + 0.22,
+                    layer="secondary",
+                    margin=0.08,
+                    front_target="chair",
+                )
+                if not desk:
+                    engine.placements = snapshot
+                    continue
+                chair = engine.add_near(
+                    desk,
+                    BEDROOM_SPECS["chair"],
+                    local_offset_xy=(0.0, desk_spec.size_m[1] * 0.5 + BEDROOM_SPECS["chair"].size_m[1] * 0.5 + 0.22),
+                    allow_collision=False,
+                    front_target=desk.get("id"),
+                )
+                if chair:
+                    engine.add_on_top(desk, BEDROOM_SPECS["table_lamp"], local_offset_xy=(-0.30, 0.0))
+                    return desk, chair
+                engine.placements = snapshot
+    plant = None
+    for plant_spec in _plant_variants():
+        plant = engine.add_corner_object(plant_spec, preferred_index=0)
+        if plant:
+            break
+    return None, None
+
+
+def _add_extra_furniture(engine: PlacementEngine, ctx: RoomContext, bed_wall_id: str) -> None:
+    for shelf_spec in reversed(_shelf_variants()):
+        if _try_wall_item(engine, ctx, shelf_spec, avoid_wall_ids={bed_wall_id}, category="shelf"):
+            return
+    for armchair_spec in reversed(_armchair_variants()):
+        if engine.add_corner_object(armchair_spec, preferred_index=2, category="armchair"):
+            return
+    for plant_spec in _plant_variants():
+        if engine.add_corner_object(plant_spec, preferred_index=1):
+            return
+
+
+def _generate_bedroom_greedy(ctx: RoomContext, *, density: Density, seed: int | None = None) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    rng = random.Random(seed)
+    engine = PlacementEngine(
+        ctx=ctx,
+        rng=rng,
+        source_name="procedural_room_stage",
+        generator_name="bedroom_generator",
+        archetype="short_wall_greedy_bedroom",
+    )
+    bed_wall = _far_bed_wall(ctx)
+    if bed_wall is None:
+        return [], {"generator": "bedroom_generator", "status": "no_wall"}
+
+    beds = _bed_variants()
+    nightstands = _nightstand_variants()
+    smallest_bed = beds[0]
+    smallest_nightstand = nightstands[0]
+    wardrobe_nightstand = nightstands[-1]
+
+    core = _try_short_wall_group(engine, ctx, bed_wall, bed_spec=smallest_bed, nightstand_spec=smallest_nightstand)
+    if core is None:
+        return [], {"generator": "bedroom_generator", "status": "minimum_bedroom_rejected", "rejected": engine.rejected}
+
+    accepted_bed = smallest_bed
+    for bed_spec in beds:
+        upgraded = _try_short_wall_group(engine, ctx, bed_wall, bed_spec=bed_spec, nightstand_spec=smallest_nightstand)
+        if upgraded is None:
+            break
+        core = upgraded
+        accepted_bed = bed_spec
+
+    selected_wardrobe: ObjectSpec | None = None
+    for wardrobe_spec in reversed(_wardrobe_variants()):
+        trial = _try_short_wall_group(
+            engine,
+            ctx,
+            bed_wall,
+            bed_spec=smallest_bed,
+            nightstand_spec=wardrobe_nightstand,
+            wardrobe_spec=wardrobe_spec,
+        )
+        if trial is not None:
+            core = trial
+            selected_wardrobe = wardrobe_spec
+            accepted_bed = smallest_bed
+            break
+
+    if selected_wardrobe is not None:
+        for bed_spec in beds:
+            upgraded = _try_short_wall_group(
+                engine,
+                ctx,
+                bed_wall,
+                bed_spec=bed_spec,
+                nightstand_spec=wardrobe_nightstand,
+                wardrobe_spec=selected_wardrobe,
+            )
+            if upgraded is None:
+                break
+            core = upgraded
+            accepted_bed = bed_spec
+
+    bed = core["bed"]
+    nightstand = core.get("nightstand")
+    wardrobe = core.get("wardrobe")
+    for item in (bed, nightstand, wardrobe):
+        if item:
+            constraints = item.setdefault("constraints", {})
+            if isinstance(constraints, dict):
+                constraints.update({"style": "soft classic", "color": "cream beige pale green", "materials": "fabric wood matte finish"})
+
+    desk, chair = _fill_long_wall(engine, ctx, bed_wall.id)
+    has_large_bed = accepted_bed.size_m[0] >= 1.4
+    has_large_wardrobe = bool(selected_wardrobe and selected_wardrobe.size_m[0] >= 1.2)
+    if has_large_bed and nightstand and has_large_wardrobe and desk and chair:
+        _add_extra_furniture(engine, ctx, bed_wall.id)
+
+    _add_bed_decor(engine, bed, nightstand, density)
+    mural_base = BEDROOM_SPECS["mural"]
+    engine.add_wall_art(
+        bed_wall.id,
+        float(bed.get("meta", {}).get("wall_along_m") or bed_wall.length * 0.5),
+        _spec_with_size(mural_base, (max(0.75, min(mural_base.size_m[0], bed_wall.length - 0.12)), mural_base.size_m[1], mural_base.size_m[2])),
+        z_center=1.42,
+        name="Soft bedroom accent wall art",
+        category="wall_art",
+        layer="wall_decor",
+    )
+    engine.add_ceiling_light()
+    _add_window_curtains(engine, ctx)
+
+    report = {
+        "generator": "bedroom_generator",
+        "archetype": engine.archetype,
+        "bed_wall_id": bed_wall.id,
+        "density": density,
+        "greedy_algorithm": {
+            "bed_width_m": accepted_bed.size_m[0],
+            "nightstand": bool(nightstand),
+            "wardrobe_width_m": selected_wardrobe.size_m[0] if selected_wardrobe else None,
+            "desk": bool(desk),
+            "chair": bool(chair),
+        },
+        "rejected": engine.rejected,
+    }
+    return engine.placements, report
+
+
 def generate_bedroom(ctx: RoomContext, *, density: Density, seed: int | None = None) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    return _generate_bedroom_greedy(ctx, density=density, seed=seed)
+
     rng = random.Random(seed)
     engine = PlacementEngine(
         ctx=ctx,

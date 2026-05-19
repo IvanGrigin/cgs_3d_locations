@@ -50,6 +50,37 @@ SCORE_FIELDS = COMPARISON_SCORE_FIELDS + RENDER_SCORE_FIELDS
 VIEW_ORDER = ("front", "left", "right", "three_quarter")
 
 
+def target_category_context(item: dict[str, Any]) -> str:
+    title = str(item.get("title") or "")
+    category_raw = str(item.get("category_raw") or "")
+    category_norm = str(item.get("category_norm") or "")
+    haystack = f"{title} {category_raw}".lower()
+    inferred: list[str] = []
+    keyword_map = (
+        ("пуф", "pouf / ottoman"),
+        ("оттоман", "pouf / ottoman"),
+        ("банкет", "bench / banquette"),
+        ("кресло-кровать", "sleeper armchair / chair-bed"),
+        ("кресло", "armchair / chair"),
+        ("шезлонг", "chaise lounge"),
+        ("шкаф-купе", "wardrobe / sliding-door cabinet"),
+        ("шкаф", "wardrobe / cabinet"),
+        ("стеллаж", "shelving unit / rack"),
+        ("витрин", "display cabinet"),
+        ("стенка", "wall unit"),
+        ("прихож", "hallway furniture set"),
+    )
+    for needle, label in keyword_map:
+        if needle in haystack and label not in inferred:
+            inferred.append(label)
+    inferred_text = ", ".join(inferred) if inferred else "not inferred"
+    return (
+        f"title={title!r}; category_raw={category_raw!r}; category_norm={category_norm!r}; "
+        f"inferred_from_title_raw={inferred_text}. Title and category_raw are highest priority; "
+        "if category_norm conflicts with title/category_raw, ignore category_norm."
+    )
+
+
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
         description="VLM quality review for mebel.ru generated render PNGs.",
@@ -70,6 +101,11 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--unique-key", action="append", default=[], help="Evaluate only this unique_key; can be repeated.")
     p.add_argument("--resume", action=argparse.BooleanOptionalAction, default=True)
     p.add_argument("--prepare-only", action="store_true", help="Download images and build composites, but do not call VLM.")
+    p.add_argument(
+        "--observations-only",
+        action="store_true",
+        help="Call only the vision model and write VLM observations without the text LLM scoring stage.",
+    )
     p.add_argument("--merge-catalog", action="store_true", help="Merge completed VLM scores back into the catalog JSON.")
     p.add_argument("--model", default=DEFAULT_MODEL)
     p.add_argument("--score-model", default="", help="Text LLM for scoring VLM observations. Defaults to --model.")
@@ -78,6 +114,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--temperature", type=float, default=0.0)
     p.add_argument("--num-predict", type=int, default=450)
     p.add_argument("--score-num-predict", type=int, default=700)
+    p.add_argument("--num-ctx", type=int, default=8192)
+    p.add_argument("--score-num-ctx", type=int, default=8192)
     p.add_argument("--max-attempts", type=int, default=2)
     p.add_argument("--remote-host", default="84.2.13.196")
     p.add_argument("--remote-port", default="28553")
@@ -356,7 +394,7 @@ visual similarity, materials, colors, geometry, and completeness.
 Product metadata:
 - unique_key: {item.get('unique_key')}
 - title: {item.get('title')}
-- expected category: {item.get('category_norm') or item.get('category_raw')}
+- target category context: {target_category_context(item)}
 - description: {item.get('description')}
 - color: {item.get('color')}
 - materials: {item.get('materials')}
@@ -367,6 +405,8 @@ Evaluate only the target furniture object. Ignore the room, floor, wall, lamps, 
 photo crop, lighting setup, camera angle, and perspective differences unless they hide the target object.
 The most important question is whether the generated object itself is the same kind of item with the same
 main shape, construction, proportions, and visible parts.
+Use the target category context carefully. For example, Russian "Пуф" means pouf/ottoman, not armchair.
+Russian "Кресло" means armchair/chair, and "Шкаф" means wardrobe/cabinet.
 
 Return only valid JSON with detailed observations. Use short but specific English.
 Be especially explicit about:
@@ -407,14 +447,15 @@ Be especially explicit about:
 
 def prompt_for_multiview_item(item: dict[str, Any], views: list[str]) -> str:
     return f"""
-You are describing generated 3D furniture renders against the exact input image used to create the asset.
+You are a forensic visual inspector for generated 3D furniture renders.
+Describe generated GLB renders against the exact input image used to create the asset.
 The image is a grid: one REFERENCE PHOTO plus generated GLB renders for these views: {", ".join(views)}.
 All render panels are different views of the same generated 3D asset. Judge them consistently.
 
 Product metadata:
 - unique_key: {item.get('unique_key')}
 - title: {item.get('title')}
-- expected category: {item.get('category_norm') or item.get('category_raw')}
+- target category context: {target_category_context(item)}
 - description: {item.get('description')}
 - color: {item.get('color')}
 - materials: {item.get('materials')}
@@ -428,6 +469,47 @@ view truly lacks the required object parts. Focus on the same object identity, s
 visible holes/missing surfaces, and whether defects are view-specific or global.
 Be soft and precise about color: major hue swaps such as green vs red are important, but dark brown vs lighter
 brown, beige vs cream, or small brightness/saturation differences are only moderate differences.
+Use the target category context carefully. Russian "Пуф" means pouf/ottoman, not armchair; "Кресло" means
+armchair/chair; "Шкаф" means wardrobe/cabinet.
+
+	Critical defect-inspection rules:
+	- First inspect every render panel for geometry defects before describing similarity.
+	- Black voids, transparent holes, exposed interior, torn upholstery, melted edges, broken shells, missing side panels,
+	  missing back panels, missing seat surfaces, floating fragments, or large untextured cutouts are geometry defects.
+	- Do not count intended design openings as geometry defects: office/gaming chair headrest cutouts, ventilation holes,
+	  gaps between armrests/seat/back, caster gaps, handle holes, shelves, or normal dark recesses are allowed when their
+	  edges look clean and surrounding surfaces are continuous.
+	- A dark area is a defect only when it looks like a broken shell, torn/missing surface, exposed interior, ragged edge,
+	  floating fragment, or accidental transparent hole. Clean symmetric cutouts and normal shadowed gaps are not defects.
+	- If a black/transparent void is visible on the object, "geometry_defect_severity" cannot be "none".
+	- If large holes or missing structural surfaces are visible, severity must be "severe".
+	- If several holes are visible but the object remains mostly complete, severity should be "moderate".
+	- If only tiny pinholes/small scratches are visible, severity may be "minor".
+	- Do not mark an office chair severe just because the original chair has a headrest opening, gaps around armrests,
+	  caster/leg separations, or black shadow inside concave surfaces.
+	- Say "not usable as 3D asset" only for severe structural failure: large missing structural surfaces, hollow shell,
+	  broken/torn body, or actually missing required parts. Moderate artifacts on a recognizable complete object should be
+	  described as "usable but flawed", not "not usable".
+	- Do not give perfect material/detail descriptions unless fine texture and small details are actually visible. A clean
+	  wardrobe/cabinet with simple or blurry wood texture is good/usable, but not perfect.
+	- Do not write "no holes visible", "all required parts present", or "usable as 3D asset" unless you explicitly checked
+	  that render view and no black voids/missing surfaces are visible.
+	- Do not copy the same render_quality text across views when the visible defects differ. Mention view-specific evidence.
+	- Similar shape does not mean good render quality. A render can match the object but still be poor because of holes.
+
+	Severity calibration examples:
+	- Upholstered armchair with large ragged holes through the side/back/seat shell: severe defects; standalone quality is poor,
+	  even if silhouette and color match.
+	- Office chair with correct silhouette, base, wheels, armrests, backrest, and only imperfect surface/texture or normal
+	  headrest openings: usable but flawed; do not call severe unless structural surfaces are actually missing or torn.
+	- Simple wardrobe/cabinet with intact box, doors, handles, proportions, and only blurry/simple wood texture: usable/good.
+
+Before returning JSON, perform this self-check for each view:
+1. Are any black holes, transparent areas, or exposed interiors visible on the generated object?
+2. Are any surfaces missing, torn, melted, or replaced by noisy fragments?
+3. Are key parts absent or only partially generated?
+If yes, list them in visible_defects and reflect them in geometry_defect_severity, geometry_integrity,
+completeness, and overall_usability.
 
 Return only valid JSON with this structure. Use short but specific English.
 {{
@@ -447,10 +529,13 @@ Return only valid JSON with this structure. Use short but specific English.
       "render_quality": {{
         "standalone_strengths": ["visible strength"],
         "standalone_defects": ["visible defect"],
+        "visible_defects": ["specific defect with location, or empty list if none"],
+        "black_voids_or_holes": "none | tiny | some | many | large",
+        "missing_surfaces": "none | minor | moderate | severe",
         "geometry_defect_severity": "none | minor | moderate | severe",
         "shape_plausibility": "object shape by itself",
         "proportion_plausibility": "proportions by itself",
-        "geometry_integrity": "specific geometry evidence; say no holes only if no holes are visible",
+        "geometry_integrity": "specific geometry evidence; include exact hole/missing-surface locations",
         "material_texture_logic": "material and texture quality",
         "small_detail_quality": "small details quality",
         "completeness": "required parts present or missing",
@@ -475,12 +560,24 @@ and still score 1-4 for standalone render quality if the mesh is visibly broken,
 Product metadata:
 - unique_key: {item.get('unique_key')}
 - title: {item.get('title')}
-- expected category: {item.get('category_norm') or item.get('category_raw')}
+- target category context: {target_category_context(item)}
 
 Important: the VLM can be wrong about category comparison. Use the original title and expected category above as
 strong context. If the VLM says "wrong object class" but also describes the same kind of object or the image clearly
 contains the named category, do not collapse category_correctness/visual_similarity to 1. Penalize actual missing
 parts and geometry defects separately.
+If category_norm conflicts with title/category_raw/inferred_from_title_raw, title/category_raw win. In particular,
+do not expect an armchair for a product titled "Пуф"; evaluate it as a pouf/ottoman.
+category_correctness means object class only. Do not lower category_correctness because of holes, missing textures,
+color mismatch, bad proportions, or weak details; those belong to other criteria. For pouf/ottoman products, a
+cushion block, footstool, ottoman, or low upholstered bench-like form is the correct broad category even if the view
+is from the side/back or the geometry is damaged. If VLM comparison says "same object class", category_correctness
+should usually be 8-10 unless the render is clearly a different class.
+category_correctness means object class only. Do not lower category_correctness because of holes, missing textures,
+color mismatch, bad proportions, or weak details; those belong to other criteria. For pouf/ottoman products, a
+cushion block, footstool, ottoman, or low upholstered bench-like form is the correct broad category even if the view
+is from the side/back or the geometry is damaged. If VLM comparison says "same object class", category_correctness
+should usually be 8-10 unless the render is clearly a different class.
 
 VLM observations:
 {json.dumps(observations, ensure_ascii=False, indent=2)}
@@ -495,11 +592,15 @@ General scale:
 - 1-2: unusable, severe broken geometry, many holes, hollow shell, large missing surfaces, or wrong object.
 
 Hard gate rules. These override all softer positive wording:
-- If observations conflict, use the worse explicit defect. Example: "severe" plus "usable" still means severe geometry.
-- geometry_defect_severity=none -> render_geometry_integrity 8-10.
-- geometry_defect_severity=minor -> render_geometry_integrity 6-7.
-- geometry_defect_severity=moderate -> render_geometry_integrity 4-5.
-- geometry_defect_severity=severe -> render_geometry_integrity 1-3.
+	- If observations conflict, use the worse explicit defect. Example: "severe" plus "usable" still means severe geometry.
+	- Treat intended design openings as non-defects: office/gaming chair headrest cutouts, ventilation holes, normal gaps
+	  around armrests/seat/back, caster gaps, shelves, handles, and clean dark recesses are not broken geometry.
+	- Dark regions count as holes only when observations explicitly say ragged/torn/broken shell, exposed interior,
+	  accidental transparent hole, missing structural surface, or floating fragments.
+	- geometry_defect_severity=none -> render_geometry_integrity 8-10.
+	- geometry_defect_severity=minor -> render_geometry_integrity 6-7.
+	- geometry_defect_severity=moderate -> render_geometry_integrity 4-5.
+	- geometry_defect_severity=severe -> render_geometry_integrity 1-3.
 - If standalone_defects mention broken shells, floating fragments, severe holes, many holes, hollow interior, torn mesh, or melted/missing surfaces -> render_geometry_integrity 1-3.
 - If observations say no holes, no missing surfaces, intact, and severity is none -> render_geometry_integrity 8-10.
 - Do not assign high geometry scores when holes or missing surfaces are explicitly observed.
@@ -513,14 +614,18 @@ Hard gate rules. These override all softer positive wording:
 - Color scoring: dark brown vs lighter brown, beige vs cream, grey vs slightly darker grey are moderate differences unless the product color is explicitly contradicted.
 - Render-quality scores are standalone RIGHT-render scores. Do not use LEFT except for object type.
 - Comparison scores are LEFT-vs-RIGHT target-object similarity scores. Ignore background, room, crop, and camera angle.
+- category_correctness is only object class. visual_similarity, size_proportions, material_correctness, color_match,
+  geometry_quality, and completeness handle the other differences.
 - Similar object identity does not imply high render quality. Keep comparison and standalone scores separate.
 - Use varied scores when evidence differs. Do not mechanically repeat one score. Repeating mostly 6, 7, or 8 is a calibration failure.
 
-Calibration examples:
-- Same wardrobe, intact simple rectangular mesh, blurry wood texture, handles present: comparison may be 7-9, standalone render quality about 6-8.
-- Same armchair silhouette, but side/back has large holes or torn/missing upholstery surfaces: comparison shape may be 6-8, but render_geometry_integrity 1-3 and render_overall_quality 2-4.
-- Wrong object class: category_correctness 1-3 and visual_similarity usually 1-4.
-- Correct object but weak small details/textures with intact mesh: geometry may be 7-9, material/detail scores 4-6.
+	Calibration examples:
+	- Same wardrobe, intact simple rectangular mesh, blurry wood texture, handles present: comparison may be 8-9, standalone render quality about 8-9 if there are no geometry defects.
+	- Same armchair silhouette, but side/back has large holes or torn/missing upholstery surfaces: comparison shape may be 6-8, but render_geometry_integrity 1-3 and render_overall_quality about 3-4.
+	- Same office chair, correct base/wheels/armrests/backrest, slightly simplified or grey/black material, clean intended openings and minor artifacts: comparison about 6-8, standalone render quality about 6-7.
+	- Wrong object class: category_correctness 1-3 and visual_similarity usually 1-4.
+	- Correct broad object class but bad mesh/material/proportions: category_correctness stays high, other criteria drop.
+	- Correct object but weak small details/textures with intact mesh: geometry may be 7-9, material/detail scores 4-6.
 - Same brown/beige/grey family but slightly darker or lighter than reference: color_match around 6-8 depending on severity.
 
 Comparison criteria order:
@@ -556,12 +661,14 @@ Do not inspect images. Use only the observations JSON, product metadata, and thi
 Product metadata:
 - unique_key: {item.get('unique_key')}
 - title: {item.get('title')}
-- expected category: {item.get('category_norm') or item.get('category_raw')}
+- target category context: {target_category_context(item)}
 
 Important: the VLM can be wrong when comparing categories between views. The title and expected category are strong
 context. All render views are the same generated 3D asset. Keep object identity consistent across views unless a view
 truly lacks the required object parts. Do not assign 9 to one view and 1 to a very similar adjacent view just because
 the VLM wording changed; score actual visible differences such as holes, missing surfaces, wrong proportions, or bad textures.
+If category_norm conflicts with title/category_raw/inferred_from_title_raw, title/category_raw win. In particular,
+do not expect an armchair for a product titled "Пуф"; evaluate it as a pouf/ottoman.
 
 VLM observations:
 {json.dumps(observations, ensure_ascii=False, indent=2)}
@@ -575,20 +682,31 @@ General scale:
 - 3-4: poor, major defects, incomplete/broken parts, obvious holes, melted areas, or missing surfaces.
 - 1-2: unusable, severe broken geometry, many holes, hollow shell, large missing surfaces, or actually wrong object.
 
-Hard gate rules for standalone render quality:
-- geometry_defect_severity=none -> render_geometry_integrity 8-10.
-- geometry_defect_severity=minor -> render_geometry_integrity 6-7.
-- geometry_defect_severity=moderate -> render_geometry_integrity 4-5.
-- geometry_defect_severity=severe -> render_geometry_integrity 1-3.
+	Hard gate rules for standalone render quality:
+	- Treat intended design openings as non-defects: office/gaming chair headrest cutouts, ventilation holes, normal gaps
+	  around armrests/seat/back, caster gaps, shelves, handles, and clean dark recesses are not broken geometry.
+	- Dark regions count as holes only when observations explicitly say ragged/torn/broken shell, exposed interior,
+	  accidental transparent hole, missing structural surface, or floating fragments.
+	- geometry_defect_severity=none -> render_geometry_integrity 8-10.
+	- geometry_defect_severity=minor -> render_geometry_integrity 6-7.
+	- geometry_defect_severity=moderate -> render_geometry_integrity 4-5.
+	- geometry_defect_severity=severe -> render_geometry_integrity 1-3.
 - If defects mention broken shells, floating fragments, severe holes, many holes, hollow interior, torn mesh, or melted/missing surfaces -> render_geometry_integrity 1-3.
 - If render_geometry_integrity is 1-3, render_overall_quality should usually be 1-4.
 - Similar object identity does not imply high render quality. Keep comparison and standalone scores separate.
 - Comparison scores should focus on the target object, not camera angle, background, or crop.
-- Color scoring: strong hue mismatch is a real problem, e.g. green vs red, blue vs yellow, white vs black -> color_match 1-4.
-- Color scoring: same hue/material family but different brightness, saturation, lighting, or slightly warmer/cooler tone -> color_match usually 6-8.
-- Color scoring: dark brown vs lighter brown, beige vs cream, grey vs slightly darker grey are moderate differences unless the product color is explicitly contradicted.
+- category_correctness is only object class. visual_similarity, size_proportions, material_correctness, color_match,
+  geometry_quality, and completeness handle the other differences.
+	- Color scoring: strong hue mismatch is a real problem, e.g. green vs red, blue vs yellow, white vs black -> color_match 1-4.
+	- Color scoring: same hue/material family but different brightness, saturation, lighting, or slightly warmer/cooler tone -> color_match usually 6-8.
+	- Color scoring: dark brown vs lighter brown, beige vs cream, grey vs slightly darker grey are moderate differences unless the product color is explicitly contradicted.
 
-Return only valid JSON. The top-level object must contain "views". Include exactly these view keys:
+	Calibration anchors:
+	- Upholstered armchair with large ragged holes through side/back/seat: overall roughly 3-4 even if silhouette matches.
+	- Office chair with correct base, wheels, armrests, backrest, clean intended openings, and only simplified material/minor artifacts: overall roughly 6-7.
+	- Simple wardrobe/cabinet with intact box, doors, handles, correct proportions, and blurry/simple wood texture: overall roughly 8-9.
+
+	Return only valid JSON. The top-level object must contain "views". Include exactly these view keys:
 {json.dumps(views, ensure_ascii=False)}
 
 For every view return all criterion names:
@@ -623,6 +741,7 @@ def call_ollama_json(
     temperature: float,
     timeout_sec: int,
     num_predict: int,
+    num_ctx: int = 8192,
     normalize: bool = True,
 ) -> dict[str, Any]:
     message: dict[str, Any] = {
@@ -635,7 +754,7 @@ def call_ollama_json(
         "model": model,
         "stream": False,
         "format": "json",
-        "options": {"temperature": temperature, "num_predict": int(num_predict)},
+        "options": {"temperature": temperature, "num_predict": int(num_predict), "num_ctx": int(num_ctx)},
         "messages": [message],
     }
     request = urllib.request.Request(
@@ -799,7 +918,7 @@ def normalize_scores(parsed: dict[str, Any]) -> dict[str, Any]:
     out["comparison_overall_score"] = round(sum(comparison_scores) / len(comparison_scores), 2) if comparison_scores else 0
     out["render_quality_overall_score"] = round(sum(render_scores) / len(render_scores), 2) if render_scores else 0
     all_scores = comparison_scores + render_scores
-    out["overall_score"] = round(sum(all_scores) / len(all_scores), 2) if all_scores else 0
+    out["overall_score"] = final_overall_score(comparison_scores, render_scores, out)
     out["pass"] = out["comparison_overall_score"] >= 7.0 and out["render_quality_overall_score"] >= 6.0 and min(all_scores or [0]) >= 4
     if not isinstance(out.get("main_failures"), list):
         out["main_failures"] = []
@@ -876,6 +995,17 @@ def apply_geometry_consistency(scores: dict[str, Any], observations: dict[str, A
     )
     missing_parts = any(x in text for x in ("missing important parts", "missing parts", "missing legs", "missing arm", "missing arms", "missing backrest", "missing cushion", "incomplete"))
     not_usable = any(x in text for x in ("not usable", "unusable", "cannot be used", "not suitable as a 3d asset"))
+    recognizable_shape = any(
+        x in text
+        for x in (
+            "consistent shape",
+            "matches reference photo shape",
+            "main shape/silhouette match",
+            "shape/silhouette match",
+            "proportion match",
+            "matches the reference photo in shape",
+        )
+    )
 
     target: int | None = None
     reason = ""
@@ -935,12 +1065,59 @@ def apply_geometry_consistency(scores: dict[str, Any], observations: dict[str, A
     if severe or not_usable or broken:
         field = scores.get("render_overall_quality") or {}
         old = score_value(field.get("score"))
-        cap = 3 if not_usable or severe else 5
+        cap = 4 if severe and recognizable_shape else 3 if not_usable or severe else 5
         if old > cap:
             field["score"] = cap
             field["reason"] = "Standalone usability is limited by observed geometry defects."
             scores["render_overall_quality"] = field
             adjustments.append({"field": "render_overall_quality", "old_score": old, "new_score": cap, "reason": field["reason"]})
+        elif severe and recognizable_shape and old < 3:
+            field["score"] = 3
+            field["reason"] = "Object remains recognizable, but severe geometry defects keep standalone quality low."
+            scores["render_overall_quality"] = field
+            adjustments.append({"field": "render_overall_quality", "old_score": old, "new_score": 3, "reason": field["reason"]})
+    elif moderate and recognizable_shape:
+        field = scores.get("render_overall_quality") or {}
+        old = score_value(field.get("score"))
+        if old < 5:
+            field["score"] = 5
+            field["reason"] = "Moderate defects on a recognizable complete object make it usable but flawed, not unusable."
+            scores["render_overall_quality"] = field
+            adjustments.append({"field": "render_overall_quality", "old_score": old, "new_score": 5, "reason": field["reason"]})
+
+    if recognizable_shape:
+        for field_name, floor in (("render_shape_plausibility", 6), ("render_proportion_plausibility", 5)):
+            field = scores.get(field_name) or {}
+            old = score_value(field.get("score"))
+            if old < floor:
+                field["score"] = floor
+                field["reason"] = "Recognizable target silhouette/proportions are preserved despite geometry defects."
+                scores[field_name] = field
+                adjustments.append({"field": field_name, "old_score": old, "new_score": floor, "reason": field["reason"]})
+
+    pristine = intact and not broken and not severe and not moderate and not missing_parts
+    generic_texture = any(
+        x in text
+        for x in (
+            "simple material",
+            "simple wood texture",
+            "blurry",
+            "missing small details",
+            "missing wood grain",
+            "no texture detail",
+            "material and texture quality",
+        )
+    )
+    if pristine and generic_texture:
+        scores["_overall_score_cap"] = min(float(scores.get("_overall_score_cap") or 10), 9.0)
+        for field_name in ("material_correctness", "render_material_texture_logic", "render_overall_quality"):
+            field = scores.get(field_name) or {}
+            old = score_value(field.get("score"))
+            if old > 9:
+                field["score"] = 9
+                field["reason"] = "Clean intact asset, but material/detail evidence is not fine enough for a perfect score."
+                scores[field_name] = field
+                adjustments.append({"field": field_name, "old_score": old, "new_score": 9, "reason": field["reason"]})
 
     recompute_score_aggregates(scores)
     return scores
@@ -954,8 +1131,36 @@ def recompute_score_aggregates(scores: dict[str, Any]) -> None:
     scores["comparison_overall_score"] = round(sum(comparison) / len(comparison), 2) if comparison else 0
     scores["render_quality_overall_score"] = round(sum(render) / len(render), 2) if render else 0
     all_scores = comparison + render
-    scores["overall_score"] = round(sum(all_scores) / len(all_scores), 2) if all_scores else 0
+    scores["overall_score"] = final_overall_score(comparison, render, scores)
     scores["pass"] = scores["comparison_overall_score"] >= 7.0 and scores["render_quality_overall_score"] >= 6.0 and min(all_scores or [0]) >= 4
+
+
+def final_overall_score(comparison_scores: list[int], render_scores: list[int], scores: dict[str, Any]) -> float:
+    """Overall is an asset QA score, so standalone usability must cap it."""
+    all_scores = comparison_scores + render_scores
+    if not all_scores:
+        return 0
+    naive = sum(all_scores) / len(all_scores)
+    render_overall = score_value((scores.get("render_overall_quality") or {}).get("score"))
+    render_geometry = score_value((scores.get("render_geometry_integrity") or {}).get("score"))
+    render_completeness = score_value((scores.get("render_completeness") or {}).get("score"))
+    render_quality = sum(render_scores) / len(render_scores) if render_scores else 0
+
+    capped = naive
+    if render_overall <= 4:
+        capped = min(capped, max(render_overall + 1.0, render_quality + 0.5))
+    elif render_overall <= 6:
+        capped = min(capped, render_overall + 1.5)
+    if render_geometry <= 3:
+        capped = min(capped, max(render_overall, render_geometry) + 1.0)
+    if render_completeness <= 4:
+        capped = min(capped, render_completeness + 1.0)
+    if scores.get("_overall_score_cap") is not None:
+        try:
+            capped = min(capped, float(scores["_overall_score_cap"]))
+        except Exception:
+            pass
+    return round(capped, 2)
 
 
 def merge_results_into_catalog(catalog_path: Path, results_path: Path) -> dict[str, Any]:
@@ -1169,8 +1374,11 @@ def main() -> int:
                             temperature=float(args.temperature),
                             timeout_sec=int(args.timeout_sec),
                             num_predict=int(args.num_predict),
+                            num_ctx=int(args.num_ctx),
                             normalize=False,
                         )
+                        if args.observations_only:
+                            break
                         score_response = call_ollama_json(
                             ollama_url=args.ollama_url,
                             model=args.score_model or args.model,
@@ -1179,17 +1387,24 @@ def main() -> int:
                             temperature=float(args.temperature),
                             timeout_sec=int(args.timeout_sec),
                             num_predict=int(args.score_num_predict),
+                            num_ctx=int(args.score_num_ctx),
                             normalize=False,
                         )
                         normalized_by_view = normalize_multiview_scores(score_response["parsed"], ordered_views)
+                        parsed_views = observation_response["parsed"].get("views") if isinstance(observation_response["parsed"].get("views"), dict) else {}
+                        for score_view, score_data in normalized_by_view.items():
+                            view_obs = parsed_views.get(score_view) if isinstance(parsed_views.get(score_view), dict) else observation_response["parsed"]
+                            normalized_by_view[score_view] = apply_geometry_consistency(score_data, view_obs)
                         break
                     except Exception as exc:
                         last_exc = exc
                         if attempt >= max(1, int(args.max_attempts)):
                             raise
                         time.sleep(1.0)
-                if observation_response is None or score_response is None or normalized_by_view is None:
+                if observation_response is None:
                     raise RuntimeError(f"no multi-view VLM response: {last_exc!r}")
+                if not args.observations_only and (score_response is None or normalized_by_view is None):
+                    raise RuntimeError(f"no multi-view score response: {last_exc!r}")
 
                 parsed_observations = observation_response["parsed"]
                 observation_views = parsed_observations.get("views") if isinstance(parsed_observations.get("views"), dict) else {}
@@ -1215,20 +1430,24 @@ def main() -> int:
                             "composite_path": str(composite_path),
                             "model": args.model,
                             "status": "ok",
+                            "observations_only": bool(args.observations_only),
                             "vlm_observations": view_observations,
                             "vlm_observations_multiview": parsed_observations,
-                            "scores": normalized_by_view[view],
+                            "scores": {} if args.observations_only else normalized_by_view[view],
                             "raw_vlm_response": observation_response["raw_response"],
-                            "raw_score_response": score_response["raw_response"],
+                            "raw_score_response": None if args.observations_only else score_response["raw_response"],
                             "evaluated_at_unix": time.time(),
                         },
                     )
                     done.add(evaluation_id)
                     processed += 1
-                    print(
-                        f"[ok] {item_idx}/{len(selected)} {evaluation_id} overall={normalized_by_view[view].get('overall_score')}",
-                        flush=True,
-                    )
+                    if args.observations_only:
+                        print(f"[ok-observe] {item_idx}/{len(selected)} {evaluation_id}", flush=True)
+                    else:
+                        print(
+                            f"[ok] {item_idx}/{len(selected)} {evaluation_id} overall={normalized_by_view[view].get('overall_score')}",
+                            flush=True,
+                        )
             except Exception as exc:
                 append_jsonl(
                     failures_path,
@@ -1291,8 +1510,11 @@ def main() -> int:
                             temperature=float(args.temperature),
                             timeout_sec=int(args.timeout_sec),
                             num_predict=int(args.num_predict),
+                            num_ctx=int(args.num_ctx),
                             normalize=False,
                         )
+                        if args.observations_only:
+                            break
                         score_response = call_ollama_json(
                             ollama_url=args.ollama_url,
                             model=args.score_model or args.model,
@@ -1301,6 +1523,7 @@ def main() -> int:
                             temperature=float(args.temperature),
                             timeout_sec=int(args.timeout_sec),
                             num_predict=int(args.score_num_predict),
+                            num_ctx=int(args.score_num_ctx),
                             normalize=True,
                         )
                         break
@@ -1309,26 +1532,32 @@ def main() -> int:
                         if attempt >= max(1, int(args.max_attempts)):
                             raise
                         time.sleep(1.0)
-                if observation_response is None or score_response is None:
+                if observation_response is None:
                     raise RuntimeError(f"no VLM response: {last_exc!r}")
+                if not args.observations_only and score_response is None:
+                    raise RuntimeError(f"no score response: {last_exc!r}")
                 append_jsonl(
                     results_path,
                     {
                         **row_base,
                         "status": "ok",
+                        "observations_only": bool(args.observations_only),
                         "vlm_observations": observation_response["parsed"],
-                        "scores": score_response["parsed"],
+                        "scores": {} if args.observations_only else score_response["parsed"],
                         "raw_vlm_response": observation_response["raw_response"],
-                        "raw_score_response": score_response["raw_response"],
+                        "raw_score_response": None if args.observations_only else score_response["raw_response"],
                         "evaluated_at_unix": time.time(),
                     },
                 )
                 done.add(evaluation_id)
                 processed += 1
-                print(
-                    f"[ok] {item_idx}/{len(selected)} {evaluation_id} overall={score_response['parsed'].get('overall_score')}",
-                    flush=True,
-                )
+                if args.observations_only:
+                    print(f"[ok-observe] {item_idx}/{len(selected)} {evaluation_id}", flush=True)
+                else:
+                    print(
+                        f"[ok] {item_idx}/{len(selected)} {evaluation_id} overall={score_response['parsed'].get('overall_score')}",
+                        flush=True,
+                    )
             except Exception as exc:
                 append_jsonl(failures_path, {**row_base, "status": "vlm_error", "error": repr(exc), "evaluated_at_unix": time.time()})
                 print(f"[fail] {item_idx}/{len(selected)} {evaluation_id} {exc!r}", flush=True)

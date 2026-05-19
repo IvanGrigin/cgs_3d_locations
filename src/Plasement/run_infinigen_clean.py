@@ -8,6 +8,7 @@ import argparse
 import ast
 import base64
 from collections import Counter
+from datetime import datetime
 import json
 import os
 import re
@@ -17,6 +18,7 @@ import subprocess
 import sys
 import tempfile
 import textwrap
+import time
 import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
@@ -284,6 +286,38 @@ def ssh_download_file(args: argparse.Namespace, remote_path: str, local_path: Pa
     print(f"▶ download: {remote_path} -> {local_path}")
     completed = subprocess.run(cmd, stdout=subprocess.PIPE, check=True)
     local_path.write_bytes(base64.b64decode(completed.stdout))
+
+
+def _remote_timing_entry(
+    timings: dict[str, Any],
+    *,
+    stage: str,
+    started: datetime,
+    duration_sec: float,
+    status: str,
+    **extra: Any,
+) -> None:
+    rows = timings.setdefault("stages", [])
+    if not isinstance(rows, list):
+        rows = []
+        timings["stages"] = rows
+    entry = {
+        "stage": stage,
+        "status": status,
+        "started_at": started.isoformat(timespec="seconds"),
+        "finished_at": datetime.now().isoformat(timespec="seconds"),
+        "duration_sec": round(float(duration_sec), 3),
+    }
+    entry.update({k: v for k, v in extra.items() if v is not None})
+    rows.append(entry)
+
+
+def _write_remote_timings(path: Path, timings: dict[str, Any]) -> None:
+    timings["updated_at"] = datetime.now().isoformat(timespec="seconds")
+    stages = timings.get("stages") if isinstance(timings.get("stages"), list) else []
+    timings["duration_sec"] = round(sum(float(row.get("duration_sec") or 0.0) for row in stages), 3)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(timings, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
 def ssh_capture(args: argparse.Namespace, command: str) -> subprocess.CompletedProcess[str]:
@@ -1160,8 +1194,6 @@ def run_remote(args: argparse.Namespace) -> None:
     if not args.remote_host or not args.remote_user:
         raise RuntimeError("Для remote Infinigen нужны remote-host и remote-user")
 
-    ensure_remote_free_space(args)
-
     normalized_seed = normalize_seed(args.seed)
     infinigen_seed = normalize_seed_for_infinigen(args.seed)
     run_id = uuid.uuid4().hex[:8]
@@ -1175,14 +1207,86 @@ def run_remote(args: argparse.Namespace) -> None:
     local_out = Path(args.out).expanduser().resolve()
     local_run_dir = Path(args.run_dir).expanduser().resolve()
     local_run_dir.mkdir(parents=True, exist_ok=True)
+    timings_path = local_run_dir / "infinigen_remote_timings.json"
+    timings: dict[str, Any] = {
+        "started_at": datetime.now().isoformat(timespec="seconds"),
+        "remote_host": str(args.remote_host),
+        "remote_port": int(args.remote_port or 22),
+        "remote_dir": remote_dir,
+        "seed": normalized_seed,
+        "infinigen_seed": infinigen_seed,
+        "stages": [],
+    }
+
+    def timed(stage: str, func, *func_args, **extra: Any) -> Any:
+        started = datetime.now()
+        t0 = time.perf_counter()
+        try:
+            result = func(*func_args)
+        except Exception:
+            _remote_timing_entry(
+                timings,
+                stage=stage,
+                started=started,
+                duration_sec=time.perf_counter() - t0,
+                status="failed",
+                **extra,
+            )
+            _write_remote_timings(timings_path, timings)
+            raise
+        _remote_timing_entry(
+            timings,
+            stage=stage,
+            started=started,
+            duration_sec=time.perf_counter() - t0,
+            status="ok",
+            **extra,
+        )
+        _write_remote_timings(timings_path, timings)
+        return result
+
+    def timed_upload(stage: str, local_path: Path, remote_path: str) -> None:
+        p = local_path.expanduser().resolve()
+        timed(stage, ssh_upload_file, args, p, remote_path, local_path=str(p), remote_path=remote_path, bytes=p.stat().st_size)
+
+    def timed_optional_download(stage: str, remote_path: str, local_path: Path) -> None:
+        started = datetime.now()
+        t0 = time.perf_counter()
+        try:
+            ssh_download_file(args, remote_path, local_path)
+        except subprocess.CalledProcessError:
+            _remote_timing_entry(
+                timings,
+                stage=stage,
+                started=started,
+                duration_sec=time.perf_counter() - t0,
+                status="missing_or_failed",
+                remote_path=remote_path,
+                local_path=str(local_path.resolve()),
+            )
+            _write_remote_timings(timings_path, timings)
+            return
+        _remote_timing_entry(
+            timings,
+            stage=stage,
+            started=started,
+            duration_sec=time.perf_counter() - t0,
+            status="ok",
+            remote_path=remote_path,
+            local_path=str(local_path.resolve()),
+            bytes=local_path.stat().st_size if local_path.exists() else None,
+        )
+        _write_remote_timings(timings_path, timings)
+
+    timed("remote_free_space_check", ensure_remote_free_space, args)
 
     with tempfile.TemporaryDirectory() as _tmp:
         local_script = Path(__file__).resolve()
-        ssh_run(args, f"mkdir -p {shlex.quote(remote_dir)} {shlex.quote(remote_run_dir)}")
-        ssh_upload_file(args, Path(args.room).expanduser().resolve(), remote_room)
-        ssh_upload_file(args, local_script, remote_script)
+        timed("remote_mkdir", ssh_run, args, f"mkdir -p {shlex.quote(remote_dir)} {shlex.quote(remote_run_dir)}")
+        timed_upload("upload_room_json", Path(args.room), remote_room)
+        timed_upload("upload_runner_script", local_script, remote_script)
         if args.style_profile:
-            ssh_upload_file(args, Path(args.style_profile).expanduser().resolve(), remote_style_profile)
+            timed_upload("upload_style_profile", Path(args.style_profile), remote_style_profile)
 
         remote_cmd_parts = build_remote_preamble(args)
         local_mode_cmd = [
@@ -1207,17 +1311,20 @@ def run_remote(args: argparse.Namespace) -> None:
         if remote_infinigen_src:
             local_mode_cmd += ["--infinigen-src", shlex.quote(remote_infinigen_src)]
         remote_cmd_parts.append(" ".join(local_mode_cmd))
-        ssh_run(args, "; ".join(remote_cmd_parts))
+        timed("remote_infinigen_run", ssh_run, args, "; ".join(remote_cmd_parts))
 
-        ssh_download_file(args, remote_out, local_out)
-        maybe_download_remote_artifact(args, f"{remote_run_dir}/infinigen_clean_meta.json", local_run_dir / "infinigen_clean_meta.json")
-        maybe_download_remote_artifact(args, f"{remote_run_dir}/infinigen_clean_scene.blend", local_run_dir / "infinigen_clean_scene.blend")
-        maybe_download_remote_artifact(args, f"{remote_run_dir}/run.log", local_run_dir / "run.log")
-        maybe_download_remote_artifact(args, f"{remote_run_dir}/inventory.json", local_run_dir / "inventory.json")
-        maybe_download_remote_artifact(args, f"{remote_run_dir}/inventory_summary.json", local_run_dir / "inventory_summary.json")
-        maybe_download_remote_artifact(args, f"{remote_run_dir}/solver_summary.json", local_run_dir / "solver_summary.json")
-        maybe_download_remote_artifact(args, f"{remote_run_dir}/candidate_pool.json", local_run_dir / "candidate_pool.json")
-        maybe_download_remote_artifact(args, f"{remote_run_dir}/early_failure.json", local_run_dir / "early_failure.json")
+        timed_optional_download("download_placement_json", remote_out, local_out)
+        timed_optional_download("download_infinigen_meta_json", f"{remote_run_dir}/infinigen_clean_meta.json", local_run_dir / "infinigen_clean_meta.json")
+        timed_optional_download("download_infinigen_blend", f"{remote_run_dir}/infinigen_clean_scene.blend", local_run_dir / "infinigen_clean_scene.blend")
+        timed_optional_download("download_remote_run_log", f"{remote_run_dir}/run.log", local_run_dir / "run.log")
+        timed_optional_download("download_inventory_json", f"{remote_run_dir}/inventory.json", local_run_dir / "inventory.json")
+        timed_optional_download("download_inventory_summary_json", f"{remote_run_dir}/inventory_summary.json", local_run_dir / "inventory_summary.json")
+        timed_optional_download("download_solver_summary_json", f"{remote_run_dir}/solver_summary.json", local_run_dir / "solver_summary.json")
+        timed_optional_download("download_candidate_pool_json", f"{remote_run_dir}/candidate_pool.json", local_run_dir / "candidate_pool.json")
+        timed_optional_download("download_early_failure_json", f"{remote_run_dir}/early_failure.json", local_run_dir / "early_failure.json")
+
+    timings["finished_at"] = datetime.now().isoformat(timespec="seconds")
+    _write_remote_timings(timings_path, timings)
 
 
 def run_from_compiled_policy(

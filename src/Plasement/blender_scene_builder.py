@@ -2582,6 +2582,25 @@ def _rigid_supplier_group(group: str) -> bool:
     }
 
 
+def _supplier_candidate_dimensions_m(candidate: Optional[dict]) -> Optional[Tuple[float, float, float]]:
+    if not isinstance(candidate, dict):
+        return None
+    dims = candidate.get("dimensions_cm") if isinstance(candidate.get("dimensions_cm"), dict) else {}
+    width_cm = _as_float_or_none(candidate.get("width_cm"))
+    depth_cm = _as_float_or_none(candidate.get("depth_cm"))
+    height_cm = _as_float_or_none(candidate.get("height_cm"))
+    if width_cm is None:
+        width_cm = _as_float_or_none(dims.get("width"))
+    if depth_cm is None:
+        depth_cm = _as_float_or_none(dims.get("depth"))
+    if height_cm is None:
+        height_cm = _as_float_or_none(dims.get("height"))
+    values = (width_cm, depth_cm, height_cm)
+    if any(v is None or v <= 0.0 for v in values):
+        return None
+    return (float(width_cm) / 100.0, float(depth_cm) / 100.0, float(height_cm) / 100.0)
+
+
 def _sizes_materially_different(a: Tuple[float, float, float], b: Tuple[float, float, float]) -> bool:
     ratios = []
     for av, bv in zip(a, b):
@@ -2702,18 +2721,31 @@ def _is_replacement_render_item(item: Dict) -> bool:
 def _is_procedural_proxy_item(item: Dict) -> bool:
     source = item.get("source") if isinstance(item.get("source"), dict) else {}
     asset = item.get("asset") if isinstance(item.get("asset"), dict) else {}
-    category = str(item.get("category") or "").strip().lower()
+    category = str(item.get("semantic_group") or item.get("category") or "").strip().lower()
     procedural_placeholder_proxy_categories = {
+        "armchair",
         "bench",
         "blanket",
+        "bookshelf",
+        "ceiling_light",
+        "chair",
         "decor_books",
         "decor_box",
         "decor_tray",
         "decor_vase",
+        "desk",
+        "dresser",
+        "floor_lamp",
+        "nightstand",
+        "ottoman",
         "pillow",
         "plant",
         "rug",
+        "shelf",
+        "side_table",
+        "stool",
         "table_lamp",
+        "wardrobe",
         "wall_art",
         "wall_light",
     }
@@ -4893,7 +4925,11 @@ def _build_procedural_catalog_proxy_in_aabb(
     group = str(candidate.get("semantic_group") or candidate.get("category_norm") or item.get("semantic_group") or item.get("category") or "").strip().lower()
     if not group:
         group = str(_item_semantic_group(item) or "").strip().lower()
-    base_type = group or fallback_subclass
+    proxy_base_aliases = {
+        "shelf": "bookshelf",
+        "stool": "chair",
+    }
+    base_type = proxy_base_aliases.get(group, group) or fallback_subclass
 
     proxy_candidate = dict(candidate)
     for key in ("semantic_group", "base_type"):
@@ -4905,12 +4941,19 @@ def _build_procedural_catalog_proxy_in_aabb(
         proxy_candidate["base_type"] = base_type
     proxy_candidate["category_norm"] = proxy_candidate.get("category_norm") or base_type
 
-    if not proxy_candidate.get("width_cm"):
-        proxy_candidate["width_cm"] = max(float(aabb.get("x_max", 0.0) - aabb.get("x_min", 0.0)), 0.001) * 100.0
-    if not proxy_candidate.get("depth_cm"):
-        proxy_candidate["depth_cm"] = max(float(aabb.get("y_max", 0.0) - aabb.get("y_min", 0.0)), 0.001) * 100.0
-    if not proxy_candidate.get("height_cm"):
-        proxy_candidate["height_cm"] = max(float(aabb.get("z_max", 0.0) - aabb.get("z_min", 0.0)), 0.001) * 100.0
+    size_m = item.get("size_m")
+    if not (isinstance(size_m, list) and len(size_m) >= 3):
+        size_m = [
+            max(float(aabb.get("x_max", 0.0) - aabb.get("x_min", 0.0)), 0.001),
+            max(float(aabb.get("y_max", 0.0) - aabb.get("y_min", 0.0)), 0.001),
+            max(float(aabb.get("z_max", 0.0) - aabb.get("z_min", 0.0)), 0.001),
+        ]
+    # Catalog proxy is a visual fallback for an already solved placement. Build
+    # it at the placement's local size; catalog dimensions may describe the real
+    # product but can be too large for this room and should not invalidate the layout.
+    proxy_candidate["width_cm"] = max(float(size_m[0]), 0.001) * 100.0
+    proxy_candidate["depth_cm"] = max(float(size_m[1]), 0.001) * 100.0
+    proxy_candidate["height_cm"] = max(float(size_m[2]), 0.001) * 100.0
 
     try:
         built_objs = build_from_catalog_item(
@@ -4940,7 +4983,9 @@ def _build_procedural_catalog_proxy_in_aabb(
         semantic_group=_item_semantic_group(item),
         snap_to_ceiling=_item_mount_mode(item).lower() == "ceiling",
         ceiling_offset=0.0,
-        lock_rotation=False,
+        lock_rotation=True,
+        filter_mesh_outliers=False,
+        enforce_scale_guard=False,
     )
     if root is None:
         for obj in built_objs:
@@ -6357,6 +6402,9 @@ def place_in_aabb(
     snap_to_ceiling: bool = False,
     ceiling_offset: float = 0.0,
     lock_rotation: bool = False,
+    fit_target_size_m: Optional[Tuple[float, float, float]] = None,
+    filter_mesh_outliers: bool = True,
+    enforce_scale_guard: bool = True,
 ) -> Optional[bpy.types.Object]:
     objs, dropped_material_previews = _drop_material_preview_meshes(objs)
     if dropped_material_previews:
@@ -6369,22 +6417,23 @@ def place_in_aabb(
                 except Exception:
                     pass
 
-    objs, dropped_meshes = _filter_imported_mesh_outliers(objs)
-    if dropped_meshes:
-        for meta in dropped_meshes:
-            print(
-                "[DBG] dropping imported outlier mesh "
-                f"{meta['name']} diag={meta['diag']:.4f} "
-                f"longest={meta['longest']:.4f} "
-                f"footprint={meta['footprint']:.4f} "
-                f"thin_ratio={meta['thin_ratio']:.5f}"
-            )
-            obj = bpy.data.objects.get(str(meta["name"]))
-            if obj is not None:
-                try:
-                    bpy.data.objects.remove(obj, do_unlink=True)
-                except Exception:
-                    pass
+    if filter_mesh_outliers:
+        objs, dropped_meshes = _filter_imported_mesh_outliers(objs)
+        if dropped_meshes:
+            for meta in dropped_meshes:
+                print(
+                    "[DBG] dropping imported outlier mesh "
+                    f"{meta['name']} diag={meta['diag']:.4f} "
+                    f"longest={meta['longest']:.4f} "
+                    f"footprint={meta['footprint']:.4f} "
+                    f"thin_ratio={meta['thin_ratio']:.5f}"
+                )
+                obj = bpy.data.objects.get(str(meta["name"]))
+                if obj is not None:
+                    try:
+                        bpy.data.objects.remove(obj, do_unlink=True)
+                    except Exception:
+                        pass
 
     objs, dropped_clusters = _keep_primary_import_cluster(objs)
     if dropped_clusters:
@@ -6412,13 +6461,16 @@ def place_in_aabb(
         bmin, bmax = _world_bounds_mesh_objects(mesh_objs)
         cur = bmax - bmin
 
-        tgt = mathutils.Vector(
-            (
-                float(aabb["x_max"]) - float(aabb["x_min"]),
-                float(aabb["y_max"]) - float(aabb["y_min"]),
-                float(aabb["z_max"]) - float(aabb["z_min"]),
+        if fit_target_size_m is not None:
+            tgt = mathutils.Vector(tuple(float(v) for v in fit_target_size_m))
+        else:
+            tgt = mathutils.Vector(
+                (
+                    float(aabb["x_max"]) - float(aabb["x_min"]),
+                    float(aabb["y_max"]) - float(aabb["y_min"]),
+                    float(aabb["z_max"]) - float(aabb["z_min"]),
+                )
             )
-        )
 
         eps = 1e-9
         cur = mathutils.Vector((max(cur.x, eps), max(cur.y, eps), max(cur.z, eps)))
@@ -6426,7 +6478,10 @@ def place_in_aabb(
 
         fit_mode_l = (fit_mode or "stretch").lower()
         if fit_mode_l == "uniform":
-            k = min(sx, sy, sz)
+            # Preserve supplier proportions: fit the footprint only. Many real
+            # furniture assets include headboards, legs, shelves, shades, etc.,
+            # so using the placeholder Z height would incorrectly shrink them.
+            k = min(sx, sy)
             parent.scale = (parent.scale.x * k, parent.scale.y * k, parent.scale.z * k)
         elif fit_mode_l in {"curtain_soft_width", "curtain_window_soft_width"}:
             width_squeeze = 0.92
@@ -6478,13 +6533,16 @@ def place_in_aabb(
         bpy.context.view_layer.update()
         bmin, bmax = _world_bounds_mesh_objects(mesh_objs)
         cur = bmax - bmin
-        tgt = mathutils.Vector(
-            (
-                float(aabb["x_max"]) - float(aabb["x_min"]),
-                float(aabb["y_max"]) - float(aabb["y_min"]),
-                float(aabb["z_max"]) - float(aabb["z_min"]),
+        if fit_target_size_m is not None:
+            tgt = mathutils.Vector(tuple(float(v) for v in fit_target_size_m))
+        else:
+            tgt = mathutils.Vector(
+                (
+                    float(aabb["x_max"]) - float(aabb["x_min"]),
+                    float(aabb["y_max"]) - float(aabb["y_min"]),
+                    float(aabb["z_max"]) - float(aabb["z_min"]),
+                )
             )
-        )
         cur_center = (bmin + bmax) * 0.5
         tgt_center = mathutils.Vector(
             (
@@ -6542,6 +6600,8 @@ def place_in_aabb(
 
     def _scale_guard_reason() -> Optional[str]:
         fit_mode_l = (fit_mode or "stretch").lower()
+        if not enforce_scale_guard:
+            return None
         if fit_mode_l == "trellis_stretch":
             return None
         if fit_mode_l in {"uniform", "curtain_soft_width", "curtain_window_soft_width"}:
@@ -7183,6 +7243,10 @@ def build_scene(
                     if asset_kind == "curtain_fbx_textured" and bool(asset.get("vertical_flip")):
                         _flip_mesh_objects_local_z(objs)
 
+                    fit_target_size_m = None
+                    if fit_mode.lower() == "uniform" and _rigid_supplier_group(semantic_group):
+                        fit_target_size_m = _supplier_candidate_dimensions_m(supplier_candidate)
+
                     parent = place_in_aabb(
                         objs=objs,
                         aabb=aabb_eng,
@@ -7199,6 +7263,7 @@ def build_scene(
                             (semantic_group in {"chair", "armchair"} and str(meta.get("affordance") or "").strip().lower() == "table_chair")
                             or (semantic_group == "bed" and bool(meta.get("bed_headboard_repaired")))
                         ),
+                        fit_target_size_m=fit_target_size_m,
                     )
                     if parent is None:
                         continue

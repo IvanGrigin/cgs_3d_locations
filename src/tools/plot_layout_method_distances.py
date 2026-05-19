@@ -67,6 +67,11 @@ def write_csv(path: Path, rows: list[dict[str, Any]], fields: list[str]) -> None
         writer.writerows(rows)
 
 
+def norm_token(value: Any) -> str:
+    text = str(value or "").strip().lower().replace("-", "_")
+    return "_".join(part for part in text.split() if part)
+
+
 def safe_float(value: Any, default: float = 0.0) -> float:
     try:
         return float(value)
@@ -88,6 +93,105 @@ def js_divergence(p: list[float], q: list[float]) -> float:
 
 def segment_key(row: dict[str, str]) -> str:
     return f"room_type={row.get('room_type') or '__all__'}|class={row.get('class_name') or '__all__'}"
+
+
+def filter_creator_rows(
+    rows: list[dict[str, str]],
+    *,
+    include_creators: set[str],
+    exclude_creators: set[str],
+) -> list[dict[str, str]]:
+    out: list[dict[str, str]] = []
+    for row in rows:
+        creator = norm_token(row.get("creator_family") or "unknown")
+        if include_creators and creator not in include_creators:
+            continue
+        if exclude_creators and creator in exclude_creators:
+            continue
+        copied = dict(row)
+        copied["creator_family"] = creator
+        out.append(copied)
+    return out
+
+
+def histogram_rows_from_objects(
+    object_rows: list[dict[str, str]],
+    *,
+    grid_sizes: list[int],
+    include_creators: set[str],
+    exclude_creators: set[str],
+) -> list[dict[str, Any]]:
+    filtered: list[dict[str, str]] = []
+    for row in object_rows:
+        creator = norm_token(row.get("creator_family") or "unknown")
+        if include_creators and creator not in include_creators:
+            continue
+        if exclude_creators and creator in exclude_creators:
+            continue
+        if str(row.get("is_trackable_for_distribution") or "") not in {"1", "1.0", "true", "True"}:
+            continue
+        x = safe_float(row.get("x_norm"), default=float("nan"))
+        y = safe_float(row.get("y_norm"), default=float("nan"))
+        if not (0.0 <= x < 1.0 and 0.0 <= y < 1.0):
+            continue
+        copied = dict(row)
+        copied["creator_family"] = creator
+        copied["x_norm"] = str(x)
+        copied["y_norm"] = str(y)
+        filtered.append(copied)
+
+    groupings = [
+        ("overall", lambda r: ("__all__", "__all__")),
+        ("by_class", lambda r: ("__all__", r.get("class_name") or "__all__")),
+        ("by_room_type", lambda r: (r.get("room_type") or "__all__", "__all__")),
+    ]
+    out: list[dict[str, Any]] = []
+    for grid in grid_sizes:
+        for grouping, group_key_fn in groupings:
+            buckets: dict[tuple[str, str, str, str, str, int, int], int] = defaultdict(int)
+            totals: dict[tuple[str, str, str, str, str], int] = defaultdict(int)
+            rooms: dict[tuple[str, str, str, str, str], set[str]] = defaultdict(set)
+            for row in filtered:
+                room_type, class_name = group_key_fn(row)
+                key_base = (
+                    grouping,
+                    row.get("dataset_role") or "unknown",
+                    row.get("creator_family") or "unknown",
+                    row.get("creator_variant") or row.get("creator_family") or "unknown",
+                    room_type,
+                    class_name,
+                )
+                x = safe_float(row.get("x_norm"))
+                y = safe_float(row.get("y_norm"))
+                cell_x = min(grid - 1, max(0, int(math.floor(x * grid))))
+                cell_y = min(grid - 1, max(0, int(math.floor(y * grid))))
+                buckets[(*key_base, cell_x, cell_y)] += 1
+                totals[key_base] += 1
+                rooms[key_base].add(row.get("run_id") or "")
+            for key_base, total in sorted(totals.items()):
+                grouping_name, role, family, variant, room_type, class_name = key_base
+                n_rooms = len(rooms[key_base])
+                for cell_y in range(grid):
+                    for cell_x in range(grid):
+                        count = buckets[(*key_base, cell_x, cell_y)]
+                        out.append(
+                            {
+                                "grouping": grouping_name,
+                                "dataset_role": role,
+                                "creator_family": family,
+                                "creator_variant": variant,
+                                "room_type": room_type,
+                                "class_name": class_name,
+                                "grid_size": grid,
+                                "cell_x": cell_x,
+                                "cell_y": cell_y,
+                                "count": count,
+                                "probability": count / max(total, 1),
+                                "n_objects": total,
+                                "n_rooms": n_rooms,
+                            }
+                        )
+    return out
 
 
 def histogram_vectors(hist_rows: list[dict[str, str]], grid: int, grouping: str) -> dict[tuple[str, str], dict[str, Any]]:
@@ -151,6 +255,7 @@ def plot_points(plt, points: list[dict[str, Any]], title: str, out_path: Path) -
         "infinigen": "#1f77b4",
         "diffuscene": "#d62728",
         "m3dlayout": "#9467bd",
+        "procedural": "#2ca02c",
         "cube": "#2ca02c",
         "random": "#8c564b",
         "relaxed": "#17becf",
@@ -202,14 +307,13 @@ def plot_points(plt, points: list[dict[str, Any]], title: str, out_path: Path) -
 
 def build_plots(
     *,
-    hist_csv: Path,
+    hist_rows: list[dict[str, str]],
     out_dir: Path,
     grid_size: int,
     min_objects: int,
     max_class_plots: int,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
     plt, np = setup_matplotlib()
-    hist_rows = read_csv(hist_csv)
     point_rows: list[dict[str, Any]] = []
     distance_rows: list[dict[str, Any]] = []
     index_rows: list[dict[str, Any]] = []
@@ -286,20 +390,61 @@ def build_plots(
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Plot method distances from layout histograms.")
-    parser.add_argument("--histograms-csv", required=True)
+    src = parser.add_mutually_exclusive_group(required=True)
+    src.add_argument("--histograms-csv")
+    src.add_argument("--objects-csv")
     parser.add_argument("--out-dir", required=True)
     parser.add_argument("--grid-size", type=int, default=10)
     parser.add_argument("--min-objects", type=int, default=30)
     parser.add_argument("--max-class-plots", type=int, default=18)
+    parser.add_argument("--include-creators", nargs="*", default=None)
+    parser.add_argument("--exclude-creators", nargs="*", default=["unknown"])
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
-    hist_csv = Path(args.histograms_csv).expanduser().resolve()
     out_dir = Path(args.out_dir).expanduser().resolve()
+    include_creators = {norm_token(x) for x in (args.include_creators or [])}
+    exclude_creators = {norm_token(x) for x in (args.exclude_creators or [])}
+    if args.histograms_csv:
+        hist_csv = Path(args.histograms_csv).expanduser().resolve()
+        hist_rows = filter_creator_rows(
+            read_csv(hist_csv),
+            include_creators=include_creators,
+            exclude_creators=exclude_creators,
+        )
+        hist_source = str(hist_csv)
+    else:
+        objects_csv = Path(args.objects_csv).expanduser().resolve()
+        hist_rows = histogram_rows_from_objects(
+            read_csv(objects_csv),
+            grid_sizes=[args.grid_size],
+            include_creators=include_creators,
+            exclude_creators=exclude_creators,
+        )
+        hist_source = str(objects_csv)
+        write_csv(
+            out_dir / f"histograms_from_objects_grid_{args.grid_size}.csv",
+            hist_rows,
+            [
+                "grouping",
+                "dataset_role",
+                "creator_family",
+                "creator_variant",
+                "room_type",
+                "class_name",
+                "grid_size",
+                "cell_x",
+                "cell_y",
+                "count",
+                "probability",
+                "n_objects",
+                "n_rooms",
+            ],
+        )
     points, distances, index = build_plots(
-        hist_csv=hist_csv,
+        hist_rows=hist_rows,
         out_dir=out_dir,
         grid_size=args.grid_size,
         min_objects=args.min_objects,
@@ -309,10 +454,12 @@ def main() -> None:
     write_csv(out_dir / f"method_distances_grid_{args.grid_size}.csv", distances, DISTANCE_FIELDS)
     write_csv(out_dir / f"method_distance_plot_index_grid_{args.grid_size}.csv", index, ["plot_kind", "grid_size", "segment", "png", "n_methods"])
     summary = {
-        "histograms_csv": str(hist_csv),
+        "input_source": hist_source,
         "out_dir": str(out_dir),
         "grid_size": args.grid_size,
         "min_objects": args.min_objects,
+        "include_creators": sorted(include_creators),
+        "exclude_creators": sorted(exclude_creators),
         "n_points": len(points),
         "n_distances": len(distances),
         "n_plots": len(index),

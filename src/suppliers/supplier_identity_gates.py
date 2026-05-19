@@ -14,8 +14,10 @@ STRICT_GROUPS = {
     "chair",
     "desk",
     "dresser",
+    "nightstand",
     "wardrobe",
     "shelf",
+    "stool",
     "tv_stand",
     "tv",
     "tv_projector_screen",
@@ -50,11 +52,19 @@ RULES: dict[str, dict[str, list[str]]] = {
     },
     "wardrobe": {
         "required": ["wardrobe", "closet", "шкаф", "гардероб"],
-        "forbidden": ["dresser", "chest", "nightstand", "shelf", "table", "комод", "тумба", "стеллаж", "стол"],
+        "forbidden": ["dresser", "chest", "nightstand", "shelf", "table", "bathroom", "sink", "basin", "washbasin", "раковина", "умывальник", "ванная", "комод", "тумба", "стеллаж", "стол"],
     },
     "dresser": {
         "required": ["dresser", "chest", "chest of drawers", "комод", "тумба"],
-        "forbidden": ["bed", "table", "desk", "shelf", "wardrobe", "кровать", "стол", "стеллаж", "шкаф"],
+        "forbidden": ["bed", "table", "desk", "shelf", "wardrobe", "bathroom", "sink", "basin", "washbasin", "раковина", "умывальник", "ванная", "кровать", "стол", "стеллаж", "шкаф"],
+    },
+    "nightstand": {
+        "required": ["nightstand", "bedside table", "bedside cabinet", "bedside", "ночная тумба", "прикроватная", "тумбочка", "тумба"],
+        "forbidden": ["bathroom", "sink", "basin", "washbasin", "vanity", "under sink", "shower", "toilet", "раковина", "раковину", "умывальник", "под раковину", "ванная", "санузел", "душ", "унитаз"],
+    },
+    "stool": {
+        "required": ["stool", "ottoman", "pouf", "пуф", "табурет", "банкетка"],
+        "forbidden": ["chair", "armchair", "table", "bed", "desk", "стул", "кресло", "стол", "кровать"],
     },
     "shelf": {
         "required": ["shelf", "shelves", "bookcase", "bookshelf", "стеллаж", "полка", "книжный шкаф"],
@@ -98,6 +108,9 @@ GROUP_ALIASES = {
     "bath_sink": "bathroom_sink",
     "sink": "bathroom_sink",
     "washbasin": "bathroom_sink",
+    "side_table": "nightstand",
+    "bedside_table": "nightstand",
+    "bedside_cabinet": "nightstand",
 }
 
 
@@ -162,6 +175,8 @@ def _target_group(target: dict[str, Any]) -> str:
         return "wardrobe"
     if "dresser" in raw or "комод" in raw:
         return "dresser"
+    if "nightstand" in raw or "bedside" in raw or "прикроват" in raw or "тумбоч" in raw:
+        return "nightstand"
     if "shelf" in raw or "bookcase" in raw or "стеллаж" in raw:
         return "shelf"
     if "desk" in raw:
@@ -170,6 +185,8 @@ def _target_group(target: dict[str, Any]) -> str:
         return "armchair"
     if "chair" in raw or "стул" in raw:
         return "chair"
+    if "stool" in raw or "ottoman" in raw or "pouf" in raw or "табурет" in raw or "пуф" in raw:
+        return "stool"
     if "floor" in raw and "lamp" in raw:
         return "lamp_floor"
     if "ceiling" in raw and "lamp" in raw:
