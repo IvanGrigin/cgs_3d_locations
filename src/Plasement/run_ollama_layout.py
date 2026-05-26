@@ -862,9 +862,19 @@ def _strip_code_fences(text: str) -> str:
     return text.strip()
 
 
-def _extract_balanced_json_object(text: str) -> Optional[str]:
-    start = text.find("{")
-    if start < 0:
+def _iter_fenced_json_candidates(text: str) -> List[str]:
+    candidates: List[str] = []
+    for m in re.finditer(r"```(?:json|JSON)?\s*(.*?)\s*```", text or "", flags=re.S):
+        block = (m.group(1) or "").strip()
+        if block:
+            candidates.append(block)
+    return candidates
+
+
+def _extract_balanced_json_object(text: str, start: Optional[int] = None) -> Optional[str]:
+    if start is None:
+        start = text.find("{")
+    if start is None or start < 0:
         return None
 
     depth = 0
@@ -897,6 +907,46 @@ def _extract_balanced_json_object(text: str) -> Optional[str]:
     return None
 
 
+def _json_object_candidates(text: str) -> List[Dict[str, Any]]:
+    decoder = json.JSONDecoder()
+    candidates: List[Dict[str, Any]] = []
+
+    # raw_decode can parse a JSON object prefix even when prose follows it.
+    for m in re.finditer(r"\{", text or ""):
+        start = m.start()
+        try:
+            obj, _end = decoder.raw_decode(text[start:])
+            if isinstance(obj, dict):
+                candidates.append(obj)
+                continue
+        except json.JSONDecodeError:
+            pass
+
+        balanced = _extract_balanced_json_object(text, start=start)
+        if not balanced:
+            continue
+        try:
+            obj = json.loads(balanced)
+            if isinstance(obj, dict):
+                candidates.append(obj)
+        except json.JSONDecodeError:
+            continue
+
+    return candidates
+
+
+def _rank_json_candidate(data: Dict[str, Any]) -> Tuple[int, int]:
+    placements = data.get("placements")
+    placement_score = 10 if isinstance(placements, list) else 0
+    required_score = 0
+    if isinstance(placements, list):
+        for p in placements:
+            if not isinstance(p, dict):
+                continue
+            required_score += sum(1 for key in ("index", "x", "y", "yaw_deg") if key in p)
+    return placement_score, required_score
+
+
 def extract_first_json_object(text: str) -> Dict[str, Any]:
     text = _strip_code_fences(text)
 
@@ -910,14 +960,21 @@ def extract_first_json_object(text: str) -> Dict[str, Any]:
     except json.JSONDecodeError:
         pass
 
-    fenced = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, flags=re.S | re.I)
-    if fenced:
+    for fenced in _iter_fenced_json_candidates(text):
         try:
-            data = json.loads(fenced.group(1))
+            data = json.loads(fenced)
             if isinstance(data, dict):
                 return data
         except Exception:
-            pass
+            fenced_candidates = _json_object_candidates(fenced)
+            if fenced_candidates:
+                fenced_candidates.sort(key=_rank_json_candidate, reverse=True)
+                return fenced_candidates[0]
+
+    candidates = _json_object_candidates(text)
+    if candidates:
+        candidates.sort(key=_rank_json_candidate, reverse=True)
+        return candidates[0]
 
     balanced = _extract_balanced_json_object(text)
     if balanced:
@@ -2342,7 +2399,7 @@ def run_json_stage_with_retry(
     save_text(debug_dir / "user_prompt.txt", user_prompt)
     save_json(debug_dir / "output_schema.json", output_schema)
 
-    def _generate(_: str) -> str:
+    def _generate(prompt: str) -> str:
         raw_counter["value"] += 1
         call_id = raw_counter["value"]
 
@@ -2350,7 +2407,7 @@ def run_json_stage_with_retry(
             base_url=base_url,
             model=model_name,
             system_prompt=system_prompt,
-            user_prompt=user_prompt,
+            user_prompt=prompt,
             json_schema=output_schema,
             timeout_sec=timeout_sec,
             temperature=temperature,
@@ -2952,19 +3009,47 @@ def main() -> None:
             repair_feedback=repair_feedback,
         )
 
-        json_model_used, llm_layout_raw, llm_attempts_used, json_model_errors = choose_json_model(
-            models_to_try=json_models_to_try,
-            base_url=args.ollama_url,
-            system_prompt=json_system_prompt,
-            user_prompt=json_user_prompt,
-            output_schema=output_schema,
-            timeout_sec=int(args.timeout),
-            temperature=float(args.temperature),
-            max_llm_attempts=int(args.max_llm_attempts),
-            base_debug_dir=out_path.parent / "ollama_debug" / f"attempt_{scene_attempt:02d}" / "stage2_json",
-            n_objects=n_objects,
-            think_mode=json_think_mode,
-        )
+        try:
+            json_model_used, llm_layout_raw, llm_attempts_used, json_model_errors = choose_json_model(
+                models_to_try=json_models_to_try,
+                base_url=args.ollama_url,
+                system_prompt=json_system_prompt,
+                user_prompt=json_user_prompt,
+                output_schema=output_schema,
+                timeout_sec=int(args.timeout),
+                temperature=float(args.temperature),
+                max_llm_attempts=int(args.max_llm_attempts),
+                base_debug_dir=out_path.parent / "ollama_debug" / f"attempt_{scene_attempt:02d}" / "stage2_json",
+                n_objects=n_objects,
+                think_mode=json_think_mode,
+            )
+        except Exception as exc:
+            hint_rows = extracted_hints.get("placements") if isinstance(extracted_hints, dict) else None
+            if not isinstance(hint_rows, list) or len(hint_rows) != n_objects:
+                raise
+            print(f"WARNING: json stage failed; using complete planner placements as fallback: {exc}")
+            llm_layout_raw = {
+                "placements": [
+                    {
+                        "index": int(row["index"]),
+                        "x": float(row["x"]),
+                        "y": float(row["y"]),
+                        "yaw_deg": quantize_rot_0_90_180_270(float(row["yaw_deg"])),
+                    }
+                    for row in hint_rows
+                ]
+            }
+            json_model_used = f"{plan_model_used}:planner_fallback"
+            llm_attempts_used = 0
+            json_model_errors = [{"model": str(json_models_to_try), "error": f"{type(exc).__name__}: {exc}"}]
+            save_json(
+                out_path.parent / "ollama_debug" / f"attempt_{scene_attempt:02d}" / "stage2_json_fallback.json",
+                {
+                    "reason": "json_stage_failed_using_complete_planner_placements",
+                    "error": f"{type(exc).__name__}: {exc}",
+                    "placements": llm_layout_raw["placements"],
+                },
+            )
         final_json_model_used = json_model_used
         final_json_attempts_used = llm_attempts_used
         final_json_errors = json_model_errors

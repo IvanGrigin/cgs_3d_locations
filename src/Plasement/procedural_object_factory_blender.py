@@ -1684,12 +1684,22 @@ class ProceduralObjectFactory:
         elif "pedestal" in subclass:
             cylinder_obj("sink_pedestal", (loc[0], loc[1], h * 0.55), w * 0.12, h * 1.1, p.p.ceramic, p.col, vertices=32)
             sphere_obj("pedestal_sink_bowl", (loc[0], loc[1], h * 1.13), (w * 0.50, depth * 0.40, h * 0.28), p.p.ceramic, p.col)
+        elif "wall_mounted" in subclass:
+            p.panel("wall_mounted_sink_backplate", (loc[0], loc[1] + depth * 0.43, h * 0.62), (w * 0.82, 0.035, h * 0.58), p.p.ceramic)
+            sphere_obj("wall_mounted_sink_bowl", (loc[0], loc[1] - depth * 0.02, h * 0.62), (w * 0.50, depth * 0.38, h * 0.30), p.p.ceramic, p.col)
+            cylinder_obj("wall_mounted_sink_trap", (loc[0], loc[1] + depth * 0.18, h * 0.34), w * 0.025, h * 0.45, p.p.metal, p.col, vertices=24)
         else:
             sphere_obj("sink_bowl", (loc[0], loc[1], h * 0.55), (w * 0.50, depth * 0.38, h * 0.30), p.p.ceramic, p.col)
         cylinder_obj("sink_faucet", (loc[0], loc[1] + depth * 0.22, h * 1.10), w * 0.020, h * 0.55, p.p.metal, p.col)
 
     def build_base_shower(self, p: Parts, subclass: str, loc, d) -> None:
         w, depth, h = d
+        if "wet_room" in subclass or "floor_drain" in subclass:
+            drain_radius = max(min(w, depth) * 0.42, 0.045)
+            p.panel("wet_room_drain_plate", (loc[0], loc[1], 0.012), (drain_radius * 2.2, drain_radius * 2.2, 0.018), p.p.metal)
+            p.panel("wet_room_drain_slot_a", (loc[0], loc[1], 0.026), (drain_radius * 1.55, drain_radius * 0.12, 0.012), p.p.base)
+            p.panel("wet_room_drain_slot_b", (loc[0], loc[1], 0.028), (drain_radius * 0.12, drain_radius * 1.55, 0.012), p.p.base)
+            return
         p.panel("shower_base", (loc[0], loc[1], 0.04), (w, depth, 0.08), p.p.ceramic)
         if "corner" in subclass:
             p.panel("shower_glass_a", (loc[0] - w * 0.35, loc[1], h * 0.5), (0.025, depth, h), p.p.glass)

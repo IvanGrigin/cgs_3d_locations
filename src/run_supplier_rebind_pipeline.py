@@ -28,6 +28,7 @@ try:
         read_json,
         write_json,
     )
+    from tools.run_procedural_room_supplier import enrich_missing_assets_with_trellis
 except ImportError:
     from acquire_supplier_bindings_assets import acquire_assets_for_bindings_json
     from apply_supplier_bindings import apply_supplier_bindings_to_json
@@ -39,6 +40,59 @@ except ImportError:
         read_json,
         write_json,
     )
+    tools_dir = Path(__file__).resolve().parent / "tools"
+    if str(tools_dir) not in sys.path:
+        sys.path.insert(0, str(tools_dir))
+    from run_procedural_room_supplier import enrich_missing_assets_with_trellis
+
+
+FORCE_SOFT_BED_KEEP_CATEGORIES = {"BlanketFactory", "MattressFactory", "TowelFactory"}
+FORCE_CATEGORY_GROUPS = {
+    "PillowFactory": "pillow",
+    "RugFactory": "rug",
+    "BlanketFactory": "blanket",
+    "MattressFactory": "mattress",
+    "TowelFactory": "towel",
+}
+
+
+def _force_replace_all_targets(targets_path: Path, out_path: Path) -> Path:
+    data = read_json(targets_path)
+    targets = data.get("targets") if isinstance(data, dict) else None
+    if not isinstance(targets, list):
+        raise RuntimeError(f"Invalid layout targets JSON: {targets_path}")
+
+    changed = 0
+    kept_soft = 0
+    for target in targets:
+        if not isinstance(target, dict):
+            continue
+        category = str(target.get("category") or "").strip()
+        if category in FORCE_CATEGORY_GROUPS:
+            target["semantic_group"] = FORCE_CATEGORY_GROUPS[category]
+        if category in FORCE_SOFT_BED_KEEP_CATEGORIES:
+            target["replacement_policy"] = "keep_generated"
+            target["replacement_reason"] = "force_full_supplier_soft_bed_part_suppressed_with_bed"
+            kept_soft += 1
+            continue
+        target["replacement_policy"] = "replace_with_supplier"
+        target["replacement_reason"] = "force_full_supplier_pass"
+        target["force_replace_with_supplier"] = True
+        meta = target.get("meta") if isinstance(target.get("meta"), dict) else {}
+        meta["force_replace_with_supplier"] = True
+        target["meta"] = meta
+        changed += 1
+
+    meta_root = data.get("meta") if isinstance(data.get("meta"), dict) else {}
+    meta_root["force_full_supplier_pass"] = {
+        "enabled": True,
+        "replace_target_count": changed,
+        "soft_bed_keep_count": kept_soft,
+        "soft_bed_policy": "suppressed_when_supplier_bed_replaces_anchor",
+    }
+    data["meta"] = meta_root
+    write_json(out_path, data)
+    return out_path
 
 
 def _load_catalog_rows(args: argparse.Namespace) -> list[dict[str, Any]]:
@@ -130,6 +184,27 @@ def build_cli() -> argparse.ArgumentParser:
     ap.add_argument("--site", action="append", default=None, help="Optional source_site filter; may be repeated")
     ap.add_argument("--rich-only", action="store_true", help="Use only rich supplier cards during matching")
     ap.add_argument("--top-k", type=int, default=8, help="Top-K candidates for heuristic ranking")
+    ap.add_argument(
+        "--selection-mode",
+        default="optimal",
+        choices=[
+            "cheapest",
+            "min_price",
+            "lowest_price",
+            "cheapest_top20",
+            "cheap_top20",
+            "optimal",
+            "best_match",
+            "best_match_v1",
+            "best_match_v2",
+            "best_visual_reference",
+            "best_suitable",
+            "most_suitable",
+            "legacy_asset_priority",
+        ],
+        help="Design-aware supplier selection mode.",
+    )
+    ap.add_argument("--selection-strategy", default="balanced", help="Legacy supplier ordering strategy.")
     ap.add_argument("--user-preferences-json", default=None, help="Optional supplier matcher user preferences JSON")
     ap.add_argument("--llm-provider", choices=["none", "ollama"], default="none", help="Optional supplier matcher reranker")
     ap.add_argument("--ollama-url", default="http://127.0.0.1:11434", help="Ollama URL for supplier reranking")
@@ -145,6 +220,84 @@ def build_cli() -> argparse.ArgumentParser:
     ap.add_argument("--assets-db", default=None, help="Scene-local supplier assets SQLite DB")
     ap.add_argument("--blender", default=None, help="Optional Blender binary path for asset conversion and rendering")
     ap.add_argument("--require-local-asset", action="store_true", help="Apply only replacements with local real mesh assets")
+    ap.add_argument(
+        "--supplier-asset-fallback-mode",
+        choices=["none", "fbx_obj_proxy", "fbx_obj_trellis_proxy"],
+        default="none",
+        help="Fallback policy for selected candidates without a local real mesh.",
+    )
+    ap.add_argument(
+        "--force-replace-all-targets",
+        action="store_true",
+        help="Patch layout targets so every standalone object is supplier-replaceable; generated bed soft parts are suppressed with replaced beds.",
+    )
+    ap.add_argument(
+        "--suppress-generated-bedding",
+        action="store_true",
+        help="Remove generated mattress/blanket/towel/pillow parts around supplier-replaced beds.",
+    )
+    ap.add_argument("--keep-unresolved-candidates", action="store_true", help="Keep selected candidates after asset acquisition even if no local mesh was found.")
+    ap.add_argument("--trellis-generate-missing-assets", action="store_true", help="Use TRELLIS.2 to generate GLBs for selected candidates that still lack local assets.")
+    ap.add_argument("--trellis-max-assets", type=int, default=0)
+    ap.add_argument("--trellis-skip-categories", default="")
+    ap.add_argument("--trellis-ikea-mebelru-images-only", action="store_true")
+    ap.add_argument(
+        "--trellis-force-all-selected-assets",
+        action="store_true",
+        help="Generate TRELLIS.2 GLBs for selected supplier candidates even when a local FBX/OBJ/GLB already exists.",
+    )
+    ap.add_argument(
+        "--trellis-force-image-only",
+        action="store_true",
+        help="Disable direct supplier FBX/OBJ/GLB shortcuts and force TRELLIS.2 image-to-3D generation.",
+    )
+    ap.add_argument("--trellis-server-host", default="")
+    ap.add_argument("--trellis-server-port", type=int, default=28553)
+    ap.add_argument("--trellis-server-user", default="root")
+    ap.add_argument("--trellis-ssh-key", default="")
+    ap.add_argument("--trellis-remote-root", default="/workspace/trellis2_supplier_jobs")
+    ap.add_argument("--trellis-remote-trellis-root", default="/workspace/TRELLIS.2")
+    ap.add_argument("--trellis-remote-model-dir", default="/workspace/models/TRELLIS.2-4B")
+    ap.add_argument("--trellis-remote-python", default="/venv/trellis2/bin/python")
+    ap.add_argument("--trellis-remote-worker-root", default="/workspace/trellis2_worker")
+    ap.add_argument("--trellis-remote-worker-timeout-sec", type=float, default=1800.0)
+    ap.add_argument("--trellis-remote-worker-poll-sec", type=float, default=2.0)
+    ap.add_argument("--trellis-remote-persistent-worker", action=argparse.BooleanOptionalAction, default=True)
+    ap.add_argument("--trellis-remote-text-model-dir", default="")
+    ap.add_argument("--trellis-remote-cuda-visible-devices", default="0")
+    ap.add_argument("--trellis-multi-mode", default="stochastic", choices=["stochastic", "multidiffusion"])
+    ap.add_argument("--trellis-max-images", type=int, default=2)
+    ap.add_argument("--trellis-oom-retry-max-images", type=int, default=1)
+    ap.add_argument("--trellis-max-candidate-pool", type=int, default=0)
+    ap.add_argument("--trellis-disable-after-oom", action=argparse.BooleanOptionalAction, default=True)
+    ap.add_argument("--trellis-seed", type=int, default=1)
+    ap.add_argument("--trellis-sparse-steps", type=int, default=4)
+    ap.add_argument("--trellis-slat-steps", type=int, default=4)
+    ap.add_argument("--trellis-texture-size", type=int, default=256)
+    ap.add_argument("--trellis-simplify", type=float, default=0.98)
+    ap.add_argument("--trellis-pipeline-type", type=int, default=512)
+    ap.add_argument("--trellis-ss-guidance-strength", type=float, default=7.5)
+    ap.add_argument("--trellis-slat-guidance-strength", type=float, default=3.0)
+    ap.add_argument("--trellis-decimation-target", type=int, default=50000)
+    ap.add_argument("--trellis-pre-export-simplify-target", type=int, default=0)
+    ap.add_argument("--trellis-no-remesh", action=argparse.BooleanOptionalAction, default=False)
+    ap.add_argument("--trellis-remesh-band", type=int, default=1)
+    ap.add_argument("--trellis-remesh-project", type=float, default=0.0)
+    ap.add_argument("--trellis-no-webp", action=argparse.BooleanOptionalAction, default=True)
+    ap.add_argument("--trellis-image-size", type=int, default=336)
+    ap.add_argument("--trellis-fill-holes-resolution", type=int, default=256)
+    ap.add_argument("--trellis-fill-holes-num-views", type=int, default=120)
+    ap.add_argument("--trellis-remote-runner-path", default="")
+    ap.add_argument("--trellis-vlm-single-object-filter", action=argparse.BooleanOptionalAction, default=True)
+    ap.add_argument("--trellis-vlm-provider", default="ollama", choices=["ollama", "openai", "openrouter"])
+    ap.add_argument("--trellis-vlm-ollama-url", default="http://127.0.0.1:11435")
+    ap.add_argument("--trellis-vlm-model", default="llama3.2-vision:11b")
+    ap.add_argument("--trellis-vlm-timeout", type=int, default=120)
+    ap.add_argument("--trellis-vlm-unload-after-filter", action=argparse.BooleanOptionalAction, default=True)
+    ap.add_argument("--trellis-text-fallback-if-no-single-image", action="store_true", default=True)
+    ap.add_argument("--trellis-progress-log", action=argparse.BooleanOptionalAction, default=True)
+    ap.add_argument("--trellis-max-failures-per-candidate", type=int, default=2)
+    ap.add_argument("--trellis-allow-proxy-fallback", action="store_true")
     ap.add_argument("--background", action="store_true", help="Run Blender render in background mode")
     ap.add_argument("--save-blend", default=None, help="Optional .blend output path for the final supplier scene")
     ap.add_argument("--render", default=None, help="Optional final render path")
@@ -158,10 +311,17 @@ def build_cli() -> argparse.ArgumentParser:
 def main() -> None:
     args = build_cli().parse_args()
 
-    targets_path = Path(args.targets).expanduser().resolve()
+    original_targets_path = Path(args.targets).expanduser().resolve()
     input_scene_path = Path(args.input_scene_json).expanduser().resolve()
-    run_dir = Path(args.run_dir).expanduser().resolve() if args.run_dir else targets_path.parent
+    run_dir = Path(args.run_dir).expanduser().resolve() if args.run_dir else original_targets_path.parent
     run_dir.mkdir(parents=True, exist_ok=True)
+
+    targets_path = original_targets_path
+    if bool(args.force_replace_all_targets):
+        targets_path = _force_replace_all_targets(
+            original_targets_path,
+            run_dir / f"{original_targets_path.stem}.force_full_supplier.json",
+        )
 
     supplier_user_preferences = None
     if str(args.user_preferences_json or "").strip():
@@ -186,11 +346,14 @@ def main() -> None:
         targets_json_path=targets_path,
         catalog_rows=rows,
         top_k=int(args.top_k),
+        selection_strategy=str(args.selection_strategy or "balanced"),
         user_preferences=supplier_user_preferences,
         llm_settings=llm_settings,
+        selection_mode=str(args.selection_mode or "optimal"),
     )
     write_json(bindings_out, bindings)
 
+    uses_mesh_or_proxy_fallback = str(args.supplier_asset_fallback_mode or "none") in {"fbx_obj_proxy", "fbx_obj_trellis_proxy"}
     assets_bindings_path = acquire_assets_for_bindings_json(
         bindings_json_path=bindings_out,
         output_json_path=assets_bindings_out,
@@ -198,13 +361,31 @@ def main() -> None:
         out_dir=assets_dir,
         blender_bin=args.blender,
         catalog_json_paths=[Path(x).expanduser().resolve() for x in (args.supplier_json or []) if str(x).strip()],
+        keep_unresolved_candidates=bool(
+            args.keep_unresolved_candidates
+            or args.trellis_generate_missing_assets
+            or (uses_mesh_or_proxy_fallback and not args.require_local_asset)
+        ),
     )
+
+    trellis_generation_report = None
+    if bool(args.trellis_generate_missing_assets):
+        if not str(args.trellis_server_host or "").strip():
+            raise RuntimeError("--trellis-generate-missing-assets requires --trellis-server-host")
+        assets_bindings_path, trellis_generation_report = enrich_missing_assets_with_trellis(
+            bindings_json_path=Path(assets_bindings_path).expanduser().resolve(),
+            output_json_path=run_dir / f"{Path(assets_bindings_path).stem}.trellis.json",
+            out_dir=run_dir,
+            args=args,
+        )
 
     final_scene_path = apply_supplier_bindings_to_json(
         input_json_path=input_scene_path,
         bindings_json_path=assets_bindings_path,
         output_json_path=scene_out,
         require_local_asset=bool(args.require_local_asset),
+        fallback_mode=str(args.supplier_asset_fallback_mode or "none"),
+        preserve_generated_bedding=not bool(args.suppress_generated_bedding or args.force_replace_all_targets),
     )
     repaired_scene_path, scene_repair_info = maybe_repair_scene_json(
         args=args,
@@ -220,6 +401,7 @@ def main() -> None:
 
     manifest = {
         "targets_json": str(targets_path.resolve()),
+        "original_targets_json": str(original_targets_path.resolve()),
         "input_scene_json": str(input_scene_path.resolve()),
         "bindings_json": str(bindings_out.resolve()),
         "assets_bindings_json": str(Path(assets_bindings_path).resolve()),
@@ -230,6 +412,9 @@ def main() -> None:
         "catalog_row_count": len(rows),
         "llm_settings": llm_settings,
         "require_local_asset": bool(args.require_local_asset),
+        "supplier_asset_fallback_mode": str(args.supplier_asset_fallback_mode or "none"),
+        "force_replace_all_targets": bool(args.force_replace_all_targets),
+        "trellis_missing_asset_generation": trellis_generation_report,
         "bindings_meta": (read_json(bindings_out).get("meta") or {}),
         "asset_acquisition_meta": (read_json(assets_bindings_path).get("meta") or {}).get("asset_acquisition"),
         "scene_supplier_summary": (final_scene_data.get("meta") or {}).get("supplier_binding_summary"),

@@ -161,6 +161,9 @@ def build_room_context(scene: dict[str, Any], prompt: str = "") -> RoomContext:
         2.8,
     )
     raw_type = room.get("room_type", room.get("type", room.get("type_hint", "room")))
+    source_type = str(room.get("source_room_type") or "").strip().lower()
+    if source_type in {"toilet", "wc", "restroom", "туалет", "уборная"}:
+        raw_type = source_type
     normalized_type = normalize_room_type(raw_type, prompt=prompt, area_m2=area)
 
     ctx = RoomContext(

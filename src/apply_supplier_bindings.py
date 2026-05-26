@@ -319,6 +319,8 @@ def _normalized_anchor_z(anchor_aabb: dict[str, float], item_aabb: dict[str, flo
 def _related_generated_item_actions(
     placements: list[dict[str, Any]],
     by_target_id: dict[str, dict[str, Any]],
+    *,
+    preserve_generated_bedding: bool = True,
 ) -> dict[str, dict[str, Any]]:
     actions: dict[str, dict[str, Any]] = {}
     anchor_items: list[tuple[dict[str, Any], dict[str, Any]]] = []
@@ -374,6 +376,14 @@ def _related_generated_item_actions(
 
             if anchor_group == "bed" and category in bed_soft_categories:
                 if _xy_inside_expanded(anchor_aabb, item_pos[:2], margin=0.18) and item_aabb["z_min"] <= anchor_top + 0.25:
+                    if not preserve_generated_bedding:
+                        actions[item_id] = {
+                            "action": "suppress",
+                            "anchor_id": anchor_id,
+                            "anchor_group": anchor_group,
+                            "reason": "generated_bedding_suppressed_for_supplier_bed",
+                        }
+                        continue
                     rel_x, rel_y = _normalized_anchor_xy(anchor_aabb, item_pos)
                     actions[item_id] = {
                         "action": "reanchor",
@@ -2296,6 +2306,7 @@ def apply_supplier_bindings_to_data(
     *,
     require_local_asset: bool = False,
     fallback_mode: str = ASSET_FALLBACK_MODE_NONE,
+    preserve_generated_bedding: bool = True,
 ) -> dict[str, Any]:
     out = deepcopy(data)
     processed_collection_key = "placements" if isinstance(out.get("placements"), list) else "items"
@@ -2317,7 +2328,11 @@ def apply_supplier_bindings_to_data(
         for b in bindings
         if isinstance(b, dict) and str(b.get("target_id") or "").strip()
     }
-    related_item_actions = _related_generated_item_actions(placements, by_target_id)
+    related_item_actions = _related_generated_item_actions(
+        placements,
+        by_target_id,
+        preserve_generated_bedding=preserve_generated_bedding,
+    )
 
     replaced = 0
     placeholder_replaced = 0
@@ -2600,7 +2615,11 @@ def apply_supplier_bindings_to_data(
     meta["supplier_bed_postprocess"] = {
         "preserved_bedding_count": len(preserved_bedding_ids),
         "preserved_bedding_ids": preserved_bedding_ids,
-        "policy": "keep_generated_bedding_when_replacing_bed_frame",
+        "policy": (
+            "keep_generated_bedding_when_replacing_bed_frame"
+            if preserve_generated_bedding
+            else "suppress_generated_bedding_when_replacing_bed"
+        ),
     }
     meta["supplier_postprocess"] = {
         "ceiling_lights": ceiling_light_postprocess,
@@ -2620,6 +2639,7 @@ def apply_supplier_bindings_to_json(
     *,
     require_local_asset: bool = False,
     fallback_mode: str = ASSET_FALLBACK_MODE_NONE,
+    preserve_generated_bedding: bool = True,
 ) -> Path:
     data = read_json(input_json_path)
     bindings = read_json(bindings_json_path)
@@ -2628,6 +2648,7 @@ def apply_supplier_bindings_to_json(
         bindings,
         require_local_asset=require_local_asset,
         fallback_mode=fallback_mode,
+        preserve_generated_bedding=preserve_generated_bedding,
     )
     reference_scene_blend = _infer_reference_scene_blend_path(input_json_path, data if isinstance(data, dict) else {})
     if reference_scene_blend:
@@ -2653,6 +2674,11 @@ def build_cli() -> argparse.ArgumentParser:
         default=ASSET_FALLBACK_MODE_NONE,
         help="Fallback policy for unavailable local assets.",
     )
+    ap.add_argument(
+        "--suppress-generated-bedding",
+        action="store_true",
+        help="Remove generated bed soft parts when their bed is replaced by a supplier/TRELLIS asset.",
+    )
     return ap
 
 
@@ -2664,6 +2690,7 @@ def main() -> None:
         output_json_path=args.out,
         require_local_asset=bool(args.require_local_asset),
         fallback_mode=str(getattr(args, "supplier_asset_fallback_mode", ASSET_FALLBACK_MODE_NONE)),
+        preserve_generated_bedding=not bool(getattr(args, "suppress_generated_bedding", False)),
     )
     data = read_json(out_path)
     summary = (data.get("meta") or {}).get("supplier_binding_summary") or {}

@@ -366,6 +366,65 @@ def _drop_material_preview_meshes(
     return filtered_objs, dropped_names
 
 
+def _select_single_import_variant_mesh(
+    objs: List[bpy.types.Object],
+    semantic_group: str,
+    target_aabb: Dict[str, float],
+) -> Tuple[List[bpy.types.Object], List[str]]:
+    group = str(semantic_group or "").strip().lower()
+    if group not in {"bathtub", "mirror"}:
+        return objs, []
+
+    mesh_objs = [o for o in objs if o.type == "MESH"]
+    if len(mesh_objs) < 2:
+        return objs, []
+
+    tx = max(float(target_aabb["x_max"]) - float(target_aabb["x_min"]), 1e-6)
+    ty = max(float(target_aabb["y_max"]) - float(target_aabb["y_min"]), 1e-6)
+    tz = max(float(target_aabb["z_max"]) - float(target_aabb["z_min"]), 1e-6)
+
+    target_aspect = (max(tx, ty) / tz) if group == "mirror" else (max(tx, ty) / max(min(tx, ty), 1e-6))
+    scored: List[Tuple[float, bpy.types.Object]] = []
+    for obj in mesh_objs:
+        bmin, bmax = _world_bounds_single_mesh_object(obj)
+        size = bmax - bmin
+        sx, sy, sz = max(float(size.x), 1e-6), max(float(size.y), 1e-6), max(float(size.z), 1e-6)
+        if group == "mirror":
+            obj_aspect = sx / sz
+            parsed_size_score = None
+            parsed_dims = re.search(r"(?<!\d)(\d{3,4})\s*x\s*(\d{3,4})(?!\d)", obj.name, flags=re.IGNORECASE)
+            if parsed_dims:
+                parsed_w = max(float(parsed_dims.group(1)) / 1000.0, 1e-6)
+                parsed_h = max(float(parsed_dims.group(2)) / 1000.0, 1e-6)
+                parsed_aspect = parsed_w / parsed_h
+                obj_aspect = parsed_aspect
+                parsed_size_score = (
+                    abs(math.log(parsed_w / max(tx, 1e-6))) * 0.45
+                    + abs(math.log(parsed_h / max(tz, 1e-6))) * 0.45
+                )
+            volume_bonus = 0.0
+        else:
+            obj_aspect = max(sx, sy) / max(min(sx, sy), 1e-6)
+            parsed_size_score = None
+            volume_bonus = -0.05 * math.log(max(sx * sy * sz, 1e-9))
+        aspect_score = abs(math.log(max(obj_aspect, 1e-6) / max(target_aspect, 1e-6)))
+        if parsed_size_score is not None:
+            aspect_score = aspect_score * 2.5 + parsed_size_score
+        center_score = float(((bmin + bmax) * 0.5).length) * 0.001
+        scored.append((aspect_score + center_score + volume_bonus, obj))
+
+    if not scored:
+        return objs, []
+
+    selected = min(scored, key=lambda pair: pair[0])[1]
+    keep_ids = {id(selected)}
+    dropped = [obj.name for obj in mesh_objs if id(obj) not in keep_ids]
+    if not dropped:
+        return objs, []
+    filtered_objs = [o for o in objs if o.type != "MESH" or id(o) in keep_ids]
+    return filtered_objs, dropped
+
+
 def _keep_primary_import_cluster(
     objs: List[bpy.types.Object],
 ) -> Tuple[List[bpy.types.Object], List[Dict[str, float | str]]]:
@@ -1612,14 +1671,20 @@ def _kitchen_assembly_from_scene_item(item: Dict, aabb: Dict[str, float]) -> Dic
             float(aabb.get("y_min", 0.0)),
             float(aabb.get("z_min", 0.0)),
         ]
+    # The kitchen builder can apply assembly["rotation"] itself. In scene build
+    # mode we keep the generated modules local and let the item root carry the
+    # scene transform, otherwise yaw is applied twice and the row faces outside.
+    for transform_key in ("rotation", "rotation_deg", "yaw_deg", "yaw_rad", "rotation_rad"):
+        assembly.pop(transform_key, None)
     assembly["position"] = [0.0, 0.0, 0.0]
+    assembly["rotation"] = [0.0, 0.0, 0.0]
     assembly.setdefault("dimensions", {"width_m": width, "depth_m": depth, "height_m": height})
     return assembly
 
 
 def _item_mount_mode(item: Dict) -> str:
     constraints = item.get("constraints") or {}
-    mount_type = str((constraints or {}).get("mount_type") or "").strip().lower()
+    mount_type = str((constraints or {}).get("mount_type") or item.get("mount_type") or "").strip().lower()
     if mount_type in {"ceiling", "wall", "floor"}:
         return mount_type
 
@@ -1660,6 +1725,17 @@ def _is_supplier_light_replacement_item(item: Dict) -> bool:
     return _item_semantic_group(item) in {"lamp_ceiling", "lamp_table", "lamp_floor", "lamp_wall"}
 
 
+def _should_lock_supplier_rotation(item: Dict, semantic_group: str) -> bool:
+    meta = item.get("meta") or {}
+    if semantic_group in {"chair", "armchair"} and str(meta.get("affordance") or "").strip().lower() == "table_chair":
+        return True
+    if semantic_group == "bed" and bool(meta.get("bed_headboard_repaired")):
+        return True
+    if not bool(meta.get("supplier_binding_applied")):
+        return False
+    return isinstance(item.get("orientation_rule"), dict)
+
+
 def _rotation_candidates_for_semantic_group(base_deg: float, semantic_group: str) -> List[float]:
     orientable_groups = {
         "bed",
@@ -1676,6 +1752,7 @@ def _rotation_candidates_for_semantic_group(base_deg: float, semantic_group: str
         "armchair",
         "sofa",
         "computer",
+        "wall_art",
     }
     base = float(base_deg or 0.0) % 360.0
     if semantic_group not in orientable_groups:
@@ -2005,6 +2082,8 @@ def _hide_architectural_door_objects() -> int:
 def _remove_bbox_helper_objects() -> int:
     removed = 0
     for obj in list(bpy.data.objects):
+        if bool(obj.get("cgs_keep_bbox_fallback")):
+            continue
         if not _looks_like_bbox_helper_name(getattr(obj, "name", "")):
             continue
         try:
@@ -2532,7 +2611,24 @@ def _item_mesh_texture_dirs_raw(it: dict) -> List[str]:
 
 def _item_mesh_fit_mode(it: dict) -> str:
     asset = _item_asset_dict(it)
-    return str(it.get("mesh_fit_mode") or asset.get("mesh_fit_mode") or "stretch")
+    semantic_group = _item_semantic_group(it)
+    category = str(it.get("category") or "").strip().lower()
+    raw = str(it.get("mesh_fit_mode") or asset.get("mesh_fit_mode") or "stretch")
+    if semantic_group in {"toilet_cabinet"} or category in {"toilet_cabinet"}:
+        return "stretch"
+    return raw
+
+
+def _item_mesh_yaw_offset_deg(it: dict) -> float:
+    meta = it.get("meta") if isinstance(it.get("meta"), dict) else {}
+    asset = _item_asset_dict(it)
+    for raw in (meta.get("asset_yaw_offset_deg"), asset.get("asset_yaw_offset_deg"), it.get("asset_yaw_offset_deg")):
+        try:
+            if raw is not None:
+                return float(raw)
+        except (TypeError, ValueError):
+            continue
+    return 0.0
 
 
 def _supplier_record_key(record: Optional[dict], fallback_item: Optional[dict] = None) -> str:
@@ -2650,7 +2746,9 @@ def _supplier_candidate_reuse_reject_reason(
     for other_id, other_group, other_size in usages:
         if other_id == item_id:
             continue
-        if other_group != group or _sizes_materially_different(size, other_size):
+        # The same catalog asset can validly appear multiple times in one room
+        # and be scaled to each target box. Reject only cross-group reuse.
+        if other_group != group:
             return f"reused_supplier_asset_for_different_target:{key}"
     return None
 
@@ -2719,14 +2817,19 @@ def _is_replacement_render_item(item: Dict) -> bool:
 
 
 def _is_procedural_proxy_item(item: Dict) -> bool:
+    if _item_mesh_path_raw(item):
+        return False
     source = item.get("source") if isinstance(item.get("source"), dict) else {}
     asset = item.get("asset") if isinstance(item.get("asset"), dict) else {}
     category = str(item.get("semantic_group") or item.get("category") or "").strip().lower()
     procedural_placeholder_proxy_categories = {
         "armchair",
+        "air_freshener",
+        "bath_mat",
         "bench",
         "blanket",
         "bookshelf",
+        "cabinet",
         "ceiling_light",
         "chair",
         "decor_books",
@@ -2736,6 +2839,9 @@ def _is_procedural_proxy_item(item: Dict) -> bool:
         "desk",
         "dresser",
         "floor_lamp",
+        "hygiene_shower",
+        "laundry_basket",
+        "mirror",
         "nightstand",
         "ottoman",
         "pillow",
@@ -2745,9 +2851,18 @@ def _is_procedural_proxy_item(item: Dict) -> bool:
         "side_table",
         "stool",
         "table_lamp",
+        "soap_dispenser",
+        "shampoo_bottle",
+        "small_bin",
+        "toilet_paper_holder",
+        "toilet_cabinet",
+        "toothbrush_cup",
+        "towel_rack",
+        "vanity",
         "wardrobe",
         "wall_art",
         "wall_light",
+        "washing_machine",
     }
     return bool(
         source.get("asset_source") == "supplier_catalog_procedural_proxy"
@@ -3062,6 +3177,11 @@ def import_supported_mesh(mesh_path: str) -> List[bpy.types.Object]:
 _SUPPORTED_MESH_EXTS = (".glb", ".gltf", ".obj", ".fbx")
 
 
+def _group_glb_cache_path(mesh_path: str | Path) -> Path:
+    path = Path(mesh_path).expanduser()
+    return path.with_name(f"{path.stem}.cgs_group.glb")
+
+
 def _mesh_ext_priority(ext: str) -> int:
     try:
         return _SUPPORTED_MESH_EXTS.index(ext.lower())
@@ -3091,6 +3211,7 @@ def _discover_mesh_import_candidates(mesh_path: str) -> List[str]:
         seen.add(resolved)
         out.append(resolved)
 
+    add_candidate(_group_glb_cache_path(base))
     add_candidate(base)
 
     same_dir = base.parent
@@ -3164,6 +3285,96 @@ def _remove_or_hide_non_mesh_import_objects(objs: List[bpy.types.Object]) -> tup
             obj.hide_viewport = True
             obj.hide_render = True
     return kept, removed
+
+
+def _restore_object_selection(
+    selected_names: set[str],
+    active_name: Optional[str],
+) -> None:
+    try:
+        bpy.ops.object.select_all(action="DESELECT")
+    except Exception:
+        pass
+    for obj in bpy.data.objects:
+        try:
+            obj.select_set(obj.name in selected_names)
+        except Exception:
+            pass
+    if active_name:
+        active = bpy.data.objects.get(active_name)
+        if active is not None:
+            try:
+                bpy.context.view_layer.objects.active = active
+            except Exception:
+                pass
+
+
+def _export_import_group_glb_cache(
+    objs: List[bpy.types.Object],
+    source_mesh_path: str,
+    *,
+    verbose: bool = True,
+) -> Optional[str]:
+    if not source_mesh_path:
+        return None
+    source_ext = Path(source_mesh_path).suffix.lower()
+    if source_ext in {".glb", ".gltf"}:
+        return None
+
+    mesh_objs = [obj for obj in objs if obj.type == "MESH"]
+    if len(mesh_objs) < 2:
+        return None
+
+    out_path = _group_glb_cache_path(source_mesh_path)
+    if out_path.is_file():
+        return str(out_path)
+
+    selected_names = {obj.name for obj in bpy.context.selected_objects}
+    active = bpy.context.view_layer.objects.active
+    active_name = active.name if active is not None else None
+
+    try:
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        bpy.ops.object.select_all(action="DESELECT")
+        for obj in objs:
+            try:
+                obj.select_set(True)
+            except Exception:
+                pass
+        bpy.context.view_layer.objects.active = mesh_objs[0]
+        bpy.ops.export_scene.gltf(
+            filepath=str(out_path),
+            export_format="GLB",
+            use_selection=True,
+            export_apply=True,
+        )
+    except Exception as exc:
+        if verbose:
+            print(f"⚠️ group GLB cache export failed for {source_mesh_path}: {type(exc).__name__}: {exc}")
+        return None
+    finally:
+        _restore_object_selection(selected_names, active_name)
+
+    if out_path.is_file():
+        if verbose:
+            print(f"[DBG] exported grouped GLB cache: {out_path}")
+        return str(out_path)
+    return None
+
+
+def _should_preserve_imported_group(item: Dict, semantic_group: str) -> bool:
+    meta = item.get("meta") if isinstance(item.get("meta"), dict) else {}
+    asset = item.get("asset") if isinstance(item.get("asset"), dict) else {}
+    category = str(item.get("category") or "").strip().lower()
+    group = str(semantic_group or item.get("semantic_group") or "").strip().lower()
+    return bool(
+        asset.get("preserve_imported_group")
+        or asset.get("consolidate_import_group_glb")
+        or meta.get("preserve_imported_group")
+        or meta.get("consolidate_import_group_glb")
+        or group in {"bed", "sofa", "armchair"}
+        or category in {"bed", "sofa", "armchair"}
+    )
 
 
 # ============================================================
@@ -3485,10 +3696,23 @@ def _named_color_rgb(value: Any) -> Optional[Tuple[float, float, float]]:
 def _supplier_candidate_tint_rgb(it: dict, fallback_name: str) -> Tuple[float, float, float]:
     meta = it.get("meta") if isinstance(it.get("meta"), dict) else {}
     supplier_candidate = meta.get("supplier_candidate") if isinstance(meta.get("supplier_candidate"), dict) else {}
+    asset = it.get("asset") if isinstance(it.get("asset"), dict) else {}
 
-    named = _named_color_rgb(supplier_candidate.get("color"))
-    if named:
-        return named
+    def hex_rgb(value: Any) -> Optional[Tuple[float, float, float]]:
+        match = re.search(r"#?([0-9a-fA-F]{6})", str(value or ""))
+        if not match:
+            return None
+        raw = match.group(1)
+        return (
+            int(raw[0:2], 16) / 255.0,
+            int(raw[2:4], 16) / 255.0,
+            int(raw[4:6], 16) / 255.0,
+        )
+
+    for value in (supplier_candidate.get("color"), asset.get("color")):
+        parsed = hex_rgb(value) or _named_color_rgb(value)
+        if parsed:
+            return parsed
 
     color = it.get("color")
     if isinstance(color, (list, tuple)) and len(color) >= 3:
@@ -3496,6 +3720,9 @@ def _supplier_candidate_tint_rgb(it: dict, fallback_name: str) -> Tuple[float, f
             return (float(color[0]), float(color[1]), float(color[2]))
         except Exception:
             pass
+    parsed = hex_rgb(color) or _named_color_rgb(color)
+    if parsed:
+        return parsed
 
     return _auto_color_rgb(str(fallback_name))
 
@@ -4593,6 +4820,116 @@ def _choose_texture(kind: str, candidates: List[str], style_text: Optional[str],
     return rng.choice(candidates)
 
 
+def _is_sanitary_room_spec(room: dict) -> bool:
+    text = " ".join(
+        str(room.get(key) or "").strip().lower()
+        for key in ("type", "room_type", "source_room_type", "name", "id")
+    )
+    return any(
+        token in text
+        for token in (
+            "bathroom",
+            "toilet",
+            "wc",
+            "сануз",
+            "ванн",
+            "туалет",
+        )
+    )
+
+
+def _set_node_input(node: bpy.types.Node, name: str, value) -> None:
+    if name not in node.inputs:
+        return
+    try:
+        node.inputs[name].default_value = value
+    except Exception:
+        pass
+
+
+def _make_procedural_tile_material(
+    name: str,
+    *,
+    tile_rgb: Tuple[float, float, float],
+    tile_alt_rgb: Tuple[float, float, float],
+    grout_rgb: Tuple[float, float, float],
+    brick_width: float,
+    row_height: float,
+    mortar_size: float,
+    roughness: float = 0.82,
+    specular: float = 0.16,
+) -> bpy.types.Material:
+    mat = bpy.data.materials.new(name)
+    mat.diffuse_color = (tile_rgb[0], tile_rgb[1], tile_rgb[2], 1.0)
+    mat.use_nodes = True
+    nt = mat.node_tree
+    nodes = nt.nodes
+    links = nt.links
+    nodes.clear()
+
+    out = nodes.new("ShaderNodeOutputMaterial")
+    out.location = (760, 0)
+
+    bsdf = nodes.new("ShaderNodeBsdfPrincipled")
+    bsdf.location = (520, 0)
+    links.new(bsdf.outputs["BSDF"], out.inputs["Surface"])
+
+    texcoord = nodes.new("ShaderNodeTexCoord")
+    texcoord.location = (-180, 0)
+
+    mapping = nodes.new("ShaderNodeMapping")
+    mapping.location = (10, 0)
+    links.new(texcoord.outputs["UV"], mapping.inputs["Vector"])
+
+    brick = nodes.new("ShaderNodeTexBrick")
+    brick.location = (250, 0)
+    links.new(mapping.outputs["Vector"], brick.inputs["Vector"])
+
+    _set_node_input(brick, "Color1", (tile_rgb[0], tile_rgb[1], tile_rgb[2], 1.0))
+    _set_node_input(brick, "Color2", (tile_alt_rgb[0], tile_alt_rgb[1], tile_alt_rgb[2], 1.0))
+    _set_node_input(brick, "Mortar", (grout_rgb[0], grout_rgb[1], grout_rgb[2], 1.0))
+    _set_node_input(brick, "Scale", 1.0)
+    _set_node_input(brick, "Brick Width", float(brick_width))
+    _set_node_input(brick, "Row Height", float(row_height))
+    _set_node_input(brick, "Mortar Size", float(mortar_size))
+    _set_node_input(brick, "Mortar Smooth", 0.015)
+
+    links.new(brick.outputs["Color"], bsdf.inputs["Base Color"])
+
+    _set_node_input(bsdf, "Roughness", float(roughness))
+    _set_node_input(bsdf, "Specular", float(specular))
+    _set_node_input(bsdf, "Metallic", 0.0)
+    return mat
+
+
+def _make_sanitary_floor_material() -> bpy.types.Material:
+    return _make_procedural_tile_material(
+        "MAT_ROOM_FLOOR_SANITARY_PORCELAIN_TILE",
+        tile_rgb=(0.66, 0.67, 0.64),
+        tile_alt_rgb=(0.59, 0.60, 0.58),
+        grout_rgb=(0.34, 0.35, 0.34),
+        brick_width=1.0,
+        row_height=1.0,
+        mortar_size=0.025,
+        roughness=0.86,
+        specular=0.10,
+    )
+
+
+def _make_sanitary_wall_material() -> bpy.types.Material:
+    return _make_procedural_tile_material(
+        "MAT_ROOM_WALL_SANITARY_CERAMIC_TILE",
+        tile_rgb=(0.86, 0.86, 0.82),
+        tile_alt_rgb=(0.78, 0.79, 0.76),
+        grout_rgb=(0.56, 0.57, 0.55),
+        brick_width=2.0,
+        row_height=1.0,
+        mortar_size=0.018,
+        roughness=0.78,
+        specular=0.18,
+    )
+
+
 def _as_float_or_none(value) -> Optional[float]:
     try:
         if value is None or value == "":
@@ -4749,6 +5086,8 @@ def _procedural_requirement_role(item: Dict) -> str:
             item.get("name"),
         )
     )
+    if "vanity" in text:
+        return "sink"
     for role in ("toilet", "sink", "shower", "bath", "table", "bed", "headboard"):
         if role in text:
             return role
@@ -4866,16 +5205,178 @@ def _make_procedural_flat_ceiling_light_mesh(
 
 
 def _is_procedural_requirement_item(item: Dict) -> bool:
+    if _item_mesh_path_raw(item):
+        return False
     meta = item.get("meta") if isinstance(item.get("meta"), dict) else {}
     asset = item.get("asset") if isinstance(item.get("asset"), dict) else {}
     source = item.get("source") if isinstance(item.get("source"), dict) else {}
     category = str(item.get("category") or item.get("semantic_group") or "").strip().lower()
+    procedural_placeholder_categories = {
+        "bath",
+        "bathtub",
+        "bathroom_sink",
+        "bed",
+        "headboard",
+        "shower",
+        "sink",
+        "toilet",
+        "vanity",
+    }
     return bool(
         meta.get("procedural_requirement")
         or asset.get("kind") == "procedural_requirement_proxy"
-        or (asset.get("kind") == "procedural_placeholder" and category in {"bed", "headboard"})
+        or (asset.get("kind") == "procedural_placeholder" and category in procedural_placeholder_categories)
         or source.get("asset_source") == "procedural_requirement"
     )
+
+
+def _make_exact_supplier_proxy_in_aabb(
+    *,
+    item: Dict,
+    aabb: Dict[str, float],
+    collection: bpy.types.Collection,
+    name: str,
+    group: str,
+) -> Optional[bpy.types.Object]:
+    try:
+        (cx, cy, cz), (sx, sy, sz) = _aabb_to_center_size(aabb)
+    except Exception:
+        return None
+
+    group_l = str(group or "").strip().lower()
+    sx = max(float(sx), 0.001)
+    sy = max(float(sy), 0.001)
+    sz = max(float(sz), 0.001)
+    if group_l == "rug":
+        sz = max(sz, 0.018)
+        cz = float(aabb.get("z_min", cz - sz * 0.5)) + sz * 0.5
+    elif group_l in {"pillow", "blanket"}:
+        sz = max(sz, 0.04)
+
+    x1, x2 = cx - 0.5 * sx, cx + 0.5 * sx
+    y1, y2 = cy - 0.5 * sy, cy + 0.5 * sy
+    z1, z2 = cz - 0.5 * sz, cz + 0.5 * sz
+    tint = _supplier_candidate_tint_rgb(item, fallback_name=name)
+    item_id = str(item.get("id") or "").strip()
+    base_mat = _make_pbr_material(
+        name=f"Mat_SupplierProxy_{item_id or group_l or 'item'}",
+        maps=PBRMaps(),
+        tint_rgb=tint,
+        tex_scale=1.0,
+    )
+    dark_mat = _make_pbr_material(
+        name=f"Mat_SupplierProxyDark_{item_id or group_l or 'item'}",
+        maps=PBRMaps(),
+        tint_rgb=tuple(max(float(c) * 0.45, 0.03) for c in tint),
+        tex_scale=1.0,
+    )
+    light_mat = _make_pbr_material(
+        name=f"Mat_SupplierProxyLight_{item_id or group_l or 'item'}",
+        maps=PBRMaps(),
+        tint_rgb=tuple(min(float(c) * 1.25 + 0.10, 0.95) for c in tint),
+        tex_scale=1.0,
+    )
+
+    if group_l in {"wardrobe", "wall_art"}:
+        root = bpy.data.objects.new(f"{name}_SupplierProxyRoot", None)
+        collection.objects.link(root)
+
+        def add_part(
+            part_name: str,
+            center: Tuple[float, float, float],
+            size: Tuple[float, float, float],
+            mat: bpy.types.Material,
+        ) -> bpy.types.Object:
+            obj = _make_local_box_mesh(
+                name=f"{name}_{part_name}",
+                parent=root,
+                collection=collection,
+                local_center=center,
+                size=size,
+                material=mat,
+            )
+            obj["cgs_item_id"] = item_id
+            obj["cgs_supplier_proxy_fallback"] = "exact_aabb"
+            return obj
+
+        if group_l == "wardrobe":
+            add_part("wardrobe_body", (cx, cy, cz), (sx, sy, sz), base_mat)
+            if sx <= sy:
+                face_x = x1 - 0.006 if cx >= 2.5 else x2 + 0.006
+                door_thick = min(max(sx * 0.10, 0.012), 0.028)
+                door_z = z1 + sz * 0.52
+                door_h = sz * 0.82
+                door_w = sy * 0.43
+                add_part("wardrobe_door_l", (face_x, cy - sy * 0.235, door_z), (door_thick, door_w, door_h), light_mat)
+                add_part("wardrobe_door_r", (face_x, cy + sy * 0.235, door_z), (door_thick, door_w, door_h), light_mat)
+                add_part("wardrobe_handle_l", (face_x, cy - sy * 0.055, z1 + sz * 0.57), (door_thick * 1.35, max(sy * 0.025, 0.018), sz * 0.22), dark_mat)
+                add_part("wardrobe_handle_r", (face_x, cy + sy * 0.055, z1 + sz * 0.57), (door_thick * 1.35, max(sy * 0.025, 0.018), sz * 0.22), dark_mat)
+            else:
+                face_y = y1 - 0.006 if cy >= 2.7 else y2 + 0.006
+                door_thick = min(max(sy * 0.10, 0.012), 0.028)
+                door_z = z1 + sz * 0.52
+                door_h = sz * 0.82
+                door_w = sx * 0.43
+                add_part("wardrobe_door_l", (cx - sx * 0.235, face_y, door_z), (door_w, door_thick, door_h), light_mat)
+                add_part("wardrobe_door_r", (cx + sx * 0.235, face_y, door_z), (door_w, door_thick, door_h), light_mat)
+                add_part("wardrobe_handle_l", (cx - sx * 0.055, face_y, z1 + sz * 0.57), (max(sx * 0.025, 0.018), door_thick * 1.35, sz * 0.22), dark_mat)
+                add_part("wardrobe_handle_r", (cx + sx * 0.055, face_y, z1 + sz * 0.57), (max(sx * 0.025, 0.018), door_thick * 1.35, sz * 0.22), dark_mat)
+        else:
+            add_part("wall_art_frame", (cx, cy, cz), (sx, sy, sz), dark_mat)
+            if sx <= sy:
+                face_x = x1 - 0.004 if cx >= 2.5 else x2 + 0.004
+                add_part("wall_art_canvas", (face_x, cy, cz), (max(sx * 0.45, 0.012), sy * 0.82, sz * 0.76), light_mat)
+            else:
+                face_y = y1 - 0.004 if cy >= 2.7 else y2 + 0.004
+                add_part("wall_art_canvas", (cx, face_y, cz), (sx * 0.82, max(sy * 0.45, 0.012), sz * 0.76), light_mat)
+
+        root["cgs_supplier_proxy_fallback"] = "exact_aabb"
+        root["cgs_item_id"] = item_id
+        root["cgs_placement_score"] = 0.0
+        root["cgs_placement_confidence"] = "proxy"
+        return root
+
+    verts = [
+        (x1, y1, z1),
+        (x2, y1, z1),
+        (x2, y2, z1),
+        (x1, y2, z1),
+        (x1, y1, z2),
+        (x2, y1, z2),
+        (x2, y2, z2),
+        (x1, y2, z2),
+    ]
+    faces = [
+        (0, 1, 2, 3),
+        (4, 5, 6, 7),
+        (0, 1, 5, 4),
+        (1, 2, 6, 5),
+        (2, 3, 7, 6),
+        (3, 0, 4, 7),
+    ]
+    obj = _make_mesh_object(f"{name}_SupplierProxy", verts, faces, collection)
+    _assign_material_to_object(obj, base_mat)
+    try:
+        bevel = obj.modifiers.new(name="SupplierProxySoftBevel", type="BEVEL")
+        if group_l == "rug":
+            bevel.width = min(max(min(sx, sy) * 0.01, 0.004), 0.025)
+            bevel.segments = 2
+        else:
+            bevel.width = min(max(min(sx, sy, sz) * 0.20, 0.006), 0.06)
+            bevel.segments = 5
+        bevel.affect = "EDGES"
+    except Exception:
+        pass
+    try:
+        for poly in obj.data.polygons:
+            poly.use_smooth = True
+    except Exception:
+        pass
+    obj["cgs_supplier_proxy_fallback"] = "exact_aabb"
+    obj["cgs_item_id"] = item_id
+    obj["cgs_placement_score"] = 0.0
+    obj["cgs_placement_confidence"] = "proxy"
+    return obj
 
 
 def _build_procedural_catalog_proxy_in_aabb(
@@ -4888,6 +5389,27 @@ def _build_procedural_catalog_proxy_in_aabb(
     fit_mode: str,
     fallback_subclass: str = "closed_cabinet",
 ) -> Optional[bpy.types.Object]:
+    meta = item.get("meta") if isinstance(item.get("meta"), dict) else {}
+    asset = _item_asset_dict(item)
+    candidate = meta.get("supplier_candidate")
+    if not isinstance(candidate, dict):
+        candidate = {}
+    asset_base_type = str(asset.get("base_type") or "").strip().lower()
+    asset_subclass = str(asset.get("taxonomy_subclass") or asset.get("fallback_subclass") or asset.get("subclass") or "").strip()
+    asset_material = str(asset.get("material") or asset.get("materials") or "").strip()
+    asset_color = str(asset.get("color") or "").strip()
+    group = str(asset_base_type or candidate.get("semantic_group") or candidate.get("category_norm") or item.get("semantic_group") or item.get("category") or "").strip().lower()
+    if not group:
+        group = str(_item_semantic_group(item) or "").strip().lower()
+    if group in {"pillow", "rug", "wardrobe", "wall_art"}:
+        return _make_exact_supplier_proxy_in_aabb(
+            item=item,
+            aabb=aabb,
+            collection=collection,
+            name=name,
+            group=group,
+        )
+
     build_from_catalog_item = None
     try:
         from src.Plasement.procedural_object_factory_blender import build_from_catalog_item  # type: ignore
@@ -4917,19 +5439,27 @@ def _build_procedural_catalog_proxy_in_aabb(
                 )
                 return None
 
-    meta = item.get("meta") if isinstance(item.get("meta"), dict) else {}
-    candidate = meta.get("supplier_candidate")
-    if not isinstance(candidate, dict):
-        candidate = {}
-
-    group = str(candidate.get("semantic_group") or candidate.get("category_norm") or item.get("semantic_group") or item.get("category") or "").strip().lower()
-    if not group:
-        group = str(_item_semantic_group(item) or "").strip().lower()
     proxy_base_aliases = {
+        "air_freshener": "decor_vase",
+        "bath_mat": "rug",
+        "bathroom_sink": "sink",
+        "compact_sink": "sink",
+        "compact_toilet": "toilet",
+        "hygiene_shower": "wall_light",
+        "laundry_basket": "basket",
         "shelf": "bookshelf",
+        "shampoo_bottle": "decor_vase",
+        "small_bin": "basket",
+        "soap_dispenser": "decor_vase",
         "stool": "chair",
+        "toilet_cabinet": "cabinet",
+        "toilet_paper_holder": "wall_light",
+        "toothbrush_cup": "decor_vase",
+        "towel_rack": "wall_light",
+        "vanity": "sink",
+        "wall_shelf": "bookshelf",
     }
-    base_type = proxy_base_aliases.get(group, group) or fallback_subclass
+    base_type = asset_base_type or proxy_base_aliases.get(group, group) or fallback_subclass
 
     proxy_candidate = dict(candidate)
     for key in ("semantic_group", "base_type"):
@@ -4939,7 +5469,15 @@ def _build_procedural_catalog_proxy_in_aabb(
     if base_type and base_type not in {"", "_"}:
         proxy_candidate["semantic_group"] = base_type
         proxy_candidate["base_type"] = base_type
-    proxy_candidate["category_norm"] = proxy_candidate.get("category_norm") or base_type
+        proxy_candidate["category_norm"] = base_type
+    if asset_subclass:
+        proxy_candidate["subclass"] = asset_subclass
+        proxy_candidate["taxonomy_subclass"] = asset_subclass
+    if asset_material:
+        proxy_candidate["materials"] = asset_material
+        proxy_candidate["material"] = asset_material
+    if asset_color:
+        proxy_candidate["color"] = asset_color
 
     size_m = item.get("size_m")
     if not (isinstance(size_m, list) and len(size_m) >= 3):
@@ -4959,7 +5497,7 @@ def _build_procedural_catalog_proxy_in_aabb(
         built_objs = build_from_catalog_item(
             proxy_candidate,
             loc=(0.0, 0.0, 0.0),
-            fallback_subclass=fallback_subclass,
+            fallback_subclass=asset_subclass or fallback_subclass,
             collection_name=collection.name,
         )
     except Exception as exc:
@@ -5034,6 +5572,90 @@ def _make_local_box_mesh(
     return obj
 
 
+def _try_procedural_requirement_factory_mesh(
+    *,
+    item: Dict,
+    aabb: Dict[str, float],
+    rotation_deg_engine: float,
+    collection: bpy.types.Collection,
+    name: str,
+    role: str,
+) -> Optional[bpy.types.Object]:
+    if role not in {"toilet", "sink", "shower", "bath"}:
+        return None
+
+    proxy_item = copy.deepcopy(item)
+    asset = proxy_item.get("asset") if isinstance(proxy_item.get("asset"), dict) else {}
+    if not isinstance(asset, dict):
+        asset = {}
+    proxy_item["asset"] = asset
+
+    text = " ".join(
+        str(x or "").lower()
+        for x in (
+            proxy_item.get("category"),
+            proxy_item.get("semantic_group"),
+            proxy_item.get("name"),
+            asset.get("taxonomy_subclass"),
+            asset.get("fallback_subclass"),
+        )
+    )
+    fallback_by_role = {
+        "toilet": "floor_mounted_toilet",
+        "sink": "wall_mounted_sink",
+        "shower": "walk_in_shower",
+        "bath": "rectangular_bathtub",
+    }
+
+    if role == "toilet":
+        proxy_item["category"] = "toilet"
+        proxy_item["semantic_group"] = "toilet"
+        asset.setdefault("base_type", "toilet")
+        asset.setdefault("taxonomy_subclass", "compact_toilet" if "compact" in text else "floor_mounted_toilet")
+        asset.setdefault("material", "ceramic")
+        asset.setdefault("color", "#f5f3ee")
+    elif role == "sink":
+        proxy_item["semantic_group"] = "sink"
+        category = str(proxy_item.get("category") or "").strip().lower()
+        if category not in {"vanity", "sink", "bathroom_sink"}:
+            proxy_item["category"] = "sink"
+        asset.setdefault("base_type", "sink")
+        asset.setdefault("taxonomy_subclass", "vanity_sink" if "vanity" in text else "wall_mounted_sink")
+        asset.setdefault("material", "ceramic")
+        asset.setdefault("color", "#f5f2ea")
+    elif role == "shower":
+        proxy_item["category"] = "shower"
+        proxy_item["semantic_group"] = "shower"
+        asset.setdefault("base_type", "shower")
+        asset.setdefault("taxonomy_subclass", "corner_shower" if "compact" in text or "corner" in text else "walk_in_shower")
+        asset.setdefault("material", "glass")
+        asset.setdefault("color", "#dfe8e6")
+    elif role == "bath":
+        proxy_item["category"] = "bathtub"
+        proxy_item["semantic_group"] = "bathtub"
+        asset.setdefault("base_type", "bathtub")
+        asset.setdefault("taxonomy_subclass", "rectangular_bathtub")
+        asset.setdefault("material", "ceramic")
+        asset.setdefault("color", "#f4f0ea")
+
+    subclass = str(asset.get("taxonomy_subclass") or asset.get("fallback_subclass") or "").strip()
+    root = _build_procedural_catalog_proxy_in_aabb(
+        item=proxy_item,
+        aabb=aabb,
+        rotation_deg_engine=rotation_deg_engine,
+        collection=collection,
+        name=name,
+        fit_mode="fit",
+        fallback_subclass=subclass or fallback_by_role[role],
+    )
+    if root is None:
+        return None
+    root["cgs_procedural_requirement"] = role
+    root["cgs_item_id"] = str(item.get("id") or "")
+    root["cgs_procedural_requirement_factory"] = True
+    return root
+
+
 def _make_procedural_requirement_mesh(
     *,
     item: Dict,
@@ -5045,6 +5667,16 @@ def _make_procedural_requirement_mesh(
     role = _procedural_requirement_role(item)
     if not role:
         return None
+    factory_root = _try_procedural_requirement_factory_mesh(
+        item=item,
+        aabb=aabb,
+        rotation_deg_engine=rotation_deg_engine,
+        collection=collection,
+        name=name,
+        role=role,
+    )
+    if factory_root is not None:
+        return factory_root
 
     x1, x2 = float(aabb["x_min"]), float(aabb["x_max"])
     y1, y2 = float(aabb["y_min"]), float(aabb["y_max"])
@@ -5073,7 +5705,10 @@ def _make_procedural_requirement_mesh(
         box("tank", (0.0, sy * 0.32, sz * 0.64), (sx * 0.88, sy * 0.24, sz * 0.56), ceramic)
     elif role == "sink":
         box("basin", (0.0, 0.0, sz * 0.82), (sx, sy, sz * 0.22), ceramic)
-        box("pedestal", (0.0, 0.0, sz * 0.38), (sx * 0.34, sy * 0.34, sz * 0.70), ceramic)
+        support_bottom = -max(0.0, z1)
+        support_top = sz * 0.73
+        support_h = max(0.08, support_top - support_bottom)
+        box("pedestal", (0.0, 0.0, support_bottom + support_h * 0.5), (sx * 0.34, sy * 0.34, support_h), ceramic)
         box("faucet_post", (0.0, sy * 0.18, sz * 1.03), (sx * 0.08, sy * 0.08, sz * 0.22), metal)
         box("faucet_spout", (0.0, sy * 0.04, sz * 1.12), (sx * 0.10, sy * 0.22, sz * 0.06), metal)
     elif role == "shower":
@@ -5368,6 +6003,7 @@ def _make_renderable_bbox_box(
         mod.use_even_offset = True
     except Exception:
         pass
+    obj["cgs_keep_bbox_fallback"] = True
     mat = _make_bbox_wire_material("MAT_REPLACED_BBOX", rgba)
     _assign_material_to_object(obj, mat)
     return obj
@@ -5994,6 +6630,9 @@ def build_room_from_spec(
     floor_uv_scale = 1.0
     wall_uv_scale = 1.0
     floor_tex_mirror = False
+    is_sanitary_room = _is_sanitary_room_spec(r)
+    sanitary_floor_fallback = False
+    sanitary_wall_fallback = False
     if env_textures_dir and os.path.isdir(env_textures_dir):
         tex = _list_env_textures(env_textures_dir)
         rng = random.Random(
@@ -6013,10 +6652,19 @@ def build_room_from_spec(
         floor_tex = supplier_floor_tex
         floor_uv_scale = supplier_floor_uv_scale
         floor_tex_mirror = supplier_floor_mirror
+    elif is_sanitary_room:
+        floor_tex = None
+        floor_uv_scale = 1.0 / 0.6
+        floor_tex_mirror = False
+        sanitary_floor_fallback = True
     supplier_wall_tex, supplier_wall_uv_scale = _wall_material_texture_info(r)
     if supplier_wall_tex:
         wall_tex = supplier_wall_tex
         wall_uv_scale = supplier_wall_uv_scale
+    elif is_sanitary_room:
+        wall_tex = None
+        wall_uv_scale = 1.0 / 0.3
+        sanitary_wall_fallback = True
 
     if verbose:
         print(f"[RoomSpec] ccw={ccw} H={H}")
@@ -6024,14 +6672,23 @@ def build_room_from_spec(
         print(f"[RoomSpec] floor_uv_scale={floor_uv_scale} mirror={floor_tex_mirror}")
         print(f"[RoomSpec] wall_tex ={wall_tex}")
         print(f"[RoomSpec] wall_uv_scale={wall_uv_scale}")
+        print(f"[RoomSpec] sanitary_tile_fallback floor={sanitary_floor_fallback} wall={sanitary_wall_fallback}")
         print(f"[RoomSpec] door_tex ={door_tex}")
         print(f"[RoomSpec] win_tex  ={window_tex}")
 
     floor_mat = (
-        _make_image_material("MAT_ROOM_FLOOR", floor_tex, uv_scale=1.0, extension=("MIRROR" if floor_tex_mirror else "REPEAT"))
-        if floor_tex else None
+        _make_sanitary_floor_material()
+        if sanitary_floor_fallback
+        else (
+            _make_image_material("MAT_ROOM_FLOOR", floor_tex, uv_scale=1.0, extension=("MIRROR" if floor_tex_mirror else "REPEAT"))
+            if floor_tex else None
+        )
     )
-    wall_mat = _make_image_material("MAT_ROOM_WALL", wall_tex, uv_scale=1.0) if wall_tex else None
+    wall_mat = (
+        _make_sanitary_wall_material()
+        if sanitary_wall_fallback
+        else (_make_image_material("MAT_ROOM_WALL", wall_tex, uv_scale=1.0) if wall_tex else None)
+    )
     door_mat = (
         _make_image_material("MAT_ROOM_DOOR", door_tex, uv_scale=1.0)
         if door_tex else _make_pbr_material("MAT_ROOM_DOOR_FALLBACK", PBRMaps(), tint_rgb=(0.62, 0.48, 0.34), tex_scale=1.0)
@@ -6435,16 +7092,28 @@ def place_in_aabb(
                     except Exception:
                         pass
 
-    objs, dropped_clusters = _keep_primary_import_cluster(objs)
-    if dropped_clusters:
-        for meta in dropped_clusters:
-            print(
-                "[DBG] dropping imported distant cluster mesh "
-                f"{meta['name']} diag={meta['diag']:.4f} "
-                f"longest={meta['longest']:.4f} "
-                f"distance_to_origin={meta['distance_to_origin']:.4f}"
-            )
-            obj = bpy.data.objects.get(str(meta["name"]))
+    if filter_mesh_outliers:
+        objs, dropped_clusters = _keep_primary_import_cluster(objs)
+        if dropped_clusters:
+            for meta in dropped_clusters:
+                print(
+                    "[DBG] dropping imported distant cluster mesh "
+                    f"{meta['name']} diag={meta['diag']:.4f} "
+                    f"longest={meta['longest']:.4f} "
+                    f"distance_to_origin={meta['distance_to_origin']:.4f}"
+                )
+                obj = bpy.data.objects.get(str(meta["name"]))
+                if obj is not None:
+                    try:
+                        bpy.data.objects.remove(obj, do_unlink=True)
+                    except Exception:
+                        pass
+
+    objs, dropped_variants = _select_single_import_variant_mesh(objs, semantic_group, aabb)
+    if dropped_variants:
+        for name in dropped_variants:
+            print(f"[DBG] dropping imported alternate {semantic_group} variant {name}")
+            obj = bpy.data.objects.get(name)
             if obj is not None:
                 try:
                     bpy.data.objects.remove(obj, do_unlink=True)
@@ -6482,6 +7151,12 @@ def place_in_aabb(
             # furniture assets include headboards, legs, shelves, shades, etc.,
             # so using the placeholder Z height would incorrectly shrink them.
             k = min(sx, sy)
+            parent.scale = (parent.scale.x * k, parent.scale.y * k, parent.scale.z * k)
+        elif fit_mode_l in {"wall_height", "wall_mounted_height"}:
+            # Wall-mounted plumbing can have a deep bbox because of shower heads,
+            # hoses, or mixer spouts. Fit by real vertical size; depth is allowed
+            # to protrude from the wall instead of shrinking the whole asset.
+            k = sz
             parent.scale = (parent.scale.x * k, parent.scale.y * k, parent.scale.z * k)
         elif fit_mode_l in {"curtain_soft_width", "curtain_window_soft_width"}:
             width_squeeze = 0.92
@@ -6552,6 +7227,7 @@ def place_in_aabb(
             )
         )
 
+        fit_mode_l = (fit_mode or "stretch").lower()
         max_ratio = 1.85
         axis_failures: List[str] = []
         oversize_penalty = 0.0
@@ -6563,6 +7239,9 @@ def place_in_aabb(
             if tgt_val <= 1e-6:
                 continue
             ratio = cur_val / tgt_val
+            if fit_mode_l in {"wall_height", "wall_mounted_height"} and axis_name in {"x", "y"}:
+                oversize_penalty += min(abs(ratio - 1.0), 0.45)
+                continue
             oversize_penalty += abs(ratio - 1.0)
             if ratio > max_ratio:
                 axis_failures.append(f"{axis_name}:{ratio:.3f}")
@@ -6604,7 +7283,7 @@ def place_in_aabb(
             return None
         if fit_mode_l == "trellis_stretch":
             return None
-        if fit_mode_l in {"uniform", "curtain_soft_width", "curtain_window_soft_width"}:
+        if fit_mode_l in {"uniform", "wall_height", "wall_mounted_height", "curtain_soft_width", "curtain_window_soft_width"}:
             return None
         if not _rigid_supplier_group(semantic_group):
             return None
@@ -6991,10 +7670,12 @@ def build_scene(
                 aabb_eng["z_max"] = float(z_ceil)
                 aabb_eng["z_min"] = float(z_ceil) - sz
 
+        lock_item_rotation = _should_lock_supplier_rotation(it, semantic_group)
         rot_raw = _item_yaw_deg(it.get("rotation", it.get("yaw_deg", it.get("rotation_deg", 0.0))))
-        rot_deg = _quantize_rot_0_90_180_270(rot_raw)
+        rot_deg = (float(rot_raw or 0.0) % 360.0) if lock_item_rotation else _quantize_rot_0_90_180_270(rot_raw)
 
         fit_mode = _item_mesh_fit_mode(it)
+        mesh_rotation_deg = (float(rot_deg or 0.0) + _item_mesh_yaw_offset_deg(it)) % 360.0
 
         mesh_path_raw = _item_mesh_path_raw(it)
         mesh_path = _resolve_path_maybe(json_dir, mesh_path_raw)
@@ -7087,8 +7768,6 @@ def build_scene(
                     if created_kitchen:
                         root = bpy.data.objects.new(f"{name}_procedural_root", None)
                         coll_items.objects.link(root)
-                        root.location = tuple(float(v) for v in (assembly.get("_scene_root_position") or [0.0, 0.0, 0.0])[:3])
-                        root.rotation_euler[2] = math.radians(float(rot_deg or 0.0))
                         created_set = set(created_kitchen)
                         parented_roots = set()
                         for obj in created_kitchen:
@@ -7109,6 +7788,8 @@ def build_scene(
                                 obj["cgs_procedural_assembly"] = "kitchen"
                             except Exception:
                                 pass
+                        root.location = tuple(float(v) for v in (assembly.get("_scene_root_position") or [0.0, 0.0, 0.0])[:3])
+                        root.rotation_euler[2] = math.radians(float(rot_deg or 0.0))
                         root["cgs_item_id"] = item_id
                         root["cgs_procedural_assembly"] = "kitchen"
                         placed_ok = True
@@ -7189,9 +7870,11 @@ def build_scene(
                 best_mesh_path: Optional[str] = None
                 best_imported_from: Optional[str] = None
                 best_candidate: Optional[dict] = None
+                best_group_glb_cache: Optional[str] = None
                 best_total_score = float("inf")
                 last_error: Optional[str] = None
                 rejected_candidate_reasons: List[str] = []
+                preserve_import_group = _should_preserve_imported_group(it, semantic_group)
 
                 for rank_idx, supplier_candidate, candidate_mesh_path in candidate_specs:
                     reuse_reject = _supplier_candidate_reuse_reject_reason(it, supplier_candidate, supplier_reuse_size_index)
@@ -7212,6 +7895,7 @@ def build_scene(
                     print(f"[DBG] mesh_candidates for {name}: {mesh_candidates[:8]}")
 
                     imported_from: Optional[str] = None
+                    group_glb_cache: Optional[str] = None
                     objs: List[bpy.types.Object] = []
                     for candidate_path in mesh_candidates:
                         ext = os.path.splitext(candidate_path)[1].lower()
@@ -7230,6 +7914,12 @@ def build_scene(
                                 last_error = "imported_asset_has_no_mesh_objects"
                                 continue
                             imported_from = candidate_path
+                            if preserve_import_group:
+                                group_glb_cache = _export_import_group_glb_cache(
+                                    objs,
+                                    candidate_path,
+                                    verbose=verbose,
+                                )
                             print(f"[DBG] import_supported_mesh returned {len(objs)} objects for {name}")
                             print(f"[DBG] bpy created {len(created_names)} objects for {name}: {created_names[:20]}")
                             break
@@ -7250,7 +7940,7 @@ def build_scene(
                     parent = place_in_aabb(
                         objs=objs,
                         aabb=aabb_eng,
-                        rotation_deg_engine=rot_deg,
+                        rotation_deg_engine=mesh_rotation_deg,
                         fit_mode=fit_mode,
                         parent_name=name,
                         collection=coll_items,
@@ -7259,14 +7949,16 @@ def build_scene(
                         semantic_group=semantic_group,
                         snap_to_ceiling=is_ceiling_item,
                         ceiling_offset=0.0,
-                        lock_rotation=bool(
-                            (semantic_group in {"chair", "armchair"} and str(meta.get("affordance") or "").strip().lower() == "table_chair")
-                            or (semantic_group == "bed" and bool(meta.get("bed_headboard_repaired")))
-                        ),
+                        lock_rotation=lock_item_rotation,
                         fit_target_size_m=fit_target_size_m,
+                        filter_mesh_outliers=not preserve_import_group,
                     )
                     if parent is None:
                         continue
+                    if preserve_import_group:
+                        parent["cgs_preserved_import_group"] = True
+                        if group_glb_cache:
+                            parent["cgs_group_glb_cache"] = group_glb_cache
 
                     placement_score = float(parent.get("cgs_placement_score") or 999999.0)
                     total_score = placement_score + (max(rank_idx, 0) * 0.08)
@@ -7276,6 +7968,7 @@ def build_scene(
                         best_mesh_path = candidate_mesh_path
                         best_imported_from = imported_from
                         best_candidate = supplier_candidate if isinstance(supplier_candidate, dict) else None
+                        best_group_glb_cache = group_glb_cache
                         best_total_score = total_score
                     else:
                         _remove_object_family(parent)
@@ -7295,6 +7988,8 @@ def build_scene(
                         selected_key = str(best_candidate.get("unique_key") or "").strip()
                         if selected_key and primary_key and selected_key != primary_key:
                             item_issue_reasons.setdefault(item_id, []).append(f"used_alternative_candidate:{selected_key}")
+                    if best_group_glb_cache:
+                        parent["cgs_group_glb_cache"] = best_group_glb_cache
 
                     if source_scene_obj is not None and source_blend_name not in hidden_reference_sources:
                         shared_items = source_name_to_items.get(source_blend_name) or []
@@ -7364,7 +8059,29 @@ def build_scene(
                             )
                 else:
                     print(f"⚠️ {name}: Не удалось импортировать модель: {mesh_path}; last_error={last_error}")
-                if (not placed_ok) and source_scene_obj is not None and meta.get("supplier_binding_applied"):
+                    if _is_replacement_render_item(it):
+                        proxy_parent = _build_procedural_catalog_proxy_in_aabb(
+                            item=it,
+                            aabb=aabb_eng,
+                            rotation_deg_engine=rot_deg,
+                            collection=coll_items,
+                            name=name,
+                            fit_mode=fit_mode,
+                        )
+                        if proxy_parent is not None:
+                            parent = proxy_parent
+                            placed_ok = True
+                            if item_id:
+                                item_roots[item_id] = parent
+                                actual_aabb = _aabb_from_object_family_root(parent)
+                                if actual_aabb is not None:
+                                    item_actual_aabbs[item_id] = actual_aabb
+                                item_issue_reasons.setdefault(item_id, []).append("supplier_proxy_fallback_after_import_failure")
+                            if source_scene_obj is not None and source_blend_name not in hidden_reference_sources:
+                                _hide_object_family(source_scene_obj)
+                                hidden_reference_sources.add(source_blend_name)
+                allow_reference_fallback = not _is_replacement_render_item(it)
+                if (not placed_ok) and source_scene_obj is not None and meta.get("supplier_binding_applied") and allow_reference_fallback:
                     using_reference_object = True
                     placed_ok = True
                     print(f"[DBG] supplier mesh fallback to reference scene object for {name}: {source_blend_name}")
@@ -7382,9 +8099,14 @@ def build_scene(
                         actual_aabb = _aabb_from_object_family_root(source_scene_obj)
                         if actual_aabb is not None:
                             item_actual_aabbs[item_id] = actual_aabb
+                elif (not placed_ok) and source_scene_obj is not None and meta.get("supplier_binding_applied") and not allow_reference_fallback:
+                    _hide_object_family(source_scene_obj)
+                    hidden_reference_sources.add(source_blend_name)
+                    if item_id:
+                        item_issue_reasons.setdefault(item_id, []).append("supplier_reference_fallback_disabled")
                 elif (not placed_ok) and rejected_candidate_reasons and item_id:
                     item_issue_reasons.setdefault(item_id, []).extend(rejected_candidate_reasons)
-            elif source_scene_obj is not None:
+            elif source_scene_obj is not None and not _is_replacement_render_item(it):
                 using_reference_object = True
                 placed_ok = True
                 _show_object_family(source_scene_obj)
@@ -7402,12 +8124,19 @@ def build_scene(
                     actual_aabb = _aabb_from_object_family_root(source_scene_obj)
                     if actual_aabb is not None:
                         item_actual_aabbs[item_id] = actual_aabb
+            elif source_scene_obj is not None and _is_replacement_render_item(it):
+                _hide_object_family(source_scene_obj)
+                hidden_reference_sources.add(source_blend_name)
             elif not placed_ok:
                 print(f"⚠️ {name}: mesh_path не найден в placement/asset или файл отсутствует: {mesh_path_raw}")
 
         force_bbox = overlay_bbox_only or force_placeholder_bbox
         highlight_bbox = bool(overlay_bbox_only and item_id and item_id in (highlight_item_ids or set()))
-        want_bbox_fallback = bool(bbox_fallback_missing_mesh and (not placed_ok) and (not using_reference_object))
+        want_bbox_fallback = bool(
+            (bbox_fallback_missing_mesh or _is_replacement_render_item(it))
+            and (not placed_ok)
+            and (not using_reference_object)
+        )
         skip_placeholder_bbox = _should_skip_placeholder_bbox(it)
         if highlight_bbox:
             _make_renderable_bbox_box(aabb_eng, name, coll_items)

@@ -4,6 +4,7 @@ import copy
 import math
 import random
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Sequence
 
 from .geometry import (
@@ -76,6 +77,11 @@ def _default_accessory_slots(category: str) -> list[dict[str, Any]]:
     else:
         names = ["top.center"]
     return [{"id": name, "surface": name.split(".", 1)[0]} for name in names]
+
+
+def _asset_format_from_path(path: str) -> str:
+    suffix = Path(path).suffix.strip().lower().lstrip(".")
+    return suffix or "fbx"
 
 
 def clamp_center_inside_room_for_aabb(
@@ -268,6 +274,46 @@ class PlacementEngine:
             if extra_meta.get("front_target"):
                 meta["front_target"] = extra_meta["front_target"]
 
+        asset_source = spec.asset_source or "supplier_catalog_local_asset"
+        if spec.asset_mesh_path:
+            mesh_path = Path(spec.asset_mesh_path).expanduser()
+            if not mesh_path.is_absolute():
+                mesh_path = mesh_path.resolve()
+            asset = {
+                "kind": spec.asset_kind or "supplier_catalog_asset",
+                "source_kind": asset_source,
+                "asset_source": asset_source,
+                "asset_format": spec.asset_format or _asset_format_from_path(str(mesh_path)),
+                "mesh_path": str(mesh_path),
+                "mesh_fit_mode": spec.asset_fit_mode or "uniform",
+            }
+        else:
+            asset = {
+                "kind": "procedural_placeholder",
+                "mesh_fit_mode": "fit",
+            }
+        if spec.proxy_base_type:
+            asset["base_type"] = spec.proxy_base_type
+        if spec.proxy_subclass:
+            asset["taxonomy_subclass"] = spec.proxy_subclass
+            asset["fallback_subclass"] = spec.proxy_subclass
+        if spec.proxy_material:
+            asset["material"] = spec.proxy_material
+        if spec.proxy_color:
+            asset["color"] = spec.proxy_color
+        item_mount_type = mount_type or spec.mount_type
+        item_constraints = dict(constraints or {"requires_access": bool(spec.requires_access)})
+        item_constraints.setdefault("mount_type", item_mount_type)
+
+        source = {
+            "placement_source": self.source_name,
+            "generator": self.generator_name,
+            "archetype": self.archetype,
+        }
+        if spec.asset_mesh_path:
+            source["asset_source"] = asset_source
+            source["source_kind"] = asset_source
+
         return {
             "id": self.next_id(item_category),
             "name": name or spec.name,
@@ -280,18 +326,11 @@ class PlacementEngine:
             "yaw_rad": math.radians(yaw),
             "rotation": [0.0, 0.0, yaw],
             "aabb": aabb.to_json(),
-            "mount_type": mount_type or spec.mount_type,
+            "mount_type": item_mount_type,
             "wall_contact_side": wall_contact_side,
-            "constraints": constraints or {"requires_access": bool(spec.requires_access)},
-            "asset": {
-                "kind": "procedural_placeholder",
-                "mesh_fit_mode": "fit",
-            },
-            "source": {
-                "placement_source": self.source_name,
-                "generator": self.generator_name,
-                "archetype": self.archetype,
-            },
+            "constraints": item_constraints,
+            "asset": asset,
+            "source": source,
             "meta": meta,
         }
 
@@ -547,7 +586,9 @@ class PlacementEngine:
         first_rejection: dict[str, Any] | None = None
         for center in ordered:
             clamped_center = clamp_center_inside_room_for_aabb(center, spec.size_m, polygon=self.ctx.polygon, margin=0.03)
-            ok, reason = self.can_place(clamped_center, spec.size_m, 0.0, allow_collision=spec.allow_collision, margin=0.02)
+            target_vec = self.ctx.centroid - clamped_center
+            yaw = yaw_for_local_y_to_vector(target_vec) if target_vec.length() > 1e-6 else 0.0
+            ok, reason = self.can_place(clamped_center, spec.size_m, yaw, allow_collision=spec.allow_collision, margin=0.02)
             if not ok:
                 if first_rejection is None:
                     first_rejection = {
@@ -556,10 +597,10 @@ class PlacementEngine:
                         "reason": reason,
                         "center": [clamped_center.x, clamped_center.y],
                         "size_m": list(spec.size_m),
-                        "yaw_deg": 0.0,
+                        "yaw_deg": yaw,
                     }
                 continue
-            item = self.make_item(spec, clamped_center, 0.0, category=category, name=name)
+            item = self.make_item(spec, clamped_center, yaw, category=category, name=name, front_target="room_center")
             self.placements.append(item)
             return item
         if first_rejection:

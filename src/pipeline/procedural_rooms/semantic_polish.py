@@ -248,6 +248,16 @@ def _intersects_xy(a: dict[str, float], b: dict[str, float], margin: float = 0.0
     )
 
 
+def _solid_overlap_margin(a: dict[str, Any], b: dict[str, Any]) -> float:
+    meta_a = a.get("meta") if isinstance(a.get("meta"), dict) else {}
+    meta_b = b.get("meta") if isinstance(b.get("meta"), dict) else {}
+    if bool(meta_a.get("compact_bathroom_template")) and bool(meta_b.get("compact_bathroom_template")):
+        return 0.0
+    if str(meta_a.get("door_swing_assumption") or "") == "outward_or_sliding" and str(meta_b.get("door_swing_assumption") or "") == "outward_or_sliding":
+        return 0.0
+    return 0.02
+
+
 def normalize_item_semantics(item: dict[str, Any]) -> None:
     category = _category(item)
     meta = _meta(item)
@@ -535,7 +545,7 @@ def repair_wall_mounted_overlaps(items: list[dict[str, Any]], *, room: dict[str,
                 continue
             if _category(item) in {"headboard", "curtain"} or _category(other) in {"headboard", "curtain"}:
                 continue
-            if _intersects_xy(aabb, other_aabb, margin=0.03):
+            if _intersects_xy(aabb, other_aabb, margin=0.03) and _intersects_z(aabb, other_aabb, margin=0.03):
                 overlaps = True
                 break
         if overlaps:
@@ -544,6 +554,10 @@ def repair_wall_mounted_overlaps(items: list[dict[str, Any]], *, room: dict[str,
         kept.append(item)
         kept_wall_aabbs.append((item, aabb))
     return kept, removed
+
+
+def _intersects_z(a: dict[str, float], b: dict[str, float], *, margin: float = 0.0) -> bool:
+    return not (a["z_max"] <= b["z_min"] + margin or b["z_max"] <= a["z_min"] + margin)
 
 
 def _axis_gap(a: dict[str, float], b: dict[str, float]) -> float:
@@ -640,7 +654,8 @@ def repair_solid_floor_overlaps(items: list[dict[str, Any]]) -> tuple[list[dict[
 
         overlapping_index: int | None = None
         for idx, (_other, other_aabb) in enumerate(kept_aabbs):
-            if _intersects_xy(aabb, other_aabb, margin=0.02):
+            margin = _solid_overlap_margin(item, _other)
+            if _intersects_xy(aabb, other_aabb, margin=margin):
                 overlapping_index = idx
                 break
         if overlapping_index is None:

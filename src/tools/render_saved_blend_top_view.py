@@ -80,6 +80,26 @@ def _hide_ceiling_caps() -> int:
     return hidden
 
 
+def _hide_exterior_shell_objects() -> int:
+    hidden = 0
+    for obj in bpy.context.scene.objects:
+        if obj.type != "MESH" or obj.hide_get() or obj.hide_render:
+            continue
+        name = obj.name.lower()
+        is_exterior = (
+            ".exterior" in name
+            or name.endswith("/0.exterior")
+            or name.endswith("_exterior")
+            or "room_exterior" in name
+            or "preview_exterior" in name
+        )
+        if is_exterior:
+            obj.hide_render = True
+            obj.hide_set(True)
+            hidden += 1
+    return hidden
+
+
 def _delete_large_top_cap_faces(bb_min: mathutils.Vector, bb_max: mathutils.Vector) -> int:
     scene_z_max = float(bb_max.z)
     xy_area = max(float((bb_max.x - bb_min.x) * (bb_max.y - bb_min.y)), 1e-6)
@@ -151,6 +171,8 @@ def _is_wall_render_candidate(obj: bpy.types.Object) -> bool:
     return (
         is_room_shell
         or
+        name.startswith("preview_wall_")
+        or
         "room_wall" in name
         or "room_wallpaper" in name
         or "/0.wall" in name
@@ -177,6 +199,21 @@ def _restore_wall_state(state: dict[str, tuple[bool, bool, bpy.types.Mesh]]) -> 
         obj.data = mesh
         obj.hide_render = hide_render
         obj.hide_set(hide_viewport)
+
+
+def _hide_preview_wall_ids(wall_ids: set[str]) -> int:
+    if not wall_ids:
+        return 0
+    hidden = 0
+    prefixes = tuple(f"preview_wall_{wall_id}_" for wall_id in wall_ids)
+    for obj in bpy.context.scene.objects:
+        name = obj.name
+        if not name.startswith(prefixes):
+            continue
+        obj.hide_render = True
+        obj.hide_set(True)
+        hidden += 1
+    return hidden
 
 
 def _side_key_for_point(
@@ -279,6 +316,10 @@ def _hide_nearest_room_walls(
                 bm.to_mesh(new_mesh)
                 new_mesh.update()
                 obj.data = new_mesh
+                hidden_count += len(faces_to_delete)
+            elif faces_to_delete and len(faces_to_delete) == len(bm.faces):
+                obj.hide_render = True
+                obj.hide_set(True)
                 hidden_count += len(faces_to_delete)
         finally:
             bm.free()
@@ -585,6 +626,9 @@ def main() -> None:
         help="Render engine for review frames. workbench uses material-color viewport preview style.",
     )
     parser.add_argument("--transparent-background", action="store_true")
+    parser.add_argument("--hide-nearest-walls", action="store_true")
+    parser.add_argument("--hide-exterior", action="store_true")
+    parser.add_argument("--hide-wall-ids", default="", help="Comma-separated preview wall ids to hide, e.g. w0,w1. Window/door opening meshes are preserved.")
     parser.add_argument("--scene-json", type=Path, default=None)
     parser.add_argument("--target-ids", default="")
     parser.add_argument("--label-ids", default="")
@@ -637,8 +681,15 @@ def main() -> None:
             label_by_id,
         )
         print(f"Labeled scene objects: {labeled}")
+    if args.hide_exterior:
+        hidden_exteriors = _hide_exterior_shell_objects()
+        print(f"Hidden exterior shell objects: {hidden_exteriors}")
     hidden_ceilings = _hide_ceiling_caps()
     print(f"Hidden ceiling/top cap objects: {hidden_ceilings}")
+    hidden_wall_ids = {item.strip() for item in str(args.hide_wall_ids or "").split(",") if item.strip()}
+    hidden_explicit_walls = _hide_preview_wall_ids(hidden_wall_ids)
+    if hidden_explicit_walls:
+        print(f"Hidden explicit preview wall objects: {hidden_explicit_walls} ({','.join(sorted(hidden_wall_ids))})")
     bb_min, bb_max = _visible_mesh_bounds()
     deleted_top_faces = _delete_large_top_cap_faces(bb_min, bb_max)
     if deleted_top_faces:
@@ -774,7 +825,7 @@ def main() -> None:
             float(args.elevation_deg),
             float(args.radius_mult),
             float(args.lens),
-            False,
+            bool(args.hide_nearest_walls),
             None,
         )
     if args.save_blend:

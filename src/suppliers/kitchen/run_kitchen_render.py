@@ -824,9 +824,8 @@ def _build_dining_items(
             warnings.append(f"dining_{role}_llm_fallback:{report.get('reason')}")
 
     def face_table_yaw(x: float, y: float) -> float:
-        # Chair placeholder/models use local +Y for the back, so add 180 deg
-        # to make the seating side face the table center.
-        return (math.degrees(math.atan2(cx - x, cy - y)) + 180.0 + 360.0) % 360.0
+        # Supplier dining chairs use local +Y as the seating/front direction.
+        return (math.degrees(math.atan2(cx - x, cy - y)) + 360.0) % 360.0
 
     for idx, side in enumerate((-1.0, 1.0), start=1):
         chair_x = min(max(cx + nx * side * chair_gap, min_x + 0.25), max_x - 0.25)

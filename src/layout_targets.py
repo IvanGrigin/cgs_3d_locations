@@ -43,6 +43,10 @@ _SEMANTIC_ALIASES: dict[str, tuple[str, ...]] = {
     "decorative_set": ("decorative set", "decorative_set", "olive and oil", "oil decorative", "декоративный набор"),
     "plant_planter_vase": ("plant planter vase", "plant_planter_vase", "flower vase", "flower bouquet", "букет", "ваза"),
     "plant": ("plant",),
+    "pillow": ("pillow", "подушка", "подушки"),
+    "blanket": ("blanket", "throw blanket", "плед", "одеяло", "покрывало"),
+    "mattress": ("mattress", "матрас"),
+    "towel": ("towel", "полотенце"),
 }
 
 _SUPPLIER_REPLACE_GROUPS = {
@@ -71,6 +75,7 @@ _SUPPLIER_REPLACE_GROUPS = {
     "food_drink",
     "decorative_set",
     "plant_planter_vase",
+    "pillow",
 }
 
 _KEEP_GENERATED_GROUPS = {
@@ -88,6 +93,10 @@ _CATEGORY_TO_SEMANTIC_GROUP = {
     "table_lamp": "lamp_table",
     "wall_light": "lamp_wall",
     "runner_rug": "rug",
+    "pillowfactory": "pillow",
+    "blanketfactory": "blanket",
+    "mattressfactory": "mattress",
+    "towelfactory": "towel",
 }
 
 _PROCEDURAL_KEEP_CATEGORIES = {

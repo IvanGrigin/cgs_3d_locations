@@ -98,6 +98,16 @@ def _gap_between(a: AABB, b: AABB) -> float:
     )
 
 
+def _collision_margin_for_pair(a: dict[str, Any], b: dict[str, Any]) -> float:
+    meta_a = a.get("meta") if isinstance(a.get("meta"), dict) else {}
+    meta_b = b.get("meta") if isinstance(b.get("meta"), dict) else {}
+    if bool(meta_a.get("compact_bathroom_template")) and bool(meta_b.get("compact_bathroom_template")):
+        return 0.0
+    if str(meta_a.get("door_swing_assumption") or "") == "outward_or_sliding" and str(meta_b.get("door_swing_assumption") or "") == "outward_or_sliding":
+        return 0.0
+    return 0.02
+
+
 def _sample_access_points(aabb: AABB, *, clearance: float = 0.45, step: float = 0.15) -> list[tuple[float, float]]:
     points: list[tuple[float, float]] = []
     y = aabb.y_min
@@ -310,7 +320,7 @@ def validate_placements(ctx: RoomContext, placements: list[dict[str, Any]]) -> d
                 dx = abs(cx - as_float(pos[0]))
                 dy = abs(cy - as_float(pos[1]))
                 dz = abs(cz - as_float(pos[2]))
-                center_eps = 0.01 if role in {"wall_mounted", "ceiling_mounted"} else eps
+                center_eps = 0.01
                 if dx > center_eps or dy > center_eps or dz > center_eps:
                     aabb_center_mismatches.append(
                         {
@@ -339,6 +349,10 @@ def validate_placements(ctx: RoomContext, placements: list[dict[str, Any]]) -> d
 
         for zone in ctx.door_clearance_zones:
             if aabb.intersects_xy(zone, margin=0.0):
+                if ctx.room_type == "toilet" and category == "toilet":
+                    continue
+                if bool(meta.get("door_clearance_exempt")):
+                    continue
                 door_violations.append({"id": item.get("id"), "category": category})
         for zone in ctx.window_clearance_zones:
             if aabb.intersects_xy(zone, margin=0.0):
@@ -348,7 +362,8 @@ def validate_placements(ctx: RoomContext, placements: list[dict[str, Any]]) -> d
         item_a, aabb_a = solid_items[i]
         for j in range(i + 1, len(solid_items)):
             item_b, aabb_b = solid_items[j]
-            if aabb_a.intersects_xy(aabb_b, margin=0.02):
+            margin = _collision_margin_for_pair(item_a, item_b)
+            if aabb_a.intersects_xy(aabb_b, margin=margin):
                 collisions.append(
                     {
                         "a": item_a.get("id"),
@@ -376,7 +391,7 @@ def validate_placements(ctx: RoomContext, placements: list[dict[str, Any]]) -> d
     if ctx.room_type == "toilet" and "toilet" not in categories:
         required_missing.append({"category": "toilet", "reason": "required_toilet_missing"})
     if ctx.room_type == "bathroom":
-        if "sink" not in categories:
+        if not ({"sink", "vanity"} & categories):
             required_missing.append({"category": "sink", "reason": "required_sink_missing"})
         if not ({"bathtub", "shower"} & categories):
             required_missing.append({"category": "bathtub_or_shower", "reason": "required_bathing_fixture_missing"})

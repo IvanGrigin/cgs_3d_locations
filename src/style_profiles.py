@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import re
 from copy import deepcopy
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
@@ -412,6 +413,13 @@ STYLE_PROFILE_ALIASES = {
 }
 
 
+_ROOM_TYPE_TOKEN_RE = re.compile(r"[A-Za-zА-Яа-я0-9_/\-+]+")
+
+
+def _room_type_tokens(value: Any) -> set[str]:
+    return set(_ROOM_TYPE_TOKEN_RE.findall(str(value or "").lower().replace("ё", "е")))
+
+
 def _normalize_room_type(value: Any) -> str:
     text = str(value or "").strip().lower()
     mapping = {
@@ -430,7 +438,12 @@ def _normalize_room_type(value: Any) -> str:
 
 def infer_room_type_from_prompt(prompt_text: str, room_path: str | None = None) -> str:
     low = str(prompt_text or "").lower()
-    if any(token in low for token in ("bathroom", "ван", "сануз", "toilet")):
+    tokens = _room_type_tokens(low)
+    bathroom_tokens = {"bathroom", "toilet", "wc", "lavatory", "ванна", "ванну", "туалет"}
+    if (
+        tokens & bathroom_tokens
+        or any(token.startswith("ванн") or token.startswith("сануз") or token.startswith("туалет") for token in tokens)
+    ):
         return "Bathroom"
     if any(token in low for token in ("kitchen", "кух")):
         return "Kitchen"

@@ -820,6 +820,7 @@ def build_trellis_args(
         image_size=args.trellis_image_size,
         fill_holes_resolution=args.trellis_fill_holes_resolution,
         fill_holes_num_views=args.trellis_fill_holes_num_views,
+        force_trellis_image_only=bool(getattr(args, "trellis_force_image_only", False)),
         trellis_max_candidate_pool=args.trellis_max_candidate_pool,
         remote_runner_path=args.trellis_remote_runner_path,
         image_source_index=0,
@@ -929,7 +930,9 @@ def enrich_missing_assets_with_trellis(
         if str(value).strip()
     }
     trellis_ikea_mebelru_images_only = bool(getattr(args, "trellis_ikea_mebelru_images_only", False))
+    trellis_force_all_selected_assets = bool(getattr(args, "trellis_force_all_selected_assets", False))
     report["ikea_mebelru_images_only"] = trellis_ikea_mebelru_images_only
+    report["force_all_selected_assets"] = trellis_force_all_selected_assets
     for binding in bindings:
         if not isinstance(binding, dict):
             continue
@@ -955,7 +958,7 @@ def enrich_missing_assets_with_trellis(
                 }
             )
             continue
-        if candidate_has_supported_local_asset(candidate):
+        if candidate_has_supported_local_asset(candidate) and not trellis_force_all_selected_assets:
             report["skipped_count"] += 1
             report["items"].append({"target_id": target_id, "unique_key": unique_key, "status": "skipped_existing_local_asset"})
             continue
@@ -1148,6 +1151,7 @@ def enrich_missing_assets_with_trellis(
         "disabled_after_oom": bool(disabled_after_oom_reason),
         "disabled_after_oom_reason": disabled_after_oom_reason or None,
         "ikea_mebelru_images_only": trellis_ikea_mebelru_images_only,
+        "force_all_selected_assets": trellis_force_all_selected_assets,
     }
     write_json(output_json_path, data)
     write_json(out_dir / "trellis_missing_assets.report.json", report)
@@ -2449,6 +2453,16 @@ def build_cli() -> argparse.ArgumentParser:
         dest="trellis_ikea_mebelru_images_only",
         action="store_true",
         help="For TRELLIS fallback cards, keep only IKEA/mebel.ru candidates and image sources.",
+    )
+    trellis.add_argument(
+        "--trellis-force-all-selected-assets",
+        action="store_true",
+        help="Generate TRELLIS.2 GLBs for selected supplier candidates even when a local FBX/OBJ/GLB already exists.",
+    )
+    trellis.add_argument(
+        "--trellis-force-image-only",
+        action="store_true",
+        help="Disable direct supplier FBX/OBJ/GLB shortcuts and force TRELLIS.2 image-to-3D generation.",
     )
     trellis.add_argument("--trellis-server-host", default="")
 

@@ -17,12 +17,21 @@ from typing import Any
 REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
+TOILET_REQUIRED = ("toilet",)
+BATHROOM_REQUIRED = ("sink", "bath_or_shower")
 SANITARY_REQUIRED = ("toilet", "sink", "bath_or_shower")
+KITCHEN_BACK_CLEARANCE_M = 0.12
 SCENE_CANDIDATES = (
+    "pipeline/optimal/scene_requirements.v1.json",
     "pipeline/optimal/scene_supplier.optimal.v1.flooring.v1.wall_material.v1.curtains.v1.json",
     "pipeline/optimal/scene_supplier.optimal.v1.flooring.v1.wall_material.v1.json",
     "pipeline/optimal/scene_supplier.optimal.v1.flooring.v1.json",
     "pipeline/optimal/scene_supplier.optimal.v1.json",
+    "pipeline/optimal/scene_supplier_procedural.optimal.v1.flooring.v1.wall_material.v1.curtains.v1.json",
+    "pipeline/optimal/scene_supplier_procedural.optimal.v1.flooring.v1.wall_material.v1.json",
+    "pipeline/optimal/scene_supplier_procedural.optimal.v1.flooring.v1.json",
+    "pipeline/optimal/scene_supplier_procedural.optimal.v1.json",
+    "pipeline/optimal/scene_procedural_room.standalone.v1.json",
     "pipeline/optimal/scene.v1.flooring.v1.wall_material.v1.curtains.v1.json",
     "pipeline/optimal/scene.v1.flooring.v1.wall_material.v1.json",
     "pipeline/optimal/scene.v1.json",
@@ -183,6 +192,12 @@ def classify_item(item: dict[str, Any]) -> set[str]:
 def room_items(scene: dict[str, Any]) -> list[dict[str, Any]]:
     items = scene.get("placements") or scene.get("items") or []
     return [x for x in items if isinstance(x, dict)]
+
+
+def sync_scene_items_to_placements(scene: dict[str, Any]) -> None:
+    placements = scene.get("placements")
+    if isinstance(placements, list):
+        scene["items"] = deepcopy(placements)
 
 
 def room_bounds(room: dict[str, Any]) -> tuple[float, float]:
@@ -449,6 +464,20 @@ def _subtract_wall_intervals(length: float, blocked: list[tuple[float, float]]) 
     return free
 
 
+def _interval_overlap_len(a: tuple[float, float], b: tuple[float, float]) -> float:
+    return max(0.0, min(float(a[1]), float(b[1])) - max(float(a[0]), float(b[0])))
+
+
+def _kitchen_wall_yaw_deg(tangent: tuple[float, float], normal: tuple[float, float]) -> float:
+    # Local kitchen +X runs along the wall; local +Y is the cabinet front.
+    yaw = (math.degrees(math.atan2(tangent[1], tangent[0])) + 360.0) % 360.0
+    theta = math.radians(yaw)
+    front = (-math.sin(theta), math.cos(theta))
+    if front[0] * normal[0] + front[1] * normal[1] < 0.0:
+        yaw = (yaw + 180.0) % 360.0
+    return yaw
+
+
 def _rotated_rect_aabb(
     origin: tuple[float, float],
     tangent: tuple[float, float],
@@ -482,7 +511,12 @@ def _choose_window_safe_kitchen_wall(room: dict[str, Any], width: float, depth: 
     min_target = min(max(2.15, width * 0.58), width)
     candidates: list[dict[str, Any]] = []
     for wall in walls:
-        if _wall_blocked_intervals(room, wall, include_windows=True, include_doors=False):
+        window_intervals = _wall_blocked_intervals(room, wall, include_windows=True, include_doors=False)
+        # Do not anchor the main kitchen line on a window wall. In apartment
+        # assembly those walls are usually exterior contours, and a cabinet row
+        # there reads as being outside/inside the wall even when its AABB is
+        # technically inside the room polygon.
+        if window_intervals:
             continue
         blocked = _wall_blocked_intervals(room, wall, include_windows=True, include_doors=True)
         for start, end in _subtract_wall_intervals(float(wall["length"]), blocked):
@@ -491,11 +525,13 @@ def _choose_window_safe_kitchen_wall(room: dict[str, Any], width: float, depth: 
                 continue
             target_width = min(width, max(min_target, free_len - 0.06))
             start_along = start + max(0.02, (free_len - target_width) * 0.5)
+            span = (start_along, start_along + target_width)
+            window_overlap = sum(_interval_overlap_len(span, interval) for interval in window_intervals)
             tangent = wall["tangent"]
             normal = wall["normal"]
             origin = (
-                wall["p1"][0] + tangent[0] * start_along + normal[0] * 0.018,
-                wall["p1"][1] + tangent[1] * start_along + normal[1] * 0.018,
+                wall["p1"][0] + tangent[0] * start_along + normal[0] * KITCHEN_BACK_CLEARANCE_M,
+                wall["p1"][1] + tangent[1] * start_along + normal[1] * KITCHEN_BACK_CLEARANCE_M,
             )
             aabb = _rotated_rect_aabb(origin, tangent, normal, target_width, depth, 0.0, height)
             if not _aabb_inside_room_polygon(aabb, room, margin=0.08):
@@ -504,7 +540,8 @@ def _choose_window_safe_kitchen_wall(room: dict[str, Any], width: float, depth: 
                 _aabb_xy_overlap_area(aabb, zone) * 8.0
                 for zone in _opening_clearance_zones(room, ("doors", "openings"), reach=0.72, pad=0.2)
             )
-            score = -target_width + door_penalty
+            long_wall_bonus = float(wall["length"]) * 0.02
+            score = -target_width - long_wall_bonus + door_penalty
             candidates.append(
                 {
                     "score": score,
@@ -514,8 +551,10 @@ def _choose_window_safe_kitchen_wall(room: dict[str, Any], width: float, depth: 
                     "depth": depth,
                     "height": height,
                     "aabb": aabb,
-                    "yaw_deg": (math.degrees(math.atan2(tangent[1], tangent[0])) + 360.0) % 360.0,
+                    "yaw_deg": _kitchen_wall_yaw_deg(tangent, normal),
                     "free_interval": (start, end),
+                    "window_overlap_len": round(window_overlap, 4),
+                    "uses_window_wall": window_overlap > 0.05,
                 }
             )
     if not candidates:
@@ -572,6 +611,7 @@ def _wall_mount_candidates(
     *,
     margin: float = 0.12,
     min_wall_len: float | None = None,
+    normal_depth_m: float | None = None,
 ) -> list[dict[str, Any]]:
     sx, sy = size_xy
     min_len = min_wall_len if min_wall_len is not None else max(0.35, min(sx, sy) * 0.75)
@@ -581,7 +621,10 @@ def _wall_mount_candidates(
         length = float(wall["length"])
         tangent = wall["tangent"]
         normal = wall["normal"]
-        offset = min(max(sx, sy) * 0.5 + margin, max(0.18, min(sx, sy) * 0.5 + margin + 0.12))
+        if normal_depth_m is not None:
+            offset = max(0.01, float(normal_depth_m) * 0.5 + margin)
+        else:
+            offset = min(max(sx, sy) * 0.5 + margin, max(0.18, min(sx, sy) * 0.5 + margin + 0.12))
         slots = max(1, min(5, int(length // max(min_len, 0.35)) + 1))
         for idx in range(slots):
             t = (idx + 1) / (slots + 1)
@@ -589,9 +632,67 @@ def _wall_mount_candidates(
             cx = wall_point[0] + normal[0] * offset
             cy = wall_point[1] + normal[1] * offset
             yaw = _yaw_from_vector_xy(normal)
-            aabb = _candidate_floor_aabb(cx, cy, (sx, sy, 0.1))
+            if normal_depth_m is not None:
+                aabb = _candidate_oriented_floor_aabb(cx, cy, (sx, sy, 0.1), yaw)
+            else:
+                aabb = _candidate_floor_aabb(cx, cy, (sx, sy, 0.1))
             candidates.append({"center": (cx, cy), "yaw": yaw, "aabb": aabb, "wall": wall, "wall_t": t})
     return candidates
+
+
+def _candidate_oriented_floor_aabb(cx: float, cy: float, size: tuple[float, float, float], yaw_deg: float) -> dict[str, float]:
+    sx, sy, sz = size
+    theta = math.radians(float(yaw_deg or 0.0))
+    c, s = math.cos(theta), math.sin(theta)
+    points: list[tuple[float, float]] = []
+    for lx, ly in ((-sx / 2.0, -sy / 2.0), (sx / 2.0, -sy / 2.0), (sx / 2.0, sy / 2.0), (-sx / 2.0, sy / 2.0)):
+        points.append((cx + c * lx - s * ly, cy + s * lx + c * ly))
+    return {
+        "x_min": min(p[0] for p in points),
+        "x_max": max(p[0] for p in points),
+        "y_min": min(p[1] for p in points),
+        "y_max": max(p[1] for p in points),
+        "z_min": 0.0,
+        "z_max": max(float(sz), 0.1),
+    }
+
+
+def _angle_delta_deg(a: float, b: float) -> float:
+    return abs((float(a) - float(b) + 180.0) % 360.0 - 180.0)
+
+
+def _snap_wall_mounted_center_to_wall(
+    room: dict[str, Any],
+    center: tuple[float, float],
+    size_xy: tuple[float, float],
+    yaw_deg: float,
+    *,
+    normal_depth_m: float,
+    gap: float = 0.012,
+) -> tuple[tuple[float, float], float]:
+    walls = _room_wall_segments(room, min_len=max(0.18, min(size_xy) * 0.55))
+    if not walls:
+        return center, yaw_deg
+    best: tuple[float, tuple[float, float], float] | None = None
+    for wall in walls:
+        wall_yaw = _yaw_from_vector_xy(wall["normal"])
+        angle_score = _angle_delta_deg(wall_yaw, yaw_deg)
+        t, wall_point = _segment_projection_point(center, wall["p1"], wall["p2"])
+        normal = wall["normal"]
+        snapped = (
+            wall_point[0] + normal[0] * (normal_depth_m * 0.5 + gap),
+            wall_point[1] + normal[1] * (normal_depth_m * 0.5 + gap),
+        )
+        aabb = _candidate_oriented_floor_aabb(snapped[0], snapped[1], (size_xy[0], size_xy[1], 0.1), wall_yaw)
+        outside_penalty = 0.0 if _aabb_inside_room_polygon(aabb, room, margin=0.025) else 25.0
+        score = angle_score * 0.08 + math.hypot(snapped[0] - center[0], snapped[1] - center[1]) + outside_penalty
+        if t <= 0.02 or t >= 0.98:
+            score += 0.12
+        if best is None or score < best[0]:
+            best = (score, snapped, wall_yaw)
+    if best is None:
+        return center, yaw_deg
+    return best[1], best[2]
 
 
 def _choose_best_floor_candidate(
@@ -1213,6 +1314,56 @@ def make_supplier_required_item(
     }
 
 
+def make_procedural_required_item(
+    *,
+    room_id: str,
+    role: str,
+    index: int,
+    center_xy: tuple[float, float],
+    size: tuple[float, float, float],
+    yaw_deg: float,
+    z_min: float,
+    name: str | None = None,
+) -> dict[str, Any]:
+    sx, sy, sz = size
+    cx, cy = center_xy
+    item_id = f"req_{role}_{index:02d}"
+    return {
+        "id": item_id,
+        "name": name or f"procedural {role}",
+        "category": ROLE_CATEGORY.get(role, role),
+        "semantic_group": ROLE_SEMANTIC_GROUP.get(role, role),
+        "position_m": [round(cx, 4), round(cy, 4), round(z_min + sz / 2.0, 4)],
+        "size_m": [round(sx, 4), round(sy, 4), round(sz, 4)],
+        "yaw_deg": round(yaw_deg, 4),
+        "rotation_deg": round(yaw_deg, 4),
+        "yaw_rad": round(math.radians(yaw_deg), 8),
+        "aabb": {
+            "x_min": round(cx - sx / 2.0, 4),
+            "x_max": round(cx + sx / 2.0, 4),
+            "y_min": round(cy - sy / 2.0, 4),
+            "y_max": round(cy + sy / 2.0, 4),
+            "z_min": round(z_min, 4),
+            "z_max": round(z_min + sz, 4),
+        },
+        "constraints": _required_item_constraints(role, z_min),
+        "asset": {"kind": "procedural_placeholder", "mesh_fit_mode": "fit"},
+        "source": {
+            "placement_source": "requirement_postprocess",
+            "asset_source": "procedural_requirement",
+            "supplier_replaced": False,
+            "placeholder_bbox": False,
+            "room_id": room_id,
+        },
+        "meta": {
+            "placeholder_bbox": False,
+            "procedural_requirement": True,
+            "required_role": role,
+            "room_id": room_id,
+        },
+    }
+
+
 def _record_missing_catalog_asset(scene: dict[str, Any], role: str) -> None:
     meta = scene.setdefault("meta", {})
     req = meta.setdefault("requirement_postprocess", {})
@@ -1266,8 +1417,9 @@ def _sanitary_layout(
     wall_candidates = _wall_mount_candidates(
         room,
         size,
-        margin=margin,
+        margin=(0.012 if role == "sink" else margin),
         min_wall_len=max(0.32, min(max(sx, sy), min(width, depth)) * 0.65),
+        normal_depth_m=(sy if role == "sink" else None),
     )
     prefer_by_role = {
         "toilet": _polygon_centroid(_room_polygon_xy(room)),
@@ -1350,7 +1502,11 @@ def _sanitary_layout(
     scored_fallbacks: list[tuple[float, tuple[float, float], float]] = []
     for center, yaw in fallback_candidates:
         center = _clamp_center(center, size, room_size, margin)
-        aabb = _candidate_floor_aabb(center[0], center[1], (sx, sy, 0.1))
+        if role == "sink":
+            center, yaw = _snap_wall_mounted_center_to_wall(room, center, size, yaw, normal_depth_m=sy)
+            aabb = _candidate_oriented_floor_aabb(center[0], center[1], (sx, sy, 0.1), yaw)
+        else:
+            aabb = _candidate_floor_aabb(center[0], center[1], (sx, sy, 0.1))
         if not _aabb_inside_room_polygon(aabb, room, margin=0.03):
             continue
         score = sum(_aabb_xy_overlap_area(aabb, zone) * 8.0 + max(0.0, 0.35 - _aabb_distance_xy(aabb, zone)) for zone in door_zones)
@@ -1358,7 +1514,10 @@ def _sanitary_layout(
         scored_fallbacks.append((score, center, yaw))
     if scored_fallbacks:
         scored_fallbacks.sort(key=lambda x: x[0])
-        return scored_fallbacks[0][1], scored_fallbacks[0][2]
+        center, yaw = scored_fallbacks[0][1], scored_fallbacks[0][2]
+        if role == "sink":
+            return _snap_wall_mounted_center_to_wall(room, center, size, yaw, normal_depth_m=sy)
+        return center, yaw
 
     defaults = {
         "toilet": (min(width - 0.33, max(0.33, width * 0.28)), margin + 0.34),
@@ -1367,7 +1526,10 @@ def _sanitary_layout(
         "bath": (max(0.65, width * 0.5), max(0.45, depth - 0.45)),
     }
     fallback_yaw = {"bottom": 0.0, "top": 180.0, "left": 90.0, "right": 270.0}.get(str(door_side or ""), 0.0)
-    return _clamp_center(defaults.get(role, (width * 0.5, depth * 0.5)), size, room_size, margin), fallback_yaw
+    center = _clamp_center(defaults.get(role, (width * 0.5, depth * 0.5)), size, room_size, margin)
+    if role == "sink":
+        return _snap_wall_mounted_center_to_wall(room, center, size, fallback_yaw, normal_depth_m=sy)
+    return center, fallback_yaw
 
 
 def _set_item_geometry(
@@ -2024,7 +2186,14 @@ def repair_support_decor_items(scene_entries: list[dict[str, Any]]) -> list[dict
 
 
 def _is_bed_item(item: dict[str, Any]) -> bool:
-    return "bed" in classify_item(item)
+    category = norm(item.get("category"))
+    semantic = norm(item.get("semantic_group"))
+    text = norm(" ".join(str(item.get(k) or "") for k in ("id", "name", "category", "type")))
+    if category in {"pillow", "blanket", "nightstand", "bedside_table", "table_lamp"}:
+        return False
+    if semantic in {"pillow", "nightstand", "lamp_table"}:
+        return False
+    return category == "bed" or " bed " in f" {text} " or "кровать" in text
 
 
 def repair_bed_layouts(scene_entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -2052,6 +2221,19 @@ def repair_bed_layouts(scene_entries: list[dict[str, Any]]) -> list[dict[str, An
             old_center = _aabb_center_xy(aabb)
             door_zones = _opening_clearance_zones(room, ("doors",), reach=0.85, pad=0.22)
             window_zones = _opening_clearance_zones(room, ("windows",), reach=0.55, pad=0.22)
+            obstacles = []
+            for other in room_items(scene):
+                if other is item or _is_ceiling_light_item(other):
+                    continue
+                other_meta = other.get("meta") if isinstance(other.get("meta"), dict) else {}
+                if str(other_meta.get("parent_id") or "") == str(item.get("id") or ""):
+                    continue
+                other_category = norm(other.get("category"))
+                if other_category in {"pillow", "blanket", "curtain"}:
+                    continue
+                other_aabb = _item_aabb(other)
+                if other_aabb and float(other_aabb.get("z_min", 0.0)) <= 1.35:
+                    obstacles.append(other_aabb)
             wall_candidates = _wall_mount_candidates(
                 room,
                 (sx, sy),
@@ -2061,6 +2243,7 @@ def repair_bed_layouts(scene_entries: list[dict[str, Any]]) -> list[dict[str, An
             best = _choose_best_floor_candidate(
                 room,
                 wall_candidates,
+                obstacles=obstacles,
                 door_zones=door_zones,
                 window_zones=window_zones,
                 prefer_xy=_polygon_centroid(_room_polygon_xy(room)),
@@ -2093,6 +2276,7 @@ def repair_bed_layouts(scene_entries: list[dict[str, Any]]) -> list[dict[str, An
                     cx = width - margin - sx / 2.0
                     yaw = 0.0
                 cx, cy = _clamp_center((cx, cy), (sx, sy), (width, depth), margin)
+            cx, cy = _clamp_center((cx, cy), (sx, sy), (width, depth), 0.2)
             old_pos = item.get("position_m")
             old_yaw = item.get("yaw_deg")
             if abs(float(old_yaw or 0.0) - yaw) < 1e-4 and old_pos and abs(float(old_pos[0]) - cx) < 1e-4 and abs(float(old_pos[1]) - cy) < 1e-4:
@@ -2114,6 +2298,138 @@ def repair_bed_layouts(scene_entries: list[dict[str, Any]]) -> list[dict[str, An
                 }
             )
     return repairs
+
+
+def repair_bedroom_bed_visibility(scene_entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    repairs: list[dict[str, Any]] = []
+    for entry in scene_entries:
+        scene = entry.get("scene") if isinstance(entry.get("scene"), dict) else {}
+        if not scene:
+            continue
+        room_text = _room_type_text(scene, _sanitary_entry_prompt(entry))
+        if not any(token in room_text for token in ("bedroom", "спаль", "studio", "студ")):
+            continue
+        room = scene.get("room") if isinstance(scene.get("room"), dict) else {}
+        room_id = str(room.get("id") or entry.get("room_id") or "room")
+        for item in room_items(scene):
+            if not _is_bed_item(item):
+                continue
+            asset = item.get("asset") if isinstance(item.get("asset"), dict) else {}
+            mesh_path = str(asset.get("mesh_path") or "")
+            meta = item.setdefault("meta", {})
+            candidate = meta.get("supplier_candidate") if isinstance(meta.get("supplier_candidate"), dict) else {}
+            candidate_path = str(
+                candidate.get("asset_local_path")
+                or candidate.get("mesh_path")
+                or candidate.get("obj_path")
+                or mesh_path
+                or ""
+            ).strip()
+            candidate_file = Path(candidate_path).expanduser() if candidate_path else None
+            if candidate_file is not None and candidate_file.is_file():
+                old_asset = deepcopy(asset)
+                new_asset = deepcopy(asset)
+                new_asset.update(
+                    {
+                        "kind": "supplier_catalog_asset",
+                        "source_kind": "supplier_catalog_local_asset",
+                        "asset_source": "supplier_catalog_local_asset",
+                        "mesh_path": str(candidate_file.resolve()),
+                        "mesh_fit_mode": "uniform",
+                        "asset_format": candidate_file.suffix.lower().lstrip("."),
+                        "preserve_imported_group": True,
+                        "consolidate_import_group_glb": True,
+                    }
+                )
+                item["asset"] = new_asset
+                meta["placeholder_bbox"] = False
+                meta["supplier_binding_applied"] = True
+                meta["preserve_imported_group"] = True
+                meta["consolidate_import_group_glb"] = True
+                meta.pop("bed_supplier_mesh_disabled_for_visibility", None)
+                source = item.setdefault("source", {})
+                source["asset_source"] = "supplier_catalog_local_asset"
+                source["supplier_replaced"] = True
+                source["placeholder_bbox"] = False
+                source["supplier_mesh_disabled_for_visibility"] = False
+                if old_asset != new_asset or source.get("supplier_mesh_disabled_for_visibility"):
+                    repairs.append(
+                        {
+                            "room_id": room_id,
+                            "action": "restored_bed_supplier_mesh_with_group_preserve",
+                            "id": item.get("id"),
+                            "mesh_path": str(candidate_file.resolve()),
+                            "old_asset": old_asset,
+                        }
+                    )
+                continue
+
+            candidate_has_dims = any(candidate.get(k) is not None for k in ("width_cm", "depth_cm", "height_cm"))
+            risky_supplier_mesh = bool(mesh_path) and (
+                not candidate_has_dims
+                or "loftdesigne" in norm(mesh_path)
+                or "40301" in norm(mesh_path)
+            )
+            if not risky_supplier_mesh:
+                continue
+            old_asset = deepcopy(asset)
+            item["asset"] = {"kind": "procedural_placeholder", "mesh_fit_mode": "fit"}
+            meta["bed_supplier_mesh_disabled_for_visibility"] = True
+            meta["supplier_binding_applied"] = False
+            meta["placeholder_bbox"] = True
+            source = item.setdefault("source", {})
+            source["asset_source"] = "procedural_placeholder"
+            source["supplier_replaced"] = False
+            source["supplier_mesh_disabled_for_visibility"] = True
+            repairs.append(
+                {
+                    "room_id": room_id,
+                    "action": "disabled_risky_bed_supplier_mesh",
+                    "id": item.get("id"),
+                    "old_asset": old_asset,
+                }
+            )
+    return repairs
+
+
+def _add_optional_toilet_sink_if_space(scene: dict[str, Any], room_id: str, margin: float) -> dict[str, Any] | None:
+    room = scene.get("room") if isinstance(scene.get("room"), dict) else {}
+    width, depth = room_bounds(room)
+    if width <= 0 or depth <= 0 or width * depth < 1.25:
+        return None
+    if "sink" in _sanitary_roles_present(scene):
+        return None
+
+    for sx, sy in ((0.34, 0.24), (0.30, 0.22)):
+        sink_size = (min(sx, max(0.24, width - margin * 2.0)), min(sy, max(0.20, depth - margin * 2.0)), 0.22)
+        obstacles = _room_floor_obstacles(scene, max_z_min=1.4)
+        center, yaw = _sanitary_layout("sink", (sink_size[0], sink_size[1]), room, margin, obstacles=obstacles)
+        aabb = _candidate_oriented_floor_aabb(center[0], center[1], (sink_size[0], sink_size[1], 0.1), yaw)
+        window_zones = _opening_clearance_zones(room, ("windows",), reach=0.35, pad=0.12)
+        if not _valid_floor_aabb(
+            aabb,
+            room,
+            obstacles=obstacles,
+            door_zones=[],
+            window_zones=window_zones,
+            margin=0.025,
+            obstacle_margin=0.015,
+        ):
+            continue
+        item = make_procedural_required_item(
+            room_id=room_id,
+            role="sink",
+            index=len(room_items(scene)) + 1,
+            center_xy=center,
+            size=sink_size,
+            yaw_deg=yaw,
+            z_min=0.72,
+            name="Compact handwash sink",
+        )
+        item.setdefault("meta", {})["optional_if_space"] = True
+        scene.setdefault("placements", []).append(item)
+        return {"room_id": room_id, "action": "added_optional_toilet_sink", "id": item["id"], "center_xy": list(center), "yaw_deg": yaw}
+    return None
 
 
 def repair_sanitary_layouts(
@@ -2138,12 +2454,22 @@ def repair_sanitary_layouts(
         for item in clutter_removed:
             repairs.append({"room_id": room_id, "action": "removed_small_sanitary_clutter", "id": item.get("id"), "name": item.get("name")})
 
+        is_toilet_only_room = _is_toilet_room(scene, _sanitary_entry_prompt(entry))
+        is_bathroom_room = ("bathroom" in text or "ванн" in text or "сануз" in text) and not is_toilet_only_room
+
         removed = _remove_items(
             scene,
             lambda item: (
-                ("toilet" in text or "туалет" in text)
+                is_toilet_only_room
                 and ("toilet" in classify_item(item))
                 and bool((item.get("meta") or {}).get("supplier_requirement_added"))
+            )
+            or (
+                is_toilet_only_room
+                and (
+                    bool({"bath", "shower", "bath_or_shower"} & classify_item(item))
+                    or norm(item.get("category")) in {"towel_rack", "bath_mat", "shampoo_bottle", "toothbrush_cup"}
+                )
             )
             or (
                 ("shower" in classify_item(item))
@@ -2156,9 +2482,6 @@ def repair_sanitary_layouts(
         )
         for item in removed:
             repairs.append({"room_id": room_id, "action": "removed_bad_sanitary_item", "id": item.get("id"), "name": item.get("name")})
-
-        is_toilet_only_room = "toilet" in text or "туалет" in text
-        is_bathroom_room = ("bathroom" in text or "ванн" in text or "сануз" in text) and not is_toilet_only_room
 
         if is_toilet_only_room:
             target_size = (0.48, 0.72, 0.8)
@@ -2201,6 +2524,11 @@ def repair_sanitary_layouts(
                 role="sink",
             )
             repairs.append({"room_id": room_id, "action": "reanchored_sink_to_wall", "id": sink.get("id"), "center_xy": list(center), "yaw_deg": yaw})
+        elif is_toilet_only_room:
+            optional_sink = _add_optional_toilet_sink_if_space(scene, room_id, margin)
+            if optional_sink is not None:
+                entry.setdefault("added", []).append(room_items(scene)[-1])
+                repairs.append(optional_sink)
 
         if is_bathroom_room:
             if not ({"bath", "shower", "bath_or_shower"} & _sanitary_roles_present(scene)):
@@ -2238,6 +2566,20 @@ def _room_type_text(scene: dict[str, Any], prompt_room_type: str | None = None) 
     return norm(" ".join([room.get("room_type") or "", room.get("source_room_type") or "", prompt_room_type or ""]))
 
 
+def _is_toilet_room(scene: dict[str, Any], prompt_room_type: str | None = None) -> bool:
+    room = scene.get("room") if isinstance(scene.get("room"), dict) else {}
+    source = norm(str(room.get("source_room_type") or ""))
+    prompt = norm(str(prompt_room_type or ""))
+    if source in {"toilet", "wc", "restroom", "туалет", "уборная"} or prompt in {"toilet", "wc", "restroom", "туалет", "уборная"}:
+        return True
+    room_type = norm(str(room.get("room_type") or room.get("type") or ""))
+    return room_type in {"toilet", "wc", "restroom", "туалет", "уборная"}
+
+
+def _sanitary_required_roles_for_scene(scene: dict[str, Any], prompt_room_type: str | None = None) -> tuple[str, ...]:
+    return TOILET_REQUIRED if _is_toilet_room(scene, prompt_room_type) else BATHROOM_REQUIRED
+
+
 def _is_sanitary_scene(scene: dict[str, Any], prompt_room_type: str | None = None) -> bool:
     return any(x in _room_type_text(scene, prompt_room_type) for x in ("bathroom", "toilet", "сануз", "ванн", "туалет"))
 
@@ -2247,8 +2589,7 @@ def _ensure_min_sanitary_room_extent(scene: dict[str, Any], prompt_room_type: st
     text = _room_type_text(scene, prompt_room_type)
     if not room or not _is_sanitary_scene(scene, prompt_room_type):
         return None
-    toilet_only = ("toilet" in text or "туалет" in text) and not any(token in text for token in ("bathroom", "ванн", "сануз"))
-    if toilet_only:
+    if _is_toilet_room(scene, prompt_room_type):
         return None
     width, depth = room_bounds(room)
     if width <= 0 or depth <= 0:
@@ -2323,8 +2664,7 @@ def _sanitary_role_fits_room(role: str, room: dict[str, Any], prompt_room_type: 
     width, depth = room_bounds(room)
     area = max(0.0, width * depth)
     text = _room_type_text({"room": room}, prompt_room_type)
-    toilet_only = ("toilet" in text or "туалет" in text) and not ("bathroom" in text or "ванн" in text or "сануз" in text)
-    if toilet_only and area < 2.15:
+    if _is_toilet_room({"room": room}, prompt_room_type) and area < 2.15:
         return False
     if actual_role == "bath":
         return min(width, depth) >= 1.05 and max(width, depth) >= 1.55 and area >= 2.6
@@ -2399,7 +2739,7 @@ def add_missing_sanitary(
     if not _is_sanitary_scene(scene, prompt_room_type):
         return []
     present = _sanitary_roles_present(scene)
-    missing = [role for role in SANITARY_REQUIRED if role not in present]
+    missing = [role for role in _sanitary_required_roles_for_scene(scene, prompt_room_type) if role not in present]
     return add_sanitary_roles_to_room(scene, missing, prompt_room_type, asset_search_roots)
 
 
@@ -2486,7 +2826,12 @@ def add_missing_sanitary_apartment(
     present: set[str] = set()
     for entry in sanitary_entries:
         present |= _sanitary_roles_present(entry["scene"])
-    missing = [role for role in SANITARY_REQUIRED if role not in present]
+    required: list[str] = []
+    for entry in sanitary_entries:
+        for role in _sanitary_required_roles_for_scene(entry["scene"], _sanitary_entry_prompt(entry)):
+            if role not in required:
+                required.append(role)
+    missing = [role for role in required if role not in present]
     added: list[dict[str, Any]] = []
     for role in missing:
         target = _select_sanitary_target_entry(sanitary_entries, role)
@@ -2811,6 +3156,24 @@ def _compact_straight_kitchen_assembly(assembly: dict[str, Any], target_width: f
     _ensure_kitchen_microwave_decor(assembly)
 
 
+def _make_kitchen_window_wall_base_only(assembly: dict[str, Any]) -> dict[str, int]:
+    removed_upper = len([x for x in (assembly.get("upper_modules") or []) if isinstance(x, dict)])
+    removed_wall = len([x for x in (assembly.get("wall_modules") or []) if isinstance(x, dict)])
+    removed_backsplash = len([x for x in (assembly.get("backsplash_segments") or []) if isinstance(x, dict)])
+    assembly["upper_modules"] = []
+    assembly["wall_modules"] = []
+    assembly["backsplash_segments"] = []
+    _ensure_kitchen_microwave_decor(assembly)
+    warnings = assembly.setdefault("warnings", [])
+    if isinstance(warnings, list) and "postprocess:window_wall_base_only" not in warnings:
+        warnings.append("postprocess:window_wall_base_only")
+    return {
+        "removed_upper_modules": removed_upper,
+        "removed_wall_modules": removed_wall,
+        "removed_backsplash_segments": removed_backsplash,
+    }
+
+
 def repair_kitchen_layout_for_scene(scene: dict[str, Any], prompt_room_type: str | None = None) -> list[dict[str, Any]]:
     if not _is_kitchen_scene(scene, prompt_room_type):
         return []
@@ -2833,6 +3196,11 @@ def repair_kitchen_layout_for_scene(scene: dict[str, Any], prompt_room_type: str
         target_width = float(choice["target_width"])
         meta = item.setdefault("meta", {})
         _compact_straight_kitchen_assembly(meta, target_width, depth)
+        window_wall_cleanup = (
+            _make_kitchen_window_wall_base_only(meta)
+            if bool(choice.get("uses_window_wall"))
+            else {"removed_upper_modules": 0, "removed_wall_modules": 0, "removed_backsplash_segments": 0}
+        )
         used_width = float((meta.get("dimensions") or {}).get("width_m") or target_width)
         used_depth = float((meta.get("dimensions") or {}).get("depth_m") or depth)
         new_aabb = _rotated_rect_aabb(choice["origin"], choice["wall"]["tangent"], choice["wall"]["normal"], used_width, used_depth, 0.0, height)
@@ -2851,6 +3219,8 @@ def repair_kitchen_layout_for_scene(scene: dict[str, Any], prompt_room_type: str
         _set_item_yaw(item, float(choice["yaw_deg"]))
         meta["kitchen_window_safe_wall_repaired"] = True
         meta["kitchen_anchor_wall_index"] = int(choice["wall"].get("index") or 0)
+        meta["kitchen_anchor_uses_window_wall"] = bool(choice.get("uses_window_wall"))
+        meta["kitchen_anchor_window_overlap_len_m"] = float(choice.get("window_overlap_len") or 0.0)
         meta["position"] = [0.0, 0.0, 0.0]
         source = item.setdefault("source", {})
         source["kitchen_window_safe_wall_repaired"] = True
@@ -2871,6 +3241,9 @@ def repair_kitchen_layout_for_scene(scene: dict[str, Any], prompt_room_type: str
                 "new_aabb": item.get("aabb"),
                 "old_yaw_deg": old_yaw,
                 "new_yaw_deg": item.get("yaw_deg"),
+                "uses_window_wall": bool(choice.get("uses_window_wall")),
+                "window_overlap_len_m": float(choice.get("window_overlap_len") or 0.0),
+                **window_wall_cleanup,
                 "removed_dependent_requirement_items": [str(x.get("id") or "") for x in removed],
             }
         )
@@ -2934,7 +3307,7 @@ def add_kitchen_table_seating(
         _set_item_yaw(chair, _chair_yaw_facing_table(cx, cy, tx, ty))
         chair.setdefault("meta", {})["chair_orientation_repaired"] = True
 
-    target_count = 2
+    target_count = 4
     if len(existing_chairs) >= target_count:
         scene.setdefault("meta", {}).setdefault("requirement_postprocess", {})["oriented_kitchen_table_chairs"] = [str(x.get("id") or "") for x in existing_chairs]
         return []
@@ -3296,6 +3669,9 @@ def should_skip_apartment_item(item: dict[str, Any]) -> bool:
 def _storage_role_from_item(item: dict[str, Any]) -> str | None:
     text = item_text(item)
     category = norm(item.get("category"))
+    semantic = norm(item.get("semantic_group"))
+    if "nightstand" in text or "bedside" in text or category == "nightstand" or semantic == "nightstand":
+        return None
     if any(token in text for token in ("bookcase", "bookshelf", "стеллаж", "полк")) or "shelffactory" in category or "bookcasefactory" in category:
         return "shelf"
     if any(token in text for token in ("wardrobe", "closet", "шкаф", "гардероб")):
@@ -3434,6 +3810,91 @@ def repair_storage_supplier_candidate_pools(scene_entries: list[dict[str, Any]],
     return reports
 
 
+def repair_bedroom_storage_layouts(scene_entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    reports: list[dict[str, Any]] = []
+    for entry in scene_entries:
+        scene = entry.get("scene") if isinstance(entry.get("scene"), dict) else {}
+        if not scene:
+            continue
+        room_text = _room_type_text(scene, _sanitary_entry_prompt(entry))
+        if not any(token in room_text for token in ("bedroom", "спаль", "studio", "студ")):
+            continue
+        room = scene.get("room") if isinstance(scene.get("room"), dict) else {}
+        room_id = str(room.get("id") or entry.get("room_id") or "room")
+        width, depth = room_bounds(room)
+        door_zones = _opening_clearance_zones(room, ("doors",), reach=0.85, pad=0.22)
+        window_zones = _opening_clearance_zones(room, ("windows",), reach=0.45, pad=0.18)
+        for item in room_items(scene):
+            role = _storage_role_from_item(item)
+            if role not in {"wardrobe", "dresser"}:
+                continue
+            aabb = _item_aabb(item)
+            if not aabb:
+                continue
+            if role == "wardrobe":
+                item.setdefault("asset", {})["mesh_fit_mode"] = "fit"
+                item.setdefault("meta", {})["wardrobe_mesh_fit_repaired"] = True
+            obstacles = []
+            for other in room_items(scene):
+                if other is item or _is_ceiling_light_item(other):
+                    continue
+                other_aabb = _item_aabb(other)
+                if not other_aabb or float(other_aabb.get("z_min", 0.0)) > 1.35:
+                    continue
+                if role == "wardrobe" and _storage_role_from_item(other) in {"shelf", "dresser"}:
+                    continue
+                obstacles.append(other_aabb)
+            current_ok = _valid_floor_aabb(
+                aabb,
+                room,
+                obstacles=obstacles,
+                door_zones=door_zones,
+                window_zones=window_zones,
+                margin=0.04,
+                obstacle_margin=0.04,
+            )
+            if current_ok:
+                continue
+            sx = min(max(aabb["x_max"] - aabb["x_min"], 0.75), min(1.35, max(0.75, width - 0.32)))
+            sy = min(max(aabb["y_max"] - aabb["y_min"], 0.38), min(0.56, max(0.38, depth - 0.32)))
+            sz = min(max(aabb["z_max"] - aabb["z_min"], 1.55), 2.25)
+            candidates = _wall_mount_candidates(room, (sx, sy), margin=0.12, min_wall_len=max(0.8, sx * 0.65))
+            best = _choose_best_floor_candidate(
+                room,
+                candidates,
+                obstacles=obstacles,
+                door_zones=door_zones,
+                window_zones=window_zones,
+                prefer_xy=_polygon_centroid(_room_polygon_xy(room)),
+            )
+            if best is None:
+                continue
+            old_aabb = deepcopy(item.get("aabb"))
+            old_pos = item.get("position_m")
+            old_yaw = item.get("yaw_deg")
+            cx, cy = best["center"]
+            yaw = float(best["yaw"])
+            _set_item_geometry(item, center_xy=(cx, cy), size=(sx, sy, sz), yaw_deg=yaw, z_min=0.0, role=None)
+            item.setdefault("meta", {})["storage_layout_repaired"] = True
+            item.setdefault("meta", {})["storage_repair_reason"] = "out_of_bounds_or_collision"
+            item.setdefault("asset", {})["mesh_fit_mode"] = "fit" if role == "wardrobe" else "uniform"
+            reports.append(
+                {
+                    "room_id": room_id,
+                    "action": "reanchored_storage_to_valid_wall",
+                    "id": item.get("id"),
+                    "role": role,
+                    "old_aabb": old_aabb,
+                    "new_aabb": item.get("aabb"),
+                    "old_position_m": old_pos,
+                    "new_position_m": item.get("position_m"),
+                    "old_yaw_deg": old_yaw,
+                    "new_yaw_deg": yaw,
+                }
+            )
+    return reports
+
+
 def find_room_scene(room_dir: Path) -> Path | None:
     for rel in SCENE_CANDIDATES:
         path = room_dir / rel
@@ -3555,6 +4016,110 @@ def kitchen_scene_from_assembly(room_dir: Path) -> dict[str, Any] | None:
         if dining_scene_item is not None:
             placements.append(dining_scene_item)
     return {"schema": "scene.v1", "room": room, "placements": placements, "meta": {"source": str(json_path)}}
+
+
+def _default_kitchen_assembly(room_id: str, width: float, depth: float = 0.62, height: float = 2.2) -> dict[str, Any]:
+    width = round(max(1.8, width), 4)
+    depth = round(min(max(depth, 0.54), 0.66), 4)
+    modules = [
+        ("base_fridge", "fridge_slot", 0.60, 2.05, None),
+        ("base_sink", "sink_base", 0.60, 0.72, "two_doors"),
+        ("base_drawers", "drawer_base", 0.60, 0.72, "three_drawers"),
+        ("base_oven", "oven_base", 0.60, 0.72, "oven_front"),
+        ("base_cabinet", "base_cabinet", 0.60, 0.72, "two_doors"),
+    ]
+    count = max(3, min(len(modules), int(round(width / 0.58))))
+    module_w = width / count
+    base_modules: list[dict[str, Any]] = []
+    for idx, (module_id, module_type, _, module_h, facade) in enumerate(modules[:count]):
+        module: dict[str, Any] = {
+            "id": f"{room_id}_{module_id}",
+            "type": module_type,
+            "x_m": round(idx * module_w, 4),
+            "y_m": 0.0,
+            "z_m": 0.0 if module_type == "fridge_slot" else 0.1,
+            "width_m": round(module_w, 4),
+            "depth_m": depth,
+            "height_m": module_h,
+            "orientation": "x",
+            "has_countertop": module_type != "fridge_slot",
+            "has_upper_cabinet": module_type != "fridge_slot",
+        }
+        if facade:
+            module["facade_layout"] = facade
+        base_modules.append(module)
+    assembly: dict[str, Any] = {
+        "schema": "procedural_kitchen_assembly/v1",
+        "id": f"{room_id}_requirements_kitchen_set",
+        "category": "kitchen_set",
+        "assembly_type": "procedural_kitchen",
+        "dimensions": {"width_m": width, "depth_m": depth, "height_m": height},
+        "base_modules": base_modules,
+        "upper_modules": [],
+        "countertop_segments": [],
+        "backsplash_segments": [],
+        "decor_items": [],
+        "design_spec": {"source": "requirements_postprocess_fallback"},
+    }
+    _compact_straight_kitchen_assembly(assembly, width, depth)
+    return assembly
+
+
+def ensure_kitchen_set_present(scene: dict[str, Any], prompt_room_type: str | None = None) -> list[dict[str, Any]]:
+    if not _is_kitchen_scene(scene, prompt_room_type):
+        return []
+    if any(_is_procedural_kitchen_item(item) for item in room_items(scene)):
+        return []
+    room = scene.get("room") if isinstance(scene.get("room"), dict) else {}
+    room_id = str(room.get("id") or "room")
+    room_w, room_d = room_bounds(room)
+    target_width = min(max(room_w, room_d) - 0.35, 3.0)
+    target_width = max(1.8, target_width)
+    depth = 0.62
+    height = 2.2
+    choice = _choose_window_safe_kitchen_wall(room, target_width, depth, height)
+    if choice is not None:
+        target_width = float(choice["target_width"])
+        origin = choice["origin"]
+        tangent = choice["wall"]["tangent"]
+        normal = choice["wall"]["normal"]
+        yaw = float(choice["yaw_deg"])
+    else:
+        target_width = min(target_width, max(1.8, room_w - 0.24))
+        origin = (0.12, 0.12)
+        tangent = (1.0, 0.0)
+        normal = (0.0, 1.0)
+        yaw = 0.0
+    assembly = _default_kitchen_assembly(room_id, target_width, depth, height)
+    used_width = float((assembly.get("dimensions") or {}).get("width_m") or target_width)
+    used_depth = float((assembly.get("dimensions") or {}).get("depth_m") or depth)
+    aabb = _rotated_rect_aabb(origin, tangent, normal, used_width, used_depth, 0.0, height)
+    item = {
+        "id": f"{room_id}_requirements_kitchen_set",
+        "name": "procedural kitchen set",
+        "category": "kitchen_set",
+        "type": "procedural_assembly",
+        "assembly_type": "procedural_kitchen",
+        "position": [round(origin[0], 4), round(origin[1], 4), 0.0],
+        "position_m": [
+            round((aabb["x_min"] + aabb["x_max"]) * 0.5, 4),
+            round((aabb["y_min"] + aabb["y_max"]) * 0.5, 4),
+            round(height * 0.5, 4),
+        ],
+        "size_m": [round(aabb["x_max"] - aabb["x_min"], 4), round(aabb["y_max"] - aabb["y_min"], 4), round(height, 4)],
+        "yaw_deg": round(yaw, 4),
+        "rotation_deg": round(yaw, 4),
+        "yaw_rad": round(math.radians(yaw), 8),
+        "aabb": aabb,
+        "asset": {"kind": "procedural_kitchen", "assembly_type": "procedural_kitchen"},
+        "meta": {**assembly, "procedural_assembly": "kitchen", "requirements_fallback_kitchen_set": True, "position": [0.0, 0.0, 0.0]},
+        "source": {"asset_source": "procedural_kitchen", "placement_source": "requirements_postprocess", "source_room_id": room_id},
+    }
+    scene.setdefault("placements", []).insert(0, item)
+    repair_kitchen_layout_for_scene(scene, prompt_room_type=prompt_room_type)
+    report = {"room_id": room_id, "action": "added_missing_procedural_kitchen_set", "id": item["id"]}
+    scene.setdefault("meta", {}).setdefault("requirement_postprocess", {}).setdefault("kitchen_set_repairs", []).append(report)
+    return [report]
 
 
 def _kitchen_material_prompt(scene: dict[str, Any], room_dir: Path, prompt_room_type: str | None) -> str:
@@ -3766,6 +4331,7 @@ def process_apartment(apt_dir: Path, mode: str) -> dict[str, Any]:
     scene_entries: list[dict[str, Any]] = []
     room_reports: list[dict[str, Any]] = []
     asset_search_roots = (apt_dir, LOCAL_TABLE_ASSET_ROOT, LOCAL_CHAIR_ASSET_ROOT)
+    kitchen_set_repairs: list[dict[str, Any]] = []
     kitchen_layout_repairs: list[dict[str, Any]] = []
     kitchen_surface_material_repairs: list[dict[str, Any]] = []
     curtain_repairs: list[dict[str, Any]] = []
@@ -3785,6 +4351,7 @@ def process_apartment(apt_dir: Path, mode: str) -> dict[str, Any]:
             room_reports.append({"room_id": room_id, "status": "missing_scene"})
             continue
         added: list[dict[str, Any]] = []
+        kitchen_set_repairs.extend(ensure_kitchen_set_present(scene, prompt_room_type=room_meta.get("prompt_room_type")))
         kitchen_surface_material_repairs.extend(
             apply_missing_kitchen_surface_materials(scene, room_dir, mode, prompt_room_type=room_meta.get("prompt_room_type"))
         )
@@ -3819,12 +4386,14 @@ def process_apartment(apt_dir: Path, mode: str) -> dict[str, Any]:
         )
 
     storage_supplier_repairs = repair_storage_supplier_candidate_pools(scene_entries, apt_dir)
+    storage_layout_repairs = repair_bedroom_storage_layouts(scene_entries)
     sanitary_repairs = repair_sanitary_layouts(scene_entries, asset_search_roots=asset_search_roots)
     lighting_repairs = repair_ceiling_lighting_layouts(scene_entries)
     table_lamp_repairs = repair_table_lamp_sizes(scene_entries)
     desktop_support_repairs = repair_desktop_support_items(scene_entries)
     support_decor_repairs = repair_support_decor_items(scene_entries)
     bed_repairs = repair_bed_layouts(scene_entries)
+    bed_visibility_repairs = repair_bedroom_bed_visibility(scene_entries)
     sanitary_added_per_room = add_missing_sanitary_per_room(scene_entries, asset_search_roots=asset_search_roots)
     sanitary_added = add_missing_sanitary_apartment(scene_entries, asset_search_roots=asset_search_roots)
     apartment_added = add_apartment_required_objects(loaded_scenes, asset_search_roots=asset_search_roots)
@@ -3837,6 +4406,7 @@ def process_apartment(apt_dir: Path, mode: str) -> dict[str, Any]:
         scene_path = entry.get("scene_path")
         added = entry.get("added") if isinstance(entry.get("added"), list) else []
         patched_path = room_dir / "pipeline" / mode / "scene_requirements.v1.json"
+        sync_scene_items_to_placements(scene)
         write_json_if_changed(patched_path, scene)
         room_reports.append(
             {
@@ -3883,21 +4453,25 @@ def process_apartment(apt_dir: Path, mode: str) -> dict[str, Any]:
                 for x in sanitary_added_per_room
             ],
             "sanitary_repairs": sanitary_repairs,
+            "kitchen_set_repairs": kitchen_set_repairs,
             "kitchen_layout_repairs": kitchen_layout_repairs,
             "kitchen_surface_material_repairs": kitchen_surface_material_repairs,
             "curtain_repairs": curtain_repairs,
             "storage_supplier_repairs": storage_supplier_repairs,
+            "storage_layout_repairs": storage_layout_repairs,
             "lighting_repairs": lighting_repairs,
             "table_lamp_repairs": table_lamp_repairs,
             "desktop_support_repairs": desktop_support_repairs,
             "support_decor_repairs": support_decor_repairs,
             "bed_repairs": bed_repairs,
+            "bed_visibility_repairs": bed_visibility_repairs,
             "apartment_added": [
                 {"id": x["id"], "role": x.get("meta", {}).get("required_role"), "room_id": x.get("meta", {}).get("room_id")}
                 for x in apartment_added
             ],
             "requirements": {
-                "sanitary_each_bathroom_or_toilet": list(SANITARY_REQUIRED),
+                "sanitary_each_toilet": list(TOILET_REQUIRED),
+                "sanitary_each_bathroom": list(BATHROOM_REQUIRED),
                 "sanitary_apartment": list(SANITARY_REQUIRED),
                 "apartment": ["bed", "table"],
             },
@@ -3914,15 +4488,18 @@ def process_apartment(apt_dir: Path, mode: str) -> dict[str, Any]:
             "sanitary_added": out_scene["meta"]["sanitary_added"],
             "sanitary_added_per_room": out_scene["meta"]["sanitary_added_per_room"],
             "sanitary_repairs": sanitary_repairs,
+            "kitchen_set_repairs": kitchen_set_repairs,
             "kitchen_layout_repairs": kitchen_layout_repairs,
             "kitchen_surface_material_repairs": kitchen_surface_material_repairs,
             "curtain_repairs": curtain_repairs,
             "storage_supplier_repairs": storage_supplier_repairs,
+            "storage_layout_repairs": storage_layout_repairs,
             "lighting_repairs": lighting_repairs,
             "table_lamp_repairs": table_lamp_repairs,
             "desktop_support_repairs": desktop_support_repairs,
             "support_decor_repairs": support_decor_repairs,
             "bed_repairs": bed_repairs,
+            "bed_visibility_repairs": bed_visibility_repairs,
             "apartment_added": out_scene["meta"]["apartment_added"],
             "placement_count": len(placements),
         },

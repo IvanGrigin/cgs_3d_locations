@@ -2295,6 +2295,10 @@ def _summary_asset_path(summary: dict[str, Any]) -> Path | None:
     return None
 
 
+def _force_trellis_image_only(args: argparse.Namespace) -> bool:
+    return bool(getattr(args, "force_trellis_image_only", False))
+
+
 def try_reuse_local_generated_asset(local_job_dir: Path) -> dict[str, Any] | None:
     summary_path = local_job_dir / "summary.json"
     if not summary_path.is_file():
@@ -2497,6 +2501,8 @@ def _run_orchestration_one(args: argparse.Namespace) -> dict[str, Any]:
             candidate_cascade_report = {}
         if not bool(getattr(args, "prepare_only", False)):
             reused_local = try_reuse_local_generated_asset(local_job_dir)
+            if reused_local is not None and _force_trellis_image_only(args) and str(reused_local.get("asset_generation_mode") or reused_local.get("final_generation_mode") or "") == "direct_model":
+                reused_local = None
             if reused_local is not None:
                 print(f"[TRELLIS][local-cache-hit] job={job_id} asset={reused_local.get('asset_glb')}", flush=True)
                 return reused_local
@@ -2508,6 +2514,8 @@ def _run_orchestration_one(args: argparse.Namespace) -> dict[str, Any]:
         local_job_dir.mkdir(parents=True, exist_ok=True)
         if not bool(getattr(args, "prepare_only", False)):
             reused_local = try_reuse_local_generated_asset(local_job_dir)
+            if reused_local is not None and _force_trellis_image_only(args) and str(reused_local.get("asset_generation_mode") or reused_local.get("final_generation_mode") or "") == "direct_model":
+                reused_local = None
             if reused_local is not None:
                 print(f"[TRELLIS][local-cache-hit] job={job_id} asset={reused_local.get('asset_glb')}", flush=True)
                 return reused_local
@@ -2517,11 +2525,15 @@ def _run_orchestration_one(args: argparse.Namespace) -> dict[str, Any]:
         write_json(local_job_dir / "card.normalized.json", normalized)
 
         candidate_cascade_report: dict[str, Any] = {
-            "direct_model": {"tried": bool(_collect_direct_asset_sources(card)), "ok": False},
+            "direct_model": {
+                "tried": bool(_collect_direct_asset_sources(card)) and not _force_trellis_image_only(args),
+                "ok": False,
+                **({"reason": "disabled_force_trellis_image_only"} if _force_trellis_image_only(args) else {}),
+            },
             "image_trellis": {"tried": False, "ok": False},
             "text_trellis": {"tried": False, "ok": False},
         }
-        direct_asset_payload = try_resolve_direct_model_asset(card, local_job_dir)
+        direct_asset_payload = None if _force_trellis_image_only(args) else try_resolve_direct_model_asset(card, local_job_dir)
         if direct_asset_payload is not None:
             candidate_cascade_report["direct_model"] = {
                 "tried": True,
@@ -3370,6 +3382,7 @@ def build_cli() -> argparse.ArgumentParser:
     tr.add_argument("--max-failures-per-candidate", type=int, default=2, help="Try one supplier candidate at most N full TRELLIS runs before switching to the next catalog candidate.")
     tr.add_argument("--progress-log", action=argparse.BooleanOptionalAction, default=True, help="Print TRELLIS candidate progress, elapsed time and ETA.")
     tr.add_argument("--allow-proxy-fallback", action="store_true", help="Debug only: emit a simple local proxy GLB if all real/TRELLIS candidates fail.")
+    tr.add_argument("--force-trellis-image-only", action="store_true", help="Disable direct model/archive resolution and force TRELLIS.2 image-to-3D generation.")
 
     prep = ap.add_argument_group("Local image preprocessing")
     prep.add_argument(
@@ -3453,15 +3466,18 @@ def _trellis_target_group_from_target_id(target_id):
 
     rules = [
         ("nightstand", ["nightstand", "bedside", "тумб"]),
+        ("wall_art", ["wall art", "wall_art", "painting", "poster", "frame", "картина", "постер", "панно"]),
         ("bed", ["bedroom bed", " bed ", "кровать"]),
         ("wardrobe", ["wardrobe", "closet", "шкаф", "гардероб"]),
         ("dresser", ["dresser", "sideboard", "chest", "комод"]),
-        ("desk", ["desk", "writing", "рабоч", "стол"]),
         ("chair", ["chair", "стул"]),
+        ("desk", ["desk", "writing", "рабоч", "стол"]),
+        ("computer", ["computer", "laptop", "monitor", "keyboard", "компьютер", "ноутбук", "монитор", "клавиат"]),
         ("floor_lamp", ["floor lamp", "floor_lamp", "торшер"]),
         ("ceiling_light", ["ceiling", "pendant", "люстра", "подвес"]),
         ("wall_light", ["wall light", "sconce", "бра"]),
         ("plant", ["plant", "растен"]),
+        ("vase", ["vase", "flower", "floral", "ваза", "цвет"]),
         ("bench", ["bench", "банкет", "скам"]),
     ]
 
@@ -3481,10 +3497,13 @@ def _trellis_group_aliases(group):
         "dresser": ["dresser", "sideboard", "chest", "комод"],
         "desk": ["desk", "writing_table", "work_table", "рабочий стол", "консоль", "console"],
         "chair": ["chair", "dining_chair", "стул"],
+        "computer": ["computer", "computer_monitor", "laptop_computer_keyboard_mouse", "laptop", "monitor", "keyboard", "ноутбук", "монитор"],
         "floor_lamp": ["floor_lamp", "lamp_floor", "floor lamp", "торшер"],
         "ceiling_light": ["ceiling_light", "lamp_ceiling", "pendant_lamp", "ceiling lamp", "pendant", "люстра", "подвес"],
         "wall_light": ["wall_light", "sconce", "бра"],
         "plant": ["plant", "indoor_plant", "растение"],
+        "vase": ["vase", "plant_planter_vase", "flower", "floral", "bouquet", "ваза", "цветы"],
+        "wall_art": ["wall_art", "wall_art_frame_panel", "painting", "poster", "framed art", "картина", "постер", "панно"],
         "bench": ["bench", "банкетка", "скамья"],
     }
     return aliases.get(group, [group])
@@ -3783,7 +3802,22 @@ def _trellis_append_catalog_alternatives(binding, target_id, pool, seen, max_cat
     if not group and pool:
         # Пытаемся вывести группу из текущего top-1 кандидата.
         text = _trellis_candidate_group_text(pool[0])
-        for g in ("nightstand", "bed", "wardrobe", "dresser", "desk", "chair", "floor_lamp", "ceiling_light", "wall_light", "plant", "bench"):
+        for g in (
+            "nightstand",
+            "wall_art",
+            "bed",
+            "wardrobe",
+            "dresser",
+            "chair",
+            "desk",
+            "computer",
+            "floor_lamp",
+            "ceiling_light",
+            "wall_light",
+            "plant",
+            "vase",
+            "bench",
+        ):
             if any(_trellis_norm_text(a) in text for a in _trellis_group_aliases(g)):
                 group = g
                 break
@@ -3866,7 +3900,10 @@ def _trellis_fallback_candidate_sequence(
 
     bl = TrellisCandidateBlacklist(blacklist_path)
 
-    raw_pool = extract_candidate_pool(binding if isinstance(binding, dict) else {})
+    raw_pool = _trellis_extract_candidate_pool_v2(binding if isinstance(binding, dict) else {})
+    for cand in extract_candidate_pool(binding if isinstance(binding, dict) else {}):
+        if isinstance(cand, dict):
+            raw_pool.append(cand)
     pool = []
     seen = set()
     original_order: dict[str, int] = {}
@@ -3880,6 +3917,8 @@ def _trellis_fallback_candidate_sequence(
         seen.add(uk)
         original_order[uk] = len(original_order)
         pool.append(cand)
+
+    base_pool_count = len(pool)
 
     def _candidate_has_image_priority(c):  # pragma: no cover - tiny helper
         try:
@@ -3905,12 +3944,19 @@ def _trellis_fallback_candidate_sequence(
         uk = _trellis_candidate_key_safe(c)
         return original_order.get(uk, 10_000_000)
 
+    def _candidate_explicit_image_priority(c):  # pragma: no cover - tiny helper
+        # The matcher/manual card is the user's selected supplier item. Catalog
+        # alternatives are only a recovery pool, so do not let their image-source
+        # score overtake an explicit candidate that already has usable images.
+        return 1 if _candidate_order(c) < base_pool_count and _candidate_has_image_priority(c) else 0
+
     def _sort_pool(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
         # Image-rich candidates must dominate the TRELLIS pool because TRELLIS.2 is
         # image-only here. Direct/local asset candidates stay ahead of plain no-image cards.
         return sorted(
             items,
             key=lambda c: (
+                _candidate_explicit_image_priority(c),
                 _candidate_direct_asset_priority(c),
                 _candidate_trusted_image_priority(c),
                 _candidate_has_image_priority(c),

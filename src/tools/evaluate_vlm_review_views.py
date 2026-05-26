@@ -87,7 +87,7 @@ LAYOUT_EVAL_SCHEMA: dict[str, Any] = {
 }
 
 
-SYSTEM_PROMPT = """
+SYSTEM_PROMPT_TEMPLATE = """
 You are a strict VLM evaluator for generated interior room layouts.
 
 You receive nine frames for one Blender scene state:
@@ -104,7 +104,7 @@ so do not penalize them for not looking like eye-level real-estate photos.
 Each scene state name tells what stage is being reviewed:
 - "infinigen_clean_scene" is the raw procedural Infinigen scene.
 - "scene_infinigen_clean" is the same layout after local materials/postprocess.
-- "scene_infinigen_clean_supplier.optimal" adds supplier/catalog asset replacements.
+- "{scene_state}" adds supplier/catalog asset replacements.
 
 Score supplier states fairly: reward them when visible furniture, fixtures,
 lighting, curtains, rugs, cabinets, vanities, tables, chairs, shelves, or decor
@@ -113,6 +113,18 @@ placeholders. Do not penalize a supplier state just because the exact mesh shape
 differs from the raw state. Penalize supplier replacements only when they are
 clearly wrong for the room, badly scaled, floating, colliding, duplicated, missing
 important parts/materials, or damaging circulation/layout.
+
+For the current scene state "{scene_state}", a normal usable generated room with
+the required objects visible, no obvious collisions, and plausible scale/materials
+should receive a mid-to-good score around 5-7. Use 0 only when the frame is
+blank/unusable, the wrong room type, or required objects are not visible at all.
+Do not assign 0 solely because a review frame is top-down/isometric or has walls
+hidden. If fixtures or furniture are visible from above, score them normally.
+For a single top-view frame, vertical details may be unavailable by design. If it
+shows a floor plan with plausible bathroom/toilet fixtures or furniture, assign at
+least 5 for visible prompt/layout/collision/asset scores unless there is an
+obvious severe error such as blank image, wrong room type, major collision, or
+missing required objects.
 
 Use score meanings consistently:
 - prompt_match_score: required room objects and prompt intent are visible.
@@ -135,6 +147,10 @@ Focus on:
 Scores are 0..10 where 10 is best. Return ONLY JSON matching the schema.
 No markdown, no prose outside JSON.
 """.strip()
+
+
+def _system_prompt(scene_state: str) -> str:
+    return SYSTEM_PROMPT_TEMPLATE.replace("{scene_state}", scene_state)
 
 
 def _parse_args() -> argparse.Namespace:
@@ -479,7 +495,9 @@ def main() -> None:
                 else:
                     send_images = images
                 user_payload = _payload(view_dir=view_dir, images=images, args=args)
+                system_prompt = _system_prompt(view_dir.name)
                 (view_dir / "vlm_layout_eval_user_payload.json").write_text(user_payload, encoding="utf-8")
+                (view_dir / "vlm_layout_eval_system_prompt.txt").write_text(system_prompt, encoding="utf-8")
                 print(f"VLM evaluate scene: {view_dir.name} ({len(images)} frames, mode={args.image_mode})", flush=True)
 
                 t0 = perf_counter()
@@ -488,7 +506,7 @@ def main() -> None:
                         provider=args.provider,
                         ollama_url=args.ollama_url,
                         model=args.model,
-                        system_prompt=SYSTEM_PROMPT,
+                        system_prompt=system_prompt,
                         user_payload=user_payload,
                         send_images=send_images,
                         timeout_sec=int(args.timeout_sec),
@@ -518,6 +536,7 @@ def main() -> None:
                     "images": [str(p) for p in images],
                     "sent_image_count": len(send_images),
                     "sent_images": [str(p) for p in send_images],
+                    "system_prompt": system_prompt,
                     "wall_sec": round(perf_counter() - t0, 3),
                 }
                 (view_dir / "vlm_layout_eval_meta.json").write_text(
@@ -567,7 +586,9 @@ def main() -> None:
                     print(f"skip existing frame: {view_dir.name}/{image.name}", flush=True)
                     continue
                 user_payload = _frame_payload(view_dir=view_dir, image=image, frame_index=idx, args=args)
+                system_prompt = _system_prompt(view_dir.name)
                 (frames_dir / f"{image.stem}.payload.json").write_text(user_payload, encoding="utf-8")
+                (frames_dir / f"{image.stem}.system_prompt.txt").write_text(system_prompt, encoding="utf-8")
                 print(f"VLM evaluate frame: {view_dir.name}/{image.name}", flush=True)
                 t0 = perf_counter()
                 try:
@@ -575,7 +596,7 @@ def main() -> None:
                         provider=args.provider,
                         ollama_url=args.ollama_url,
                         model=args.model,
-                        system_prompt=SYSTEM_PROMPT,
+                        system_prompt=system_prompt,
                         user_payload=user_payload,
                         send_images=[image],
                         timeout_sec=int(args.timeout_sec),
@@ -604,6 +625,7 @@ def main() -> None:
                     "model": provider_meta.get("model") or args.model,
                     "provider_meta": provider_meta,
                     "image": str(image),
+                    "system_prompt": system_prompt,
                     "wall_sec": round(perf_counter() - t0, 3),
                 }
                 (frames_dir / f"{image.stem}.meta.json").write_text(

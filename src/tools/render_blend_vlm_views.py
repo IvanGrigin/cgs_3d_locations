@@ -101,6 +101,8 @@ def view_specs_for_blend(
     oblique_radius_mult: float,
     topview_lens: float,
     oblique_lens: float,
+    topview_hide_nearest_walls: bool = False,
+    oblique_hide_nearest_walls: bool = True,
 ) -> list[dict[str, Any]]:
     blend_dir = out_dir / blend.stem
     blend_dir.mkdir(parents=True, exist_ok=True)
@@ -114,6 +116,7 @@ def view_specs_for_blend(
                 "elevation_deg": float(topview_elevation),
                 "radius_mult": float(topview_radius_mult),
                 "lens": float(topview_lens),
+                "hide_nearest_walls": bool(topview_hide_nearest_walls),
             }
         )
     for azimuth in oblique_azimuths:
@@ -125,7 +128,7 @@ def view_specs_for_blend(
                 "elevation_deg": float(oblique_elevation),
                 "radius_mult": float(oblique_radius_mult),
                 "lens": float(oblique_lens),
-                "hide_nearest_walls": True,
+                "hide_nearest_walls": bool(oblique_hide_nearest_walls),
             }
         )
     return specs
@@ -165,8 +168,8 @@ def run_one_blend(
 
     cmd = [
         blender,
-        str(blend),
         "-b",
+        str(blend),
         "--python",
         str(render_script),
         "--",
@@ -233,6 +236,24 @@ def main() -> None:
     parser.add_argument("--oblique-radius-mult", type=float, default=0.72)
     parser.add_argument("--topview-lens", type=float, default=32.0)
     parser.add_argument("--oblique-lens", type=float, default=28.0)
+    parser.add_argument(
+        "--topview-hide-nearest-walls",
+        action="store_true",
+        default=False,
+        help="Hide nearest room walls on topview frames.",
+    )
+    parser.add_argument(
+        "--oblique-hide-nearest-walls",
+        action="store_true",
+        default=True,
+        help="Hide nearest room walls on oblique frames.",
+    )
+    parser.add_argument(
+        "--no-oblique-hide-nearest-walls",
+        dest="oblique_hide_nearest_walls",
+        action="store_false",
+        help="Disable nearest-wall hiding for oblique frames.",
+    )
     parser.add_argument("--skip-existing", action="store_true")
     parser.add_argument("--render-engine", choices=["eevee", "workbench"], default="eevee")
     parser.add_argument("--gpu-backend", default="")
@@ -296,6 +317,8 @@ def main() -> None:
             oblique_radius_mult=float(args.oblique_radius_mult),
             topview_lens=float(args.topview_lens),
             oblique_lens=float(args.oblique_lens),
+            topview_hide_nearest_walls=bool(args.topview_hide_nearest_walls),
+            oblique_hide_nearest_walls=bool(args.oblique_hide_nearest_walls),
         )
         if bool(args.per_blend_out_dir):
             specs = view_specs_for_blend(
@@ -309,6 +332,8 @@ def main() -> None:
                 oblique_radius_mult=float(args.oblique_radius_mult),
                 topview_lens=float(args.topview_lens),
                 oblique_lens=float(args.oblique_lens),
+                topview_hide_nearest_walls=bool(args.topview_hide_nearest_walls),
+                oblique_hide_nearest_walls=bool(args.oblique_hide_nearest_walls),
             )
         job = run_one_blend(
             blender=blender,

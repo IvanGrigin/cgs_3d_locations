@@ -7,6 +7,7 @@ from .geometry import Vec2, as_float, choose_longest_wall, choose_wall_most_oppo
 from .object_specs import BATHROOM_SPECS, Density, ObjectSpec, density_rank
 from .placement_engine import PlacementEngine, clamp_center_inside_room_for_aabb
 from .room_context import RoomContext
+from .sanitary_layout_solver import generate_sanitary_bathroom
 
 
 def _candidate_walls(ctx: RoomContext, rng: random.Random, *, min_length: float = 0.0, avoid_windows: bool = False) -> list[Any]:
@@ -28,6 +29,25 @@ def _candidate_walls(ctx: RoomContext, rng: random.Random, *, min_length: float 
     return walls
 
 
+def _door_wall(ctx: RoomContext) -> Any | None:
+    for wall in ctx.walls:
+        if wall.has_door:
+            return wall
+    for door in ctx.doors:
+        wall_id = str(door.get("wall_id") or "")
+        wall = next((w for w in ctx.walls if w.id == wall_id), None)
+        if wall:
+            return wall
+    return None
+
+
+def _far_wall_from_door(ctx: RoomContext) -> Any | None:
+    door_wall = _door_wall(ctx)
+    if door_wall:
+        return choose_wall_most_opposite(ctx.walls, door_wall, ctx.polygon, avoid_windows=False, avoid_doors=True)
+    return choose_longest_wall(ctx.walls, avoid_windows=False, avoid_doors=True)
+
+
 def _try_wall_specs(
     engine: PlacementEngine,
     ctx: RoomContext,
@@ -38,12 +58,23 @@ def _try_wall_specs(
     front_target: str,
     avoid_windows: bool = False,
     required: bool = False,
+    preferred_walls: list[Any] | None = None,
+    factors: list[float] | None = None,
 ) -> dict[str, Any] | None:
     for key in keys:
         spec = BATHROOM_SPECS[key]
-        for wall in _candidate_walls(ctx, engine.rng, min_length=spec.size_m[0] + 0.05, avoid_windows=avoid_windows):
-            factors = [0.5, 0.625, 0.375, 0.24, 0.76, 0.36, 0.64]
-            for factor in factors:
+        walls = [
+            wall
+            for wall in (preferred_walls or [])
+            if wall and wall.length >= spec.size_m[0] + 0.05 and (not avoid_windows or not wall.has_window)
+        ]
+        walls.extend(
+            wall
+            for wall in _candidate_walls(ctx, engine.rng, min_length=spec.size_m[0] + 0.05, avoid_windows=avoid_windows)
+            if wall not in walls
+        )
+        for wall in walls:
+            for factor in (factors or [0.5, 0.625, 0.375, 0.24, 0.76, 0.36, 0.64]):
                 item = engine.add_wall_aligned(
                     spec,
                     wall.id,
@@ -148,6 +179,10 @@ def _add_bath_mat_in_front(engine: PlacementEngine, fixture: dict[str, Any] | No
 
 
 def generate_bathroom(ctx: RoomContext, *, density: Density, seed: int | None = None) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    solved = generate_sanitary_bathroom(ctx, density=density, seed=seed)
+    if solved is not None:
+        return solved
+
     rng = random.Random(seed)
     engine = PlacementEngine(
         ctx=ctx,
@@ -156,6 +191,8 @@ def generate_bathroom(ctx: RoomContext, *, density: Density, seed: int | None = 
         generator_name="bathroom_generator",
         archetype="wet_wall_and_accessible_sink",
     )
+
+    far_wall = _far_wall_from_door(ctx)
 
     # Required bathing fixture: prefer bathtub when area permits, otherwise shower.
     bathing = None
@@ -169,6 +206,8 @@ def generate_bathroom(ctx: RoomContext, *, density: Density, seed: int | None = 
             front_target="room_center",
             avoid_windows=False,
             required=True,
+            preferred_walls=[far_wall] if far_wall else None,
+            factors=[0.18, 0.82, 0.5, 0.32, 0.68],
         )
     if bathing is None:
         bathing = _try_wall_specs(
@@ -180,6 +219,8 @@ def generate_bathroom(ctx: RoomContext, *, density: Density, seed: int | None = 
             front_target="door",
             avoid_windows=False,
             required=True,
+            preferred_walls=[far_wall] if far_wall else None,
+            factors=[0.18, 0.82, 0.5, 0.32, 0.68],
         )
     if bathing is None:
         bathing = _fallback_center_fixture(engine, ctx, BATHROOM_SPECS["compact_shower"], category="shower", front_target="door")
@@ -263,6 +304,33 @@ def generate_bathroom(ctx: RoomContext, *, density: Density, seed: int | None = 
             engine.add_on_top(shelf, BATHROOM_SPECS["shampoo_bottle"], local_offset_xy=(-0.12, 0.0), name="Shampoo bottle")
             engine.add_on_top(shelf, BATHROOM_SPECS["shampoo_bottle"], local_offset_xy=(0.12, 0.0), name="Conditioner bottle")
 
+    cabinet = None
+    if density_rank(density) >= 2 and ctx.area_m2 >= 3.2:
+        occupied_wall_ids = {
+            str((item.get("meta") if isinstance(item.get("meta"), dict) else {}).get("wall_id") or "")
+            for item in (bathing, sink, toilet)
+            if item
+        }
+        spec = BATHROOM_SPECS["toilet_cabinet"]
+        walls = [w for w in _candidate_walls(ctx, rng, min_length=spec.size_m[0], avoid_windows=False) if w.id not in occupied_wall_ids]
+        walls.extend(w for w in _candidate_walls(ctx, rng, min_length=spec.size_m[0], avoid_windows=False) if w not in walls)
+        for wall in walls:
+            for factor in (0.5, 0.24, 0.76):
+                cabinet = engine.add_wall_aligned(
+                    spec,
+                    wall.id,
+                    wall.length * factor,
+                    category="toilet_cabinet",
+                    layer="storage",
+                    margin=0.02,
+                    front_target="door",
+                    extra_meta={"required_if_space": True},
+                )
+                if cabinet:
+                    break
+            if cabinet:
+                break
+
     engine.add_ceiling_light(name="Bathroom ceiling light")
 
     report = {
@@ -271,6 +339,7 @@ def generate_bathroom(ctx: RoomContext, *, density: Density, seed: int | None = 
         "required": {"sink": bool(sink), "bathing_fixture": bool(bathing)},
         "bathing_fixture_category": bathing.get("category") if bathing else None,
         "toilet_added": bool(toilet),
+        "optional": {"toilet_cabinet": bool(cabinet)},
         "density": density,
         "rejected": engine.rejected,
     }

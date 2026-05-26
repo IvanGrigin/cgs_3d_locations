@@ -40,8 +40,8 @@ def _build_payload(
 ) -> Dict[str, Any]:
     options: Dict[str, Any] = {
         "temperature": temperature,
-        "num_predict": 512,
-        "num_ctx": 4096,
+        "num_predict": 2048,
+        "num_ctx": 8192,
     }
     if extra_options:
         options.update(extra_options)
@@ -64,7 +64,7 @@ def _build_payload(
 
     # think отправляем только для GPT-OSS.
     # Для qwen/mistral и других моделей лишние отличия в payload здесь не нужны.
-    if include_think and _is_gpt_oss_model(model):
+    if include_think and _is_gpt_oss_model(model) and think is not None:
         payload["think"] = think
 
     return payload

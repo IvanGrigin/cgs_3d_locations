@@ -630,6 +630,26 @@ _ACCEPTANCE_BY_GROUP: dict[str, dict[str, dict[str, float]]] = {
             "min_query_overlap_count": 1,
         },
     },
+    "rug": {
+        "known": {"max_primary_axis_distance": 3.0, "max_secondary_axis_distance": 3.0, "min_query_score": 8.0},
+        "missing": {"min_query_score": 8.0, "min_query_overlap_count": 0},
+    },
+    "pillow": {
+        "known": {"max_primary_axis_distance": 3.0, "max_secondary_axis_distance": 3.0, "min_query_score": 8.0},
+        "missing": {"min_query_score": 8.0, "min_query_overlap_count": 0},
+    },
+    "blanket": {
+        "known": {"max_primary_axis_distance": 3.0, "max_secondary_axis_distance": 3.0, "min_query_score": 8.0},
+        "missing": {"min_query_score": 8.0, "min_query_overlap_count": 0},
+    },
+    "mattress": {
+        "known": {"max_primary_axis_distance": 3.0, "max_secondary_axis_distance": 3.0, "min_query_score": 8.0},
+        "missing": {"min_query_score": 8.0, "min_query_overlap_count": 0},
+    },
+    "towel": {
+        "known": {"max_primary_axis_distance": 3.0, "max_secondary_axis_distance": 3.0, "min_query_score": 8.0},
+        "missing": {"min_query_score": 8.0, "min_query_overlap_count": 0},
+    },
 }
 
 
@@ -1498,6 +1518,11 @@ def _infer_row_group(row: dict[str, Any]) -> str:
             "wall_light": "lamp_wall",
             "lighting": "lamp_ceiling",
             "light": "lamp_ceiling",
+            "rug": "rug",
+            "pillow": "pillow",
+            "blanket": "blanket",
+            "mattress": "mattress",
+            "towel": "towel",
         }
         if category_norm in direct_map:
             return direct_map[category_norm]
@@ -2406,6 +2431,13 @@ def _rank_candidate(target: dict[str, Any], row: dict[str, Any], context: dict[s
         return None
 
     target_group = str(target.get("semantic_group") or "").strip()
+    target_meta = target.get("meta") if isinstance(target.get("meta"), dict) else {}
+    force_supplier_target = bool(
+        target.get("force_replace_with_supplier")
+        or target.get("force_supplier_replacement")
+        or target_meta.get("force_replace_with_supplier")
+        or target_meta.get("force_supplier_replacement")
+    )
     if _bedroom_ceiling_light_reject_reason(target, row, context):
         return None
     accessory_group_relaxed_size = target_group in {"kitchenware", "food_drink", "decorative_set", "plant_planter_vase"}
@@ -2416,7 +2448,7 @@ def _rank_candidate(target: dict[str, Any], row: dict[str, Any], context: dict[s
     relaxed_missing_size = bool(
         size_breakdown.get("candidate_size_m") is None
         and category_rank == 0
-        and has_downloadable_asset
+        and (has_downloadable_asset or (force_supplier_target and has_viable_asset_hint))
     )
     relaxed_accessory_size = bool(accessory_group_relaxed_size and category_rank == 0 and (has_real_asset or has_downloadable_asset or has_viable_asset_hint))
     if size_rank != 0 and not (relaxed_missing_size or relaxed_accessory_size):
@@ -2607,6 +2639,14 @@ def _candidate_has_viable_asset_hint(candidate: dict[str, Any]) -> tuple[bool, s
         return True, f"downloadable_asset:{model_format}"
     if _candidate_has_downloadable_asset(candidate):
         return True, "downloadable_asset"
+    if str(candidate.get("preview_local_path") or "").strip():
+        return True, "preview_image_asset_reference"
+    images = candidate.get("images")
+    if isinstance(images, list) and images:
+        return True, "product_image_asset_reference"
+    images_json = candidate.get("images_json")
+    if isinstance(images_json, str) and images_json.strip() not in {"", "[]"}:
+        return True, "product_image_asset_reference"
     return False, "no_viable_asset"
 
 
@@ -3074,6 +3114,13 @@ def _load_matcher_context(
 def _target_is_large_furniture_candidate(target: dict[str, Any]) -> bool:
     category = str(target.get("category") or "").strip()
     semantic_group = str(target.get("semantic_group") or "").strip()
+    meta = target.get("meta") if isinstance(target.get("meta"), dict) else {}
+    force_supplier = bool(
+        target.get("force_replace_with_supplier")
+        or target.get("force_supplier_replacement")
+        or meta.get("force_replace_with_supplier")
+        or meta.get("force_supplier_replacement")
+    )
     size_m = target.get("size_m") or [0.0, 0.0, 0.0]
     try:
         sx, sy, sz = [max(float(v), 0.0) for v in size_m]
@@ -3094,7 +3141,8 @@ def _target_is_large_furniture_candidate(target: dict[str, Any]) -> bool:
         "TowelFactory",
         "RugFactory",
     }
-    if category in excluded_categories and semantic_group != "lamp_table":
+    force_allowed_small_groups = {"lamp_table", "rug", "pillow", "blanket", "mattress", "towel"}
+    if category in excluded_categories and semantic_group not in force_allowed_small_groups:
         return False
 
     allowed_groups = {
@@ -3127,9 +3175,17 @@ def _target_is_large_furniture_candidate(target: dict[str, Any]) -> bool:
         "tv",
         "mirror",
         "bathroom_sink",
+        "rug",
+        "pillow",
+        "blanket",
+        "mattress",
+        "towel",
     }
     if semantic_group not in allowed_groups:
         return False
+
+    if force_supplier:
+        return True
 
     if semantic_group in {"nightstand", "side_table", "stool", "bench", "lamp_table", "lamp_floor", "lamp_ceiling", "mirror", "bathroom_sink", "kitchenware", "kitchen_faucet", "food_drink", "decorative_set", "plant_planter_vase"}:
         return True

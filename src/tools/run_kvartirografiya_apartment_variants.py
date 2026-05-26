@@ -368,8 +368,10 @@ def build_plan(args: argparse.Namespace) -> tuple[Path, dict[str, Any]]:
         "apartment_json": manifest.get("apartment_json"),
         "source_manifest": str((bundle_dir / "manifest.json").resolve()),
         "variant_modes": variant_modes,
+        "with_infinigen": bool(args.with_infinigen),
         "rooms": [],
     }
+    pipeline_placer = args.placer or ("infinigen_clean" if args.with_infinigen else None)
 
     for room_entry in manifest.get("rooms", []):
         if not isinstance(room_entry, dict):
@@ -430,8 +432,8 @@ def build_plan(args: argparse.Namespace) -> tuple[Path, dict[str, Any]]:
                 "--supplier-llm-provider",
                 args.supplier_llm_provider,
             ]
-            if args.placer:
-                cmd.extend(["--placer", args.placer])
+            if pipeline_placer:
+                cmd.extend(["--placer", pipeline_placer])
             if args.modes:
                 cmd.extend(["--modes", args.modes])
             if args.infinigen_fast_small:
@@ -522,6 +524,7 @@ def main() -> int:
     parser.add_argument("--supplier-top-k", type=int, default=5)
     parser.add_argument("--supplier-catalog-json", action="append", default=[])
     parser.add_argument("--supplier-llm-provider", choices=["none", "ollama"], default="none")
+    parser.add_argument("--with-infinigen", action="store_true", help="Generate room placement with Infinigen by passing --placer infinigen_clean to run_pipeline.py unless --placer is set explicitly.")
     parser.add_argument("--placer", default=None, help="run_pipeline.py placer, e.g. infinigen_clean")
     parser.add_argument("--modes", default=None, help="Optional run_pipeline.py --modes override")
     parser.add_argument("--infinigen-fast-small", action="store_true", help="Pass --infinigen-fast-small to run_pipeline.py")
