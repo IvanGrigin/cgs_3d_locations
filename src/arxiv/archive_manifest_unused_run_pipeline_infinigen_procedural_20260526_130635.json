@@ -1,0 +1,1336 @@
+{
+  "schema": "cgs_unused_files_archive_manifest/v1",
+  "created_at": "2026-05-26T13:06:36",
+  "scope": "run_pipeline.py with infinigen_clean primary path and procedural room stage; strict not-reachable candidates only",
+  "source_report": "out/analysis/unused_files_for_archive_run_pipeline_infinigen_procedural.md",
+  "archive_root": "src/arxiv",
+  "moved_count": 265,
+  "not_moved_note": "Files in the report section \"Needs import cleanup before archiving\" were intentionally left in place.",
+  "entries": [
+    {
+      "original_path": "src/Appraiser/appraiser.py",
+      "archived_path": "src/arxiv/Appraiser/appraiser.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/Appraiser/area_appraiser.py",
+      "archived_path": "src/arxiv/Appraiser/area_appraiser.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/Appraiser/llm_appraiser.py",
+      "archived_path": "src/arxiv/Appraiser/llm_appraiser.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/ChooseObject/choose_obj_from_prepared.py",
+      "archived_path": "src/arxiv/ChooseObject/choose_obj_from_prepared.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/FromTextToJSON.py",
+      "archived_path": "src/arxiv/FromTextToJSON.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/LLMModule/keys_manager.py",
+      "archived_path": "src/arxiv/LLMModule/keys_manager.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/LLMModule/keys_uploader.py",
+      "archived_path": "src/arxiv/LLMModule/keys_uploader.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/LLMModule/placement_fill.py",
+      "archived_path": "src/arxiv/LLMModule/placement_fill.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/LLMModule/probe_models.py",
+      "archived_path": "src/arxiv/LLMModule/probe_models.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/Plasement/BlenderOrientItem.py",
+      "archived_path": "src/arxiv/Plasement/BlenderOrientItem.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/Plasement/BlenderViewOBJFolder.py",
+      "archived_path": "src/arxiv/Plasement/BlenderViewOBJFolder.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/Plasement/BlenderVisualizeReplacementCompare.py",
+      "archived_path": "src/arxiv/Plasement/BlenderVisualizeReplacementCompare.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/Plasement/CubePlacement.py",
+      "archived_path": "src/arxiv/Plasement/CubePlacement.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/Plasement/VisualizePlacement.py",
+      "archived_path": "src/arxiv/Plasement/VisualizePlacement.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/Plasement/batch_orient_from_db.py",
+      "archived_path": "src/arxiv/Plasement/batch_orient_from_db.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/Plasement/blender_build_from_obj.py",
+      "archived_path": "src/arxiv/Plasement/blender_build_from_obj.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/Plasement/glb_parser.py",
+      "archived_path": "src/arxiv/Plasement/glb_parser.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/Plasement/pathfinding_astar.py",
+      "archived_path": "src/arxiv/Plasement/pathfinding_astar.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/Plasement/placement_checks.py",
+      "archived_path": "src/arxiv/Plasement/placement_checks.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/Plasement/procedural_proxy_blender.py",
+      "archived_path": "src/arxiv/Plasement/procedural_proxy_blender.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/Plasement/retrieval_knn_scene.py",
+      "archived_path": "src/arxiv/Plasement/retrieval_knn_scene.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/Plasement/run_diffuscene_remote.py",
+      "archived_path": "src/arxiv/Plasement/run_diffuscene_remote.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/Plasement/run_m3dlayout.py",
+      "archived_path": "src/arxiv/Plasement/run_m3dlayout.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/Plasement/run_ollama_layout.py",
+      "archived_path": "src/arxiv/Plasement/run_ollama_layout.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/floorplan_annotator_onefile.py",
+      "archived_path": "src/arxiv/floorplan_annotator_onefile.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/furniture_matcher.py",
+      "archived_path": "src/arxiv/furniture_matcher.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/ml/__init__.py",
+      "archived_path": "src/arxiv/ml/__init__.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/ml/baselines/__init__.py",
+      "archived_path": "src/arxiv/ml/baselines/__init__.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/ml/baselines/forest_placer.py",
+      "archived_path": "src/arxiv/ml/baselines/forest_placer.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/ml/baselines/graph_stat_placer.py",
+      "archived_path": "src/arxiv/ml/baselines/graph_stat_placer.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/ml/baselines/placer_greedy.py",
+      "archived_path": "src/arxiv/ml/baselines/placer_greedy.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/ml/baselines/random_feasible.py",
+      "archived_path": "src/arxiv/ml/baselines/random_feasible.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/ml/baselines/relaxed_cube.py",
+      "archived_path": "src/arxiv/ml/baselines/relaxed_cube.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/ml/baselines/repair_heuristic_v1.py",
+      "archived_path": "src/arxiv/ml/baselines/repair_heuristic_v1.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/ml/baselines/tree_regressor.py",
+      "archived_path": "src/arxiv/ml/baselines/tree_regressor.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/ml/configs/__init__.py",
+      "archived_path": "src/arxiv/ml/configs/__init__.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/ml/data_py/__init__.py",
+      "archived_path": "src/arxiv/ml/data_py/__init__.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/ml/data_py/build_corrupted_object_selector_v1.py",
+      "archived_path": "src/arxiv/ml/data_py/build_corrupted_object_selector_v1.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/ml/data_py/build_furniture_node_detector_v1.py",
+      "archived_path": "src/arxiv/ml/data_py/build_furniture_node_detector_v1.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/ml/data_py/build_repair_collision_finetune_v1.py",
+      "archived_path": "src/arxiv/ml/data_py/build_repair_collision_finetune_v1.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/ml/data_py/build_repair_corruptions_v1.py",
+      "archived_path": "src/arxiv/ml/data_py/build_repair_corruptions_v1.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/ml/data_py/build_repair_ranking_v1.py",
+      "archived_path": "src/arxiv/ml/data_py/build_repair_ranking_v1.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/ml/data_py/build_scene_repair_corruptions_v1.py",
+      "archived_path": "src/arxiv/ml/data_py/build_scene_repair_corruptions_v1.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/ml/data_py/corrupted_object_selector_dataset_v1.py",
+      "archived_path": "src/arxiv/ml/data_py/corrupted_object_selector_dataset_v1.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/ml/data_py/dataset_front.py",
+      "archived_path": "src/arxiv/ml/data_py/dataset_front.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/ml/data_py/find_collision_case_v1.py",
+      "archived_path": "src/arxiv/ml/data_py/find_collision_case_v1.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/ml/data_py/front_obb_bounds.py",
+      "archived_path": "src/arxiv/ml/data_py/front_obb_bounds.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/ml/data_py/preprocess_3dfront_repair_v1.py",
+      "archived_path": "src/arxiv/ml/data_py/preprocess_3dfront_repair_v1.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/ml/data_py/preprocess_front.py",
+      "archived_path": "src/arxiv/ml/data_py/preprocess_front.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/ml/data_py/preprocess_mini_to_canonical.py",
+      "archived_path": "src/arxiv/ml/data_py/preprocess_mini_to_canonical.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/ml/data_py/repair_dataset.py",
+      "archived_path": "src/arxiv/ml/data_py/repair_dataset.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/ml/data_py/repair_proposal_dataset_v1.py",
+      "archived_path": "src/arxiv/ml/data_py/repair_proposal_dataset_v1.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/ml/data_py/repair_ranking_dataset.py",
+      "archived_path": "src/arxiv/ml/data_py/repair_ranking_dataset.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/ml/data_py/schemas.py",
+      "archived_path": "src/arxiv/ml/data_py/schemas.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/ml/data_py/splits.py",
+      "archived_path": "src/arxiv/ml/data_py/splits.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/ml/eval_scene_repair_system_v1.py",
+      "archived_path": "src/arxiv/ml/eval_scene_repair_system_v1.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/ml/graph_stat_angle/train_models.py",
+      "archived_path": "src/arxiv/ml/graph_stat_angle/train_models.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/ml/infer/apply_repair_proposal_v1.py",
+      "archived_path": "src/arxiv/ml/infer/apply_repair_proposal_v1.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/ml/infer/diffusion_placer.py",
+      "archived_path": "src/arxiv/ml/infer/diffusion_placer.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/ml/infer/repair_diffusion.py",
+      "archived_path": "src/arxiv/ml/infer/repair_diffusion.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/ml/infer/repair_proposal_v1.py",
+      "archived_path": "src/arxiv/ml/infer/repair_proposal_v1.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/ml/infer/run_placer.py",
+      "archived_path": "src/arxiv/ml/infer/run_placer.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/ml/infer_layout_refiner.py",
+      "archived_path": "src/arxiv/ml/infer_layout_refiner.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/ml/lego_bridge.py",
+      "archived_path": "src/arxiv/ml/lego_bridge.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/ml/lego_postprocess.py",
+      "archived_path": "src/arxiv/ml/lego_postprocess.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/ml/metrics/__init__.py",
+      "archived_path": "src/arxiv/ml/metrics/__init__.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/ml/metrics/layout_metrics.py",
+      "archived_path": "src/arxiv/ml/metrics/layout_metrics.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/ml/metrics/report_runs.py",
+      "archived_path": "src/arxiv/ml/metrics/report_runs.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/ml/models/__init__.py",
+      "archived_path": "src/arxiv/ml/models/__init__.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/ml/models/corrupted_object_selector_v1.py",
+      "archived_path": "src/arxiv/ml/models/corrupted_object_selector_v1.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/ml/models/repair_diffusion.py",
+      "archived_path": "src/arxiv/ml/models/repair_diffusion.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/ml/models/repair_proposal_v1.py",
+      "archived_path": "src/arxiv/ml/models/repair_proposal_v1.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/ml/models/repair_scorer.py",
+      "archived_path": "src/arxiv/ml/models/repair_scorer.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/ml/train/__init__.py",
+      "archived_path": "src/arxiv/ml/train/__init__.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/ml/train/eval_forest.py",
+      "archived_path": "src/arxiv/ml/train/eval_forest.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/ml/train/eval_graph_stat.py",
+      "archived_path": "src/arxiv/ml/train/eval_graph_stat.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/ml/train/eval_model.py",
+      "archived_path": "src/arxiv/ml/train/eval_model.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/ml/train/eval_random.py",
+      "archived_path": "src/arxiv/ml/train/eval_random.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/ml/train/eval_relaxed_cube.py",
+      "archived_path": "src/arxiv/ml/train/eval_relaxed_cube.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/ml/train/plot_repair_proposal_history.py",
+      "archived_path": "src/arxiv/ml/train/plot_repair_proposal_history.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/ml/train/train_corrupted_object_selector_v1.py",
+      "archived_path": "src/arxiv/ml/train/train_corrupted_object_selector_v1.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/ml/train/train_furniture_node_detector_v1.py",
+      "archived_path": "src/arxiv/ml/train/train_furniture_node_detector_v1.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/ml/train/train_repair_diffusion.py",
+      "archived_path": "src/arxiv/ml/train/train_repair_diffusion.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/ml/train/train_repair_proposal_v1.py",
+      "archived_path": "src/arxiv/ml/train/train_repair_proposal_v1.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/ml/train/train_repair_scorer.py",
+      "archived_path": "src/arxiv/ml/train/train_repair_scorer.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/ml/train/train_tree.py",
+      "archived_path": "src/arxiv/ml/train/train_tree.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/ml/train_layout_mps.py",
+      "archived_path": "src/arxiv/ml/train_layout_mps.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/pipeline/__init__.py",
+      "archived_path": "src/arxiv/pipeline/__init__.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/pipeline/batch_generate_prompt_scenes.py",
+      "archived_path": "src/arxiv/pipeline/batch_generate_prompt_scenes.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/pipeline/generate_prompt_scene.py",
+      "archived_path": "src/arxiv/pipeline/generate_prompt_scene.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/pipeline/llm_vlm_layout_refinement/__init__.py",
+      "archived_path": "src/arxiv/pipeline/llm_vlm_layout_refinement/__init__.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/pipeline/llm_vlm_layout_refinement/__main__.py",
+      "archived_path": "src/arxiv/pipeline/llm_vlm_layout_refinement/__main__.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/pipeline/llm_vlm_layout_refinement/dynamic_prompt_image_eval.py",
+      "archived_path": "src/arxiv/pipeline/llm_vlm_layout_refinement/dynamic_prompt_image_eval.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/pipeline/llm_vlm_layout_refinement/evaluation.py",
+      "archived_path": "src/arxiv/pipeline/llm_vlm_layout_refinement/evaluation.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/pipeline/llm_vlm_layout_refinement/evaluation_cli.py",
+      "archived_path": "src/arxiv/pipeline/llm_vlm_layout_refinement/evaluation_cli.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/pipeline/llm_vlm_layout_refinement/generation.py",
+      "archived_path": "src/arxiv/pipeline/llm_vlm_layout_refinement/generation.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/pipeline/llm_vlm_layout_refinement/judge_cli.py",
+      "archived_path": "src/arxiv/pipeline/llm_vlm_layout_refinement/judge_cli.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/pipeline/llm_vlm_layout_refinement/run.py",
+      "archived_path": "src/arxiv/pipeline/llm_vlm_layout_refinement/run.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/pipeline/llm_vlm_screening.py",
+      "archived_path": "src/arxiv/pipeline/llm_vlm_screening.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/pipeline/semantic_room_planner/__init__.py",
+      "archived_path": "src/arxiv/pipeline/semantic_room_planner/__init__.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/prompt_compiler/__init__.py",
+      "archived_path": "src/arxiv/prompt_compiler/__init__.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/prompt_compiler/llm_client.py",
+      "archived_path": "src/arxiv/prompt_compiler/llm_client.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/prompt_compiler/prompt_to_intent.py",
+      "archived_path": "src/arxiv/prompt_compiler/prompt_to_intent.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/run_mode_benchmark.py",
+      "archived_path": "src/arxiv/run_mode_benchmark.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/run_quality_search.py",
+      "archived_path": "src/arxiv/run_quality_search.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/run_supplier_rebind_pipeline.py",
+      "archived_path": "src/arxiv/run_supplier_rebind_pipeline.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/scene_quality/__init__.py",
+      "archived_path": "src/arxiv/scene_quality/__init__.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/scene_quality/judge_runner.py",
+      "archived_path": "src/arxiv/scene_quality/judge_runner.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/scene_quality/quality_gate.py",
+      "archived_path": "src/arxiv/scene_quality/quality_gate.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/scene_quality/repair_loop.py",
+      "archived_path": "src/arxiv/scene_quality/repair_loop.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/scene_quality/report_builder.py",
+      "archived_path": "src/arxiv/scene_quality/report_builder.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/suppliers/__init__.py",
+      "archived_path": "src/arxiv/suppliers/__init__.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/suppliers/adapters/__init__.py",
+      "archived_path": "src/arxiv/suppliers/adapters/__init__.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/suppliers/analyze_supplier_catalog.py",
+      "archived_path": "src/arxiv/suppliers/analyze_supplier_catalog.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/suppliers/backfill_3ddd_prices.py",
+      "archived_path": "src/arxiv/suppliers/backfill_3ddd_prices.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/suppliers/backfill_styles_from_web_taxonomy.py",
+      "archived_path": "src/arxiv/suppliers/backfill_styles_from_web_taxonomy.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/suppliers/bootstrap_3ddd_session.py",
+      "archived_path": "src/arxiv/suppliers/bootstrap_3ddd_session.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/suppliers/build_idealbeds_yadisk_catalog.py",
+      "archived_path": "src/arxiv/suppliers/build_idealbeds_yadisk_catalog.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/suppliers/build_storage_one_table.py",
+      "archived_path": "src/arxiv/suppliers/build_storage_one_table.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/suppliers/build_unified_catalog_db.py",
+      "archived_path": "src/arxiv/suppliers/build_unified_catalog_db.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/suppliers/common.py",
+      "archived_path": "src/arxiv/suppliers/common.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/suppliers/enrich_catalog_style_llm.py",
+      "archived_path": "src/arxiv/suppliers/enrich_catalog_style_llm.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/suppliers/enrich_catalog_styles_vlm.py",
+      "archived_path": "src/arxiv/suppliers/enrich_catalog_styles_vlm.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/suppliers/export_catalog_json.py",
+      "archived_path": "src/arxiv/suppliers/export_catalog_json.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/suppliers/export_group_samples.py",
+      "archived_path": "src/arxiv/suppliers/export_group_samples.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/suppliers/export_room_samples.py",
+      "archived_path": "src/arxiv/suppliers/export_room_samples.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/suppliers/extract_catalog_image_colors.py",
+      "archived_path": "src/arxiv/suppliers/extract_catalog_image_colors.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/suppliers/ingest_manual_urls.py",
+      "archived_path": "src/arxiv/suppliers/ingest_manual_urls.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/suppliers/kitchen/__init__.py",
+      "archived_path": "src/arxiv/suppliers/kitchen/__init__.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/suppliers/kitchen/run_kitchen_render.py",
+      "archived_path": "src/arxiv/suppliers/kitchen/run_kitchen_render.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/suppliers/merge_vlm_description_jsonl.py",
+      "archived_path": "src/arxiv/suppliers/merge_vlm_description_jsonl.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/suppliers/merge_vlm_descriptions_into_catalogs.py",
+      "archived_path": "src/arxiv/suppliers/merge_vlm_descriptions_into_catalogs.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/suppliers/normalize_supplier_assets.py",
+      "archived_path": "src/arxiv/suppliers/normalize_supplier_assets.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/suppliers/parse_3dsky.py",
+      "archived_path": "src/arxiv/suppliers/parse_3dsky.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/suppliers/parse_archiproducts.py",
+      "archived_path": "src/arxiv/suppliers/parse_archiproducts.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/suppliers/parse_dimensiva.py",
+      "archived_path": "src/arxiv/suppliers/parse_dimensiva.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/suppliers/probe_model_fbx_presence.py",
+      "archived_path": "src/arxiv/suppliers/probe_model_fbx_presence.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/suppliers/render_vlm_style_report.py",
+      "archived_path": "src/arxiv/suppliers/render_vlm_style_report.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/suppliers/test_single_asset_probe.py",
+      "archived_path": "src/arxiv/suppliers/test_single_asset_probe.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/annotate_floorplan_batches.py",
+      "archived_path": "src/arxiv/tools/annotate_floorplan_batches.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/annotate_floorplan_batches_click.py",
+      "archived_path": "src/arxiv/tools/annotate_floorplan_batches_click.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/annotate_floorplan_candidates.py",
+      "archived_path": "src/arxiv/tools/annotate_floorplan_candidates.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/assemble_apartment_blend.py",
+      "archived_path": "src/arxiv/tools/assemble_apartment_blend.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/backfill_batch_blends_and_gifs.py",
+      "archived_path": "src/arxiv/tools/backfill_batch_blends_and_gifs.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/backfill_unknown_categories.py",
+      "archived_path": "src/arxiv/tools/backfill_unknown_categories.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/baselines_all_infographic_like_reference.py",
+      "archived_path": "src/arxiv/tools/baselines_all_infographic_like_reference.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/basisrf_surface_materials_scraper.py",
+      "archived_path": "src/arxiv/tools/basisrf_surface_materials_scraper.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/batch_appraise_and_export_metrics.py",
+      "archived_path": "src/arxiv/tools/batch_appraise_and_export_metrics.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/batch_blend_to_orbit_gif.py",
+      "archived_path": "src/arxiv/tools/batch_blend_to_orbit_gif.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/batch_generate_typical_rooms.py",
+      "archived_path": "src/arxiv/tools/batch_generate_typical_rooms.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/batch_generate_typical_rooms_cube_no_llm.py",
+      "archived_path": "src/arxiv/tools/batch_generate_typical_rooms_cube_no_llm.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/batch_generate_typical_rooms_llm.py",
+      "archived_path": "src/arxiv/tools/batch_generate_typical_rooms_llm.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/batch_generate_typical_rooms_retrieval.py",
+      "archived_path": "src/arxiv/tools/batch_generate_typical_rooms_retrieval.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/batch_make_processed_mini.py",
+      "archived_path": "src/arxiv/tools/batch_make_processed_mini.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/blender_build_front_scene.py",
+      "archived_path": "src/arxiv/tools/blender_build_front_scene.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/blender_imd_inspector.py",
+      "archived_path": "src/arxiv/tools/blender_imd_inspector.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/blender_obj_preview.py",
+      "archived_path": "src/arxiv/tools/blender_obj_preview.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/blender_orbit_render.py",
+      "archived_path": "src/arxiv/tools/blender_orbit_render.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/build_front_scene.py",
+      "archived_path": "src/arxiv/tools/build_front_scene.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/build_load_test_report.py",
+      "archived_path": "src/arxiv/tools/build_load_test_report.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/build_mosplitka_surface_catalog.py",
+      "archived_path": "src/arxiv/tools/build_mosplitka_surface_catalog.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/build_source_category_id_to_label.py",
+      "archived_path": "src/arxiv/tools/build_source_category_id_to_label.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/build_unified_supplier_catalog_db.py",
+      "archived_path": "src/arxiv/tools/build_unified_supplier_catalog_db.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/collect_full_circle_timing_breakdown.py",
+      "archived_path": "src/arxiv/tools/collect_full_circle_timing_breakdown.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/collect_housesru_all_magazine_images.py",
+      "archived_path": "src/arxiv/tools/collect_housesru_all_magazine_images.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/collect_housesru_all_magazine_images_v2.py",
+      "archived_path": "src/arxiv/tools/collect_housesru_all_magazine_images_v2.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/collect_housesru_all_magazine_images_v3.py",
+      "archived_path": "src/arxiv/tools/collect_housesru_all_magazine_images_v3.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/compare_batch_summaries.py",
+      "archived_path": "src/arxiv/tools/compare_batch_summaries.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/compute_experimental_confidence_intervals.py",
+      "archived_path": "src/arxiv/tools/compute_experimental_confidence_intervals.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/debug_asset_textures.py",
+      "archived_path": "src/arxiv/tools/debug_asset_textures.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/divan_ru_article_interiors_scraper.py",
+      "archived_path": "src/arxiv/tools/divan_ru_article_interiors_scraper.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/domlenta_floor_coverings_scraper.py",
+      "archived_path": "src/arxiv/tools/domlenta_floor_coverings_scraper.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/download_floorplans.py",
+      "archived_path": "src/arxiv/tools/download_floorplans.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/enrich_catalog_de_terms_ct2.py",
+      "archived_path": "src/arxiv/tools/enrich_catalog_de_terms_ct2.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/enrich_kitchen_living_area_llm.py",
+      "archived_path": "src/arxiv/tools/enrich_kitchen_living_area_llm.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/ensure_apartment_requirements.py",
+      "archived_path": "src/arxiv/tools/ensure_apartment_requirements.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/evaluate_divan_ru_indoor_vlm.py",
+      "archived_path": "src/arxiv/tools/evaluate_divan_ru_indoor_vlm.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/evaluate_mebelru_render_quality_vlm.py",
+      "archived_path": "src/arxiv/tools/evaluate_mebelru_render_quality_vlm.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/evaluate_real_photos_vlm.py",
+      "archived_path": "src/arxiv/tools/evaluate_real_photos_vlm.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/evaluate_unified_scene.py",
+      "archived_path": "src/arxiv/tools/evaluate_unified_scene.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/evaluate_vlm_review_views.py",
+      "archived_path": "src/arxiv/tools/evaluate_vlm_review_views.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/export_angle_pairs_csv.py",
+      "archived_path": "src/arxiv/tools/export_angle_pairs_csv.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/export_angle_pairs_csv_2.py",
+      "archived_path": "src/arxiv/tools/export_angle_pairs_csv_2.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/export_scene_placement_distributions.py",
+      "archived_path": "src/arxiv/tools/export_scene_placement_distributions.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/finalize_apartment_requirements.py",
+      "archived_path": "src/arxiv/tools/finalize_apartment_requirements.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/finalize_apartment_requirements_blender.py",
+      "archived_path": "src/arxiv/tools/finalize_apartment_requirements_blender.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/freepik_free_textures_downloader.py",
+      "archived_path": "src/arxiv/tools/freepik_free_textures_downloader.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/front_processed_to_room_objects.py",
+      "archived_path": "src/arxiv/tools/front_processed_to_room_objects.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/generate_typical_rooms.py",
+      "archived_path": "src/arxiv/tools/generate_typical_rooms.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/glb_creator_build_visual_report.py",
+      "archived_path": "src/arxiv/tools/glb_creator_build_visual_report.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/glb_creator_from_supplier_catalog.py",
+      "archived_path": "src/arxiv/tools/glb_creator_from_supplier_catalog.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/glb_creator_render_glb_blender.py",
+      "archived_path": "src/arxiv/tools/glb_creator_render_glb_blender.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/headless_asset_to_obj_analyze.py",
+      "archived_path": "src/arxiv/tools/headless_asset_to_obj_analyze.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/hoff_interiors_scraper.py",
+      "archived_path": "src/arxiv/tools/hoff_interiors_scraper.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/ikea_de_catalog_scraper.py",
+      "archived_path": "src/arxiv/tools/ikea_de_catalog_scraper.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/ingest_stoolgroup_catalog_to_suppliers.py",
+      "archived_path": "src/arxiv/tools/ingest_stoolgroup_catalog_to_suppliers.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/ingest_tonyroaks_catalog_to_suppliers.py",
+      "archived_path": "src/arxiv/tools/ingest_tonyroaks_catalog_to_suppliers.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/inspect_blend_bounds.py",
+      "archived_path": "src/arxiv/tools/inspect_blend_bounds.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/inspect_scene_items.py",
+      "archived_path": "src/arxiv/tools/inspect_scene_items.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/json_mini_convector_filter.py",
+      "archived_path": "src/arxiv/tools/json_mini_convector_filter.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/kvartirografiya_adapter.py",
+      "archived_path": "src/arxiv/tools/kvartirografiya_adapter.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/make_divan_ru_indoor_vlm_html_report.py",
+      "archived_path": "src/arxiv/tools/make_divan_ru_indoor_vlm_html_report.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/make_index_bedrooms_livingrooms.py",
+      "archived_path": "src/arxiv/tools/make_index_bedrooms_livingrooms.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/make_real_photo_vlm_html_report.py",
+      "archived_path": "src/arxiv/tools/make_real_photo_vlm_html_report.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/make_scene_mini_blender.py",
+      "archived_path": "src/arxiv/tools/make_scene_mini_blender.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/measure_glb_bbox_blender.py",
+      "archived_path": "src/arxiv/tools/measure_glb_bbox_blender.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/mebelru_catalog_scraper.py",
+      "archived_path": "src/arxiv/tools/mebelru_catalog_scraper.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/mebelru_select_diverse_glb_test_cards.py",
+      "archived_path": "src/arxiv/tools/mebelru_select_diverse_glb_test_cards.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/merge_housesru_pages_catalog.py",
+      "archived_path": "src/arxiv/tools/merge_housesru_pages_catalog.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/mosplitka_jsonld_image_downloader.py",
+      "archived_path": "src/arxiv/tools/mosplitka_jsonld_image_downloader.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/mosplitka_select_material_images.py",
+      "archived_path": "src/arxiv/tools/mosplitka_select_material_images.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/mosplitka_tile_scraper.py",
+      "archived_path": "src/arxiv/tools/mosplitka_tile_scraper.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/mosplitka_vlm_describe_materials.py",
+      "archived_path": "src/arxiv/tools/mosplitka_vlm_describe_materials.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/normalize_supplier_categories_taxonomy.py",
+      "archived_path": "src/arxiv/tools/normalize_supplier_categories_taxonomy.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/oboykin_wallpapers_scraper.py",
+      "archived_path": "src/arxiv/tools/oboykin_wallpapers_scraper.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/olimpic_carpets_scraper.py",
+      "archived_path": "src/arxiv/tools/olimpic_carpets_scraper.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/package_floorplan_annotation_zip.py",
+      "archived_path": "src/arxiv/tools/package_floorplan_annotation_zip.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/parse_flippingbook_floorplans.py",
+      "archived_path": "src/arxiv/tools/parse_flippingbook_floorplans.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/parse_imodern_html_to_db.py",
+      "archived_path": "src/arxiv/tools/parse_imodern_html_to_db.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/piterra_file_share_probe.py",
+      "archived_path": "src/arxiv/tools/piterra_file_share_probe.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/piterra_wallpapers_scraper.py",
+      "archived_path": "src/arxiv/tools/piterra_wallpapers_scraper.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/plot_layout_grid_sweep_summary.py",
+      "archived_path": "src/arxiv/tools/plot_layout_grid_sweep_summary.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/plot_layout_heatmap_diff_analysis.py",
+      "archived_path": "src/arxiv/tools/plot_layout_heatmap_diff_analysis.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/plot_layout_method_distances.py",
+      "archived_path": "src/arxiv/tools/plot_layout_method_distances.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/plot_scene_mini_2d.py",
+      "archived_path": "src/arxiv/tools/plot_scene_mini_2d.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/postprocess_floorplans_by_palette.py",
+      "archived_path": "src/arxiv/tools/postprocess_floorplans_by_palette.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/postprocess_floorplans_by_palette_v2.py",
+      "archived_path": "src/arxiv/tools/postprocess_floorplans_by_palette_v2.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/postprocess_sanitary_tile_materials.py",
+      "archived_path": "src/arxiv/tools/postprocess_sanitary_tile_materials.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/preprocess_front_simple.py",
+      "archived_path": "src/arxiv/tools/preprocess_front_simple.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/rank_floorplan_candidates.py",
+      "archived_path": "src/arxiv/tools/rank_floorplan_candidates.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/rank_floorplan_candidates_v2.py",
+      "archived_path": "src/arxiv/tools/rank_floorplan_candidates_v2.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/render_apartment_room_corner_views.py",
+      "archived_path": "src/arxiv/tools/render_apartment_room_corner_views.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/render_batch_9views_for_procedural_rooms.py",
+      "archived_path": "src/arxiv/tools/render_batch_9views_for_procedural_rooms.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/render_blend_vlm_views.py",
+      "archived_path": "src/arxiv/tools/render_blend_vlm_views.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/render_fbx_preview.py",
+      "archived_path": "src/arxiv/tools/render_fbx_preview.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/render_kitchen_assembly_blender.py",
+      "archived_path": "src/arxiv/tools/render_kitchen_assembly_blender.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/render_layout_heatmaps.py",
+      "archived_path": "src/arxiv/tools/render_layout_heatmaps.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/render_procedural_proxy_gallery.py",
+      "archived_path": "src/arxiv/tools/render_procedural_proxy_gallery.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/review_previews_yn.py",
+      "archived_path": "src/arxiv/tools/review_previews_yn.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/review_rooms.py",
+      "archived_path": "src/arxiv/tools/review_rooms.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/room_generator.py",
+      "archived_path": "src/arxiv/tools/room_generator.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/run_apartment_infinigen_bundle.py",
+      "archived_path": "src/arxiv/tools/run_apartment_infinigen_bundle.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/run_floor_material_selector.py",
+      "archived_path": "src/arxiv/tools/run_floor_material_selector.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/run_full_circle_room_batch.py",
+      "archived_path": "src/arxiv/tools/run_full_circle_room_batch.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/run_kvartirografiya_apartment_room_jobs.py",
+      "archived_path": "src/arxiv/tools/run_kvartirografiya_apartment_room_jobs.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/run_kvartirografiya_apartment_variants.py",
+      "archived_path": "src/arxiv/tools/run_kvartirografiya_apartment_variants.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/run_parse_flippingbook_floorplans_parallel.py",
+      "archived_path": "src/arxiv/tools/run_parse_flippingbook_floorplans_parallel.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/run_procedural_room_distribution_corpus.py",
+      "archived_path": "src/arxiv/tools/run_procedural_room_distribution_corpus.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/run_procedural_room_stage.py",
+      "archived_path": "src/arxiv/tools/run_procedural_room_stage.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/run_procedural_room_supplier.py",
+      "archived_path": "src/arxiv/tools/run_procedural_room_supplier.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/run_semantic_room_planner.py",
+      "archived_path": "src/arxiv/tools/run_semantic_room_planner.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/run_topview_vlm_orientation_batch.py",
+      "archived_path": "src/arxiv/tools/run_topview_vlm_orientation_batch.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/run_wall_material_selector.py",
+      "archived_path": "src/arxiv/tools/run_wall_material_selector.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/savlukov_convert_prices_audit.py",
+      "archived_path": "src/arxiv/tools/savlukov_convert_prices_audit.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/savlukov_enrich_catalog_cards.py",
+      "archived_path": "src/arxiv/tools/savlukov_enrich_catalog_cards.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/savlukov_yadisk_ingest.py",
+      "archived_path": "src/arxiv/tools/savlukov_yadisk_ingest.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/shtorystore_curtains_scraper.py",
+      "archived_path": "src/arxiv/tools/shtorystore_curtains_scraper.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/split_front_processed_by_rooms.py",
+      "archived_path": "src/arxiv/tools/split_front_processed_by_rooms.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/stitch_existing_room_blends.py",
+      "archived_path": "src/arxiv/tools/stitch_existing_room_blends.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/stoolgroup_3d_model_catalog_scraper.py",
+      "archived_path": "src/arxiv/tools/stoolgroup_3d_model_catalog_scraper.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/summarize_apartment_cost.py",
+      "archived_path": "src/arxiv/tools/summarize_apartment_cost.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/tonyroaks_3d_model_catalog_scraper.py",
+      "archived_path": "src/arxiv/tools/tonyroaks_3d_model_catalog_scraper.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/tools/translate_catalog_de_to_ru_en_googletrans.py",
+      "archived_path": "src/arxiv/tools/translate_catalog_de_to_ru_en_googletrans.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/trellis_progress.py",
+      "archived_path": "src/arxiv/trellis_progress.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    },
+    {
+      "original_path": "src/trellis_supplier_asset_orchestrator.py",
+      "archived_path": "src/arxiv/trellis_supplier_asset_orchestrator.py",
+      "reason": "strict archive candidate: not reached by run_pipeline infinigen_clean/procedural import/subprocess closure"
+    }
+  ]
+}

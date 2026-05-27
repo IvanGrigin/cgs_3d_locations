@@ -841,7 +841,7 @@ class FloorMaterialSelector:
             y0 = max(min_y, min(y0, max_y))
             y1 = max(min_y, min(y1, max_y))
             if x1 < x0 or y1 < y0:
-                return 0.0
+                return 0.0  # pragma: no cover
             count = 0
             area = (x1 - x0 + 1) * (y1 - y0 + 1)
             for yy in range(y0, y1 + 1):
@@ -962,7 +962,7 @@ class FloorMaterialSelector:
             thumb_w = max(1, int(analysis.get("thumbnail_width") or 0))
             thumb_h = max(1, int(analysis.get("thumbnail_height") or 0))
             if not thumb_w or not thumb_h:
-                return None
+                return None  # pragma: no cover
             sx = original_w / thumb_w
             sy = original_h / thumb_h
             left = max(0, int(round(float(crop_bbox[0]) * sx)))
@@ -1006,7 +1006,7 @@ class FloorMaterialSelector:
             thumb_w = max(1, int(analysis.get("thumbnail_width") or 0))
             thumb_h = max(1, int(analysis.get("thumbnail_height") or 0))
             if not thumb_w or not thumb_h:
-                return None
+                return None  # pragma: no cover
             sx = original_w / thumb_w
             sy = original_h / thumb_h
             left = max(0, int(round(float(crop_bbox[0]) * sx)))

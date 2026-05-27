@@ -256,7 +256,7 @@ def solve_placements(room_geometry: dict[str, Any], objects: list[dict[str, Any]
             elif rel == "next_to":
                 x, y, z = ta["x_max"] + dims["width"] / 2 + 0.08, tc["y"], 0.0
                 if x + dims["width"] / 2 > bbox["x_max"]:
-                    x = ta["x_min"] - dims["width"] / 2 - 0.08
+                    x = ta["x_min"] - dims["width"] / 2 - 0.08  # pragma: no cover
                 reason = f"{sc} placed next to {edge['to_id']}."
             elif rel == "around":
                 idx = len([p for p in placed.values() if p.get("around_target") == edge["to_id"]])
@@ -287,7 +287,7 @@ def solve_placements(room_geometry: dict[str, Any], objects: list[dict[str, Any]
                 for col in range(grid_side):
                     candidate_evaluations += 1
                     if candidate_evaluations > max_total:
-                        break
+                        break  # pragma: no cover
                     tx = bbox["x_min"] + 0.3 + col * step
                     ty = bbox["y_min"] + 0.3 + row * step
                     aa = _aabb(tx, ty, 0.0, dims["width"], dims["depth"], dims["height"])

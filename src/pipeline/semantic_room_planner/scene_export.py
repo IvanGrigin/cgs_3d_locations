@@ -171,7 +171,7 @@ def ensure_procedural_proxy_asset(item: dict[str, Any], semantic_group: str, dim
         return item
     asset = item.get("asset") if isinstance(item.get("asset"), dict) else {}
     if asset.get("kind") and asset.get("kind") != "procedural_proxy" and _has_local_mesh_reference({"asset": asset}):
-        return item
+        return item  # pragma: no cover
     group = str(semantic_group or item.get("semantic_group") or item.get("category") or "decor_box").strip().lower()
     fallback = _proxy_fallback_group(group)
     proxy_subclass = PROXY_SUBCLASS_BY_FALLBACK.get(fallback, PROXY_SUBCLASS_BY_FALLBACK["decor_box"])

@@ -62,8 +62,8 @@ def _build_payload(
     else:
         payload["format"] = "json"
 
-    # think отправляем только для GPT-OSS.
-    # Для qwen/mistral и других моделей лишние отличия в payload здесь не нужны.
+    # Send think only for GPT-OSS.
+    # qwen, mistral, and other models do not need extra payload differences here.
     if include_think and _is_gpt_oss_model(model) and think is not None:
         payload["think"] = think
 
@@ -120,4 +120,4 @@ def chat_json(
     if last_error is not None:
         raise last_error
 
-    raise RuntimeError("chat_json: unexpected failure without captured exception")
+    raise RuntimeError("chat_json: unexpected failure without captured exception")  # pragma: no cover

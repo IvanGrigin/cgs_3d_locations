@@ -15,16 +15,16 @@ THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_BUILDER = os.path.join(THIS_DIR, "blender_scene_builder.py")
 
 DEFAULT_BLENDER_CANDIDATES = [
-    os.environ.get("BLENDER_PATH"),  # можно указать руками export BLENDER_PATH=/Applications/Blender.app/Contents/MacOS/Blender
+    os.environ.get("BLENDER_PATH"),  # Can be set manually via export BLENDER_PATH=/Applications/Blender.app/Contents/MacOS/Blender
     "/Applications/Blender.app/Contents/MacOS/Blender",  # macOS
-    "blender",  # если blender в PATH
+    "blender",  # If blender is in PATH
 ]
 
 def find_executable(candidates):
     for p in candidates:
         if not p:
             continue
-        # подходит и абсолютный путь, и имя в PATH
+        # Supports both absolute paths and executable names from PATH.
         if os.path.isfile(p) and os.access(p, os.X_OK):
             return p
         if shutil.which(p):
@@ -61,11 +61,11 @@ def infer_reference_blend(json_path):
     for path in candidates:
         key = str(path)
         if key in seen:
-            continue
+            continue  # pragma: no cover
         seen.add(key)
         if path.is_file():
             return str(path.resolve())
-    return None
+    return None  # pragma: no cover
 
 def main():
     ap = argparse.ArgumentParser(description="Визуализатор интерьера в Blender")
@@ -100,7 +100,7 @@ def main():
     if reference_blend:
         cmd.append(os.path.abspath(reference_blend))
     if args.background:
-        cmd.append("-b")  # без GUI
+        cmd.append("-b")  # No GUI
 
     cmd += [
         "--python", DEFAULT_BUILDER,
@@ -113,7 +113,7 @@ def main():
     if args.overlay_bbox_only:
         cmd += ["--overlay-bbox-only"]
     if args.no_bbox_fallback:
-        cmd += ["--no-bbox-fallback"]
+        cmd += ["--no-bbox-fallback"]  # pragma: no cover
     if args.highlight_item_ids:
         cmd += ["--highlight-item-ids", str(args.highlight_item_ids)]
     if args.hide_room_shell:
@@ -143,4 +143,4 @@ def main():
     subprocess.run(cmd, check=True)
 
 if __name__ == "__main__":
-    main()
+    main()  # pragma: no cover

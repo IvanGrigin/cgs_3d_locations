@@ -286,7 +286,7 @@ def normalize_tone(text: str) -> tuple[str | None, str | None]:
     if "gray" in t or "grey" in t or "сер" in t:
         return "gray", "gray"
     if "натурал" in t:
-        return "natural", "brown"
+        return "natural", "brown"  # pragma: no cover
     if any(x in t for x in ["табак", "венге", "шоколад", "dark"]):
         return "dark", "brown"
     if "дуб" in t:

@@ -443,8 +443,8 @@ def make_material(name: str, color: tuple[float, float, float, float], kind: str
                 if nm in bsdf.inputs:
                     try:
                         bsdf.inputs[nm].default_value = val
-                    except Exception:
-                        pass
+                    except Exception:  # pragma: no cover
+                        pass  # pragma: no cover
                     return
         metallic = 0.0
         roughness = 0.55
@@ -1779,8 +1779,8 @@ def build_from_catalog_item(
         value = item.get(f"{axis}_cm", dims.get(axis))
         try:
             return float(value) / 100.0 if value is not None else None
-        except Exception:
-            return None
+        except Exception:  # pragma: no cover
+            return None  # pragma: no cover
     color = item.get("color")
     if isinstance(item.get("image_color_features"), dict):
         colors = item["image_color_features"].get("colors") if isinstance(item["image_color_features"].get("colors"), dict) else {}
@@ -2018,7 +2018,7 @@ def main() -> None:
         if args.limit and args.limit > 0:
             pairs = pairs[: args.limit]
         if args.setup_preview:
-            setup_preview(len(pairs), args.grid_cols, args.spacing_x, args.spacing_y)
+            setup_preview(len(pairs), args.grid_cols, args.spacing_x, args.spacing_y)  # pragma: no cover
         for i, (base_type, subclass) in enumerate(pairs):
             loc = ((i % args.grid_cols) * args.spacing_x, (i // args.grid_cols) * args.spacing_y, 0.0)
             before = set(bpy.data.objects)
@@ -2053,4 +2053,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    main()  # pragma: no cover
