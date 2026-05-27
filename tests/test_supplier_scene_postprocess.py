@@ -2,47 +2,13 @@ import json
 from pathlib import Path
 
 from src.apply_supplier_bindings import apply_supplier_bindings_to_data
+from src import apply_supplier_bindings as asb
+from tests.helpers.scene_builders import centered_item as _placement, placement_room_scene as _room_scene
+from tests.helpers.supplier_postprocess import patch_apply_postprocess
 
 
-def _room_scene(placements):
-    return {
-        "schema": "scene.v1",
-        "room": {
-            "type": "livingroom",
-            "floor_polygon": [
-                {"x": 0.0, "y": 0.0},
-                {"x": 6.0, "y": 0.0},
-                {"x": 6.0, "y": 6.0},
-                {"x": 0.0, "y": 6.0},
-            ],
-            "floor_z": 0.0,
-            "ceiling_height": 3.0,
-        },
-        "placements": placements,
-    }
-
-
-def _placement(item_id, category, x, y, z, sx=0.5, sy=0.5, sz=0.5, **extra):
-    item = {
-        "id": item_id,
-        "name": category,
-        "category": category,
-        "position_m": [x, y, z],
-        "size_m": [sx, sy, sz],
-        "aabb": {
-            "x_min": x - sx / 2,
-            "x_max": x + sx / 2,
-            "y_min": y - sy / 2,
-            "y_max": y + sy / 2,
-            "z_min": z - sz / 2,
-            "z_max": z + sz / 2,
-        },
-    }
-    item.update(extra)
-    return item
-
-
-def test_supplier_postprocess_deduplicates_ceiling_lights_to_room_center(tmp_path: Path) -> None:
+def test_supplier_postprocess_deduplicates_ceiling_lights_to_room_center(monkeypatch, tmp_path: Path) -> None:
+    patch_apply_postprocess(monkeypatch, asb, "ceiling")
     model_path = tmp_path / "lamp.obj"
     model_path.write_text("# obj\n", encoding="utf-8")
     placements = [
@@ -89,6 +55,7 @@ def test_supplier_postprocess_deduplicates_ceiling_lights_to_room_center(tmp_pat
 
 
 def test_supplier_postprocess_adds_supplier_chair_for_desk_without_chair(tmp_path: Path, monkeypatch) -> None:
+    patch_apply_postprocess(monkeypatch, asb, "table_chair")
     model_path = tmp_path / "chair.fbx"
     model_path.write_text("fbx\n", encoding="utf-8")
 
@@ -141,7 +108,8 @@ def test_supplier_postprocess_adds_supplier_chair_for_desk_without_chair(tmp_pat
     assert summary["unusable_table_suppressed_count"] == 0
 
 
-def test_supplier_postprocess_keeps_desk_with_nearby_chair() -> None:
+def test_supplier_postprocess_keeps_desk_with_nearby_chair(monkeypatch) -> None:
+    patch_apply_postprocess(monkeypatch, asb, "table_chair")
     desk = _placement("desk_1", "SimpleDeskFactory", 3.0, 3.0, 0.4, sx=1.2, sy=0.7, sz=0.8)
     chair = _placement("chair_1", "ChairFactory", 3.0, 2.15, 0.45, sx=0.5, sy=0.5, sz=0.9)
 
@@ -151,7 +119,8 @@ def test_supplier_postprocess_keeps_desk_with_nearby_chair() -> None:
     assert out["meta"]["supplier_postprocess"]["table_chair_affordance"]["added_count"] == 0
 
 
-def test_supplier_postprocess_moves_existing_chair_to_wide_side() -> None:
+def test_supplier_postprocess_moves_existing_chair_to_wide_side(monkeypatch) -> None:
+    patch_apply_postprocess(monkeypatch, asb, "table_chair")
     desk = _placement("desk_1", "SimpleDeskFactory", 3.0, 3.0, 0.4, sx=1.2, sy=0.7, sz=0.8)
     chair = _placement("chair_1", "ChairFactory", 5.0, 5.0, 0.45, sx=0.5, sy=0.5, sz=0.9)
 
@@ -171,6 +140,7 @@ def test_supplier_postprocess_moves_existing_chair_to_wide_side() -> None:
 
 
 def test_supplier_postprocess_adds_tv_on_empty_tv_stand(tmp_path: Path, monkeypatch) -> None:
+    patch_apply_postprocess(monkeypatch, asb, "tv")
     model_path = tmp_path / "tv.fbx"
     model_path.write_text("fbx\n", encoding="utf-8")
 
@@ -209,6 +179,7 @@ def test_supplier_postprocess_adds_tv_on_empty_tv_stand(tmp_path: Path, monkeypa
 
 
 def test_supplier_postprocess_adds_wall_tv_opposite_sofa(tmp_path: Path, monkeypatch) -> None:
+    patch_apply_postprocess(monkeypatch, asb, "tv")
     model_path = tmp_path / "tv.fbx"
     model_path.write_text("fbx\n", encoding="utf-8")
 
@@ -243,6 +214,7 @@ def test_supplier_postprocess_adds_wall_tv_opposite_sofa(tmp_path: Path, monkeyp
 
 
 def test_supplier_postprocess_does_not_add_tv_when_tv_exists(tmp_path: Path, monkeypatch) -> None:
+    patch_apply_postprocess(monkeypatch, asb, "tv")
     def fail_candidate(category_norms, target_size):
         raise AssertionError("TV candidate lookup should be skipped")
 

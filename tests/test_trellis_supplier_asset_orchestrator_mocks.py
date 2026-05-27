@@ -1659,6 +1659,14 @@ def test_trellis_run_orchestration_recovery_and_failure_edges(tmp_path, monkeypa
     ssh_scripts = []
     monkeypatch.setattr(tso, "try_reuse_remote_trellis2_asset", lambda **_kwargs: None)
     monkeypatch.setattr(tso, "try_resolve_direct_model_asset", lambda *_args, **_kwargs: None)
+    def fake_prepare_images(_card, local_job_dir, **_kwargs):
+        images_dir = Path(local_job_dir) / "images"
+        images_dir.mkdir(parents=True, exist_ok=True)
+        local_image = images_dir / "product.jpg"
+        local_image.write_bytes(b"img")
+        return [local_image], {"images": [str(local_image)], "count": 1, "trellis_input_dir": str(images_dir)}
+
+    monkeypatch.setattr(tso, "prepare_images", fake_prepare_images)
     monkeypatch.setattr(
         tso,
         "ask_ollama_single_object_vlm",
@@ -1741,6 +1749,7 @@ def test_trellis_run_orchestration_recovery_and_failure_edges(tmp_path, monkeypa
     )
     assert forced["ok"] is True
 
+    monkeypatch.setattr(tso, "_trellis_fallback_candidate_sequence", lambda binding, **_kwargs: [binding])
     monkeypatch.setattr(tso, "_run_orchestration_one", lambda _args: {"prepare_only": True})
     with pytest.raises(RuntimeError, match="prepare-only result"):
         tso.run_orchestration(_args(tmp_path, card_json=str(card_path), out_dir=str(tmp_path / "bad_prepare")))

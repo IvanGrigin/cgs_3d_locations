@@ -9,6 +9,7 @@ import pytest
 from src import apply_supplier_bindings as apply_bindings
 from src import supplier_layout_matcher as matcher
 from src.tools import run_procedural_room_supplier as procedural_supplier
+from tests.helpers.supplier_postprocess import patch_apply_postprocess
 
 
 def _write_json(path: Path, payload: dict) -> Path:
@@ -91,6 +92,7 @@ def _catalog_item(asset: Path, *, group: str = "chair", title: str = "Integratio
 @pytest.mark.integration
 @pytest.mark.e2e
 def test_matcher_to_apply_bindings_cli_smoke(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    patch_apply_postprocess(monkeypatch, apply_bindings)
     asset = tmp_path / "assets" / "chair.glb"
     asset.parent.mkdir(parents=True)
     asset.write_bytes(b"glb")
@@ -189,6 +191,7 @@ def test_matcher_to_apply_bindings_cli_smoke(tmp_path: Path, monkeypatch: pytest
 
 @pytest.mark.integration
 def test_procedural_room_supplier_cli_report_smoke(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    patch_apply_postprocess(monkeypatch, apply_bindings)
     room = _write_json(tmp_path / "room.json", _room_payload(include_window=False))
     out_dir = tmp_path / "out"
     asset = tmp_path / "assets" / "selected.glb"

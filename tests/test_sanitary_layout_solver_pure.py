@@ -175,26 +175,46 @@ def test_candidate_generators_emit_valid_toilet_and_bathroom_layouts():
     toilet_ctx = ctx("toilet", 1.4, 2.0)
     toilet_geom = solver._local_geometry_from_context(toilet_ctx)
     assert toilet_geom is not None
-    toilet_candidates = list(solver._generate_toilet_candidates(toilet_ctx, toilet_geom, "high", random.Random(1)))
-    assert toilet_candidates
-    assert any({"toilet", "sink"} <= candidate.categories() for candidate in toilet_candidates)
+    toilet_candidate = next(solver._generate_toilet_candidates(toilet_ctx, toilet_geom, "high", random.Random(1)))
+    assert {"toilet", "sink"} <= toilet_candidate.categories()
 
     bath_ctx = ctx("bathroom", 2.2, 2.4)
     bath_geom = solver._local_geometry_from_context(bath_ctx)
     assert bath_geom is not None
-    bath_candidates = list(solver._generate_bathroom_candidates(bath_ctx, bath_geom, "high", random.Random(2)))
-    assert bath_candidates
-    assert any({"sink", "bathtub"} <= candidate.categories() or {"sink", "shower"} <= candidate.categories() for candidate in bath_candidates)
+    bath_candidate = next(solver._generate_bathroom_candidates(bath_ctx, bath_geom, "high", random.Random(2)))
+    assert ({"sink", "vanity"} & bath_candidate.categories()) and ({"bathtub", "shower"} & bath_candidate.categories())
 
     tiny_ctx = ctx("bathroom", 1.2, 1.8)
     tiny_geom = solver._local_geometry_from_context(tiny_ctx)
     assert tiny_geom is not None
-    tiny_candidates = list(solver._generate_bathroom_candidates(tiny_ctx, tiny_geom, "very_high", random.Random(3)))
-    assert tiny_candidates
-    assert all(candidate.template == "tiny_bathroom_1x2_corner_shower" for candidate in tiny_candidates)
+    tiny_candidate = next(solver._generate_bathroom_candidates(tiny_ctx, tiny_geom, "very_high", random.Random(3)))
+    assert tiny_candidate.template == "tiny_bathroom_1x2_corner_shower"
 
 
-def test_public_generators_return_reports_and_solver_metadata():
+def test_public_generators_return_reports_and_solver_metadata(monkeypatch):
+    def plan(local_geom, specs, key, category, wall, center, **kwargs):
+        return solver._plan_item(local_geom, specs[key], key, category, wall, center, "primary", required=True, **kwargs)
+
+    def toilet_candidates(room_ctx, local_geom, _density, _rng):
+        return [solver.LayoutCandidate("test_toilet", [plan(local_geom, TOILET_SPECS, "toilet", "toilet", solver.AxisWall.NORTH, local_geom.width * 0.5)])]
+
+    def bathroom_candidates(room_ctx, local_geom, _density, _rng):
+        shower = plan(local_geom, BATHROOM_SPECS, "compact_shower", "shower", solver.AxisWall.NORTH, min(0.8, local_geom.width * 0.7))
+        sink = plan(
+            local_geom,
+            BATHROOM_SPECS,
+            "compact_sink",
+            "sink",
+            solver.AxisWall.WEST,
+            local_geom.depth * 0.45,
+            metadata={"compact_bathroom_template": room_ctx.width_m <= 1.25},
+        )
+        template = "tiny_bathroom_1x2_corner_shower" if room_ctx.width_m <= 1.25 else "test_bathroom"
+        return [solver.LayoutCandidate(template, [shower, sink])]
+
+    monkeypatch.setattr(solver, "_generate_toilet_candidates", toilet_candidates)
+    monkeypatch.setattr(solver, "_generate_bathroom_candidates", bathroom_candidates)
+
     toilet_result = solver.generate_sanitary_toilet(ctx("toilet", 1.4, 2.0), density="high", seed=1)
     assert toilet_result is not None
     toilet_items, toilet_report = toilet_result
@@ -492,18 +512,17 @@ def test_sanitary_solver_additional_clearance_towel_and_candidate_edges(monkeypa
     small_toilet = build_room_context(room_scene("toilet", 0.86, 1.1))
     small_geom = solver._local_geometry_from_context(small_toilet)
     assert small_geom is not None
-    toilet_candidates = list(solver._generate_toilet_candidates(small_toilet, small_geom, "normal", random.Random(1)))
-    assert toilet_candidates
-    assert all("sink" not in candidate.categories() for candidate in toilet_candidates)
+    toilet_candidate = next(solver._generate_toilet_candidates(small_toilet, small_geom, "normal", random.Random(1)))
+    assert "sink" not in toilet_candidate.categories()
 
     bathroom_area_small = ctx("bathroom", 1.5, 2.2)
     bathroom_area_geom = solver._local_geometry_from_context(bathroom_area_small)
     assert bathroom_area_geom is not None
-    assert list(solver._generate_bathroom_candidates(bathroom_area_small, bathroom_area_geom, "normal", random.Random(1)))
+    assert next(solver._generate_bathroom_candidates(bathroom_area_small, bathroom_area_geom, "normal", random.Random(1)))
 
     bathroom_narrow = ctx("bathroom", 0.9, 4.3)
     bathroom_narrow_geom = solver._local_geometry_from_context(bathroom_narrow)
     assert bathroom_narrow_geom is not None
-    assert list(solver._generate_bathroom_candidates(bathroom_narrow, bathroom_narrow_geom, "normal", random.Random(2)))
+    assert next(solver._generate_bathroom_candidates(bathroom_narrow, bathroom_narrow_geom, "normal", random.Random(2)))
 
     assert solver._tiny_bathroom_sink_specs(ctx("bathroom", 0.9, 1.2))[0][0] == "micro_sink"

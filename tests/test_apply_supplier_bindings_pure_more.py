@@ -7,52 +7,8 @@ from pathlib import Path
 import pytest
 
 from src import apply_supplier_bindings as asb
-from tests.helpers.scene_builders import scene_with_room
-
-
-def box(x1, x2, y1, y2, z1, z2):
-    return {"x_min": x1, "x_max": x2, "y_min": y1, "y_max": y2, "z_min": z1, "z_max": z2}
-
-
-def item(item_id, category, aabb, **extra):
-    payload = {
-        "id": item_id,
-        "name": category,
-        "category": category,
-        "position_m": asb._aabb_center(aabb),
-        "size_m": [aabb["x_max"] - aabb["x_min"], aabb["y_max"] - aabb["y_min"], aabb["z_max"] - aabb["z_min"]],
-        "aabb": dict(aabb),
-    }
-    payload.update(extra)
-    return payload
-
-
-def candidate(path: Path, *, unique_key: str = "cand", fmt: str | None = None, group: str = "chair"):
-    return {
-        "unique_key": unique_key,
-        "title": f"{group} candidate",
-        "semantic_group": group,
-        "category_norm": group,
-        "asset_local_path": str(path),
-        "asset_format": fmt or path.suffix.lstrip("."),
-        "asset_status": "local_supplier_asset",
-        "width_cm": 50,
-        "depth_cm": 60,
-        "height_cm": 90,
-        "source_site": "test",
-        "product_url": "https://example.test/p",
-    }
-
-
-def selected_binding(candidate_payload, *, target_id="target", group="chair"):
-    return {
-        "target_id": target_id,
-        "semantic_group": group,
-        "selection_status": "heuristic_top1_selected",
-        "provenance": {"final_asset_source": "supplier_catalog"},
-        "chosen_candidate": candidate_payload,
-        "top_candidates": [candidate_payload, dict(candidate_payload, unique_key="dup")],
-    }
+from tests.helpers.scene_builders import aabb_item as item, box, scene_with_room, supplier_binding as selected_binding, supplier_candidate as candidate
+from tests.helpers.supplier_postprocess import patch_apply_postprocess
 
 
 def test_candidate_asset_reference_and_geometry_helpers(tmp_path: Path):
@@ -406,6 +362,7 @@ def test_room_table_chair_tv_and_computer_affordances(monkeypatch, tmp_path: Pat
 
 
 def test_json_entrypoint_and_invalid_modes(monkeypatch, tmp_path: Path):
+    patch_apply_postprocess(monkeypatch, asb)
     mesh = tmp_path / "chair.obj"
     mesh.write_bytes(b"x")
     scene = {
@@ -445,6 +402,7 @@ def test_json_entrypoint_and_invalid_modes(monkeypatch, tmp_path: Path):
 
 
 def test_cli_main_parallel_items_sync_and_invalid_inputs(monkeypatch, tmp_path: Path, capsys):
+    patch_apply_postprocess(monkeypatch, asb)
     mesh = tmp_path / "bed.obj"
     mesh.write_bytes(b"x")
     bed_aabb = box(0, 2, 0, 2, 0, 0.7)
@@ -524,7 +482,8 @@ def test_cli_main_parallel_items_sync_and_invalid_inputs(monkeypatch, tmp_path: 
         asb.apply_supplier_bindings_to_data({"items": []}, {"bindings": {"bad": True}})
 
 
-def test_apply_supplier_bindings_to_items_collection_edge_branches(tmp_path: Path):
+def test_apply_supplier_bindings_to_items_collection_edge_branches(monkeypatch, tmp_path: Path):
+    patch_apply_postprocess(monkeypatch, asb)
     mesh = tmp_path / "replacement.fbx"
     mesh.write_bytes(b"fbx")
     scene = {
@@ -571,7 +530,8 @@ def test_apply_supplier_bindings_to_items_collection_edge_branches(tmp_path: Pat
     assert out["meta"]["supplier_binding_summary"]["local_asset_replaced_count"] == 1
 
 
-def test_apply_supplier_bindings_reanchors_preserved_generated_support_items(tmp_path: Path):
+def test_apply_supplier_bindings_reanchors_preserved_generated_support_items(monkeypatch, tmp_path: Path):
+    patch_apply_postprocess(monkeypatch, asb)
     bed_mesh = tmp_path / "bed.fbx"
     dresser_mesh = tmp_path / "dresser.fbx"
     bed_mesh.write_bytes(b"fbx")
