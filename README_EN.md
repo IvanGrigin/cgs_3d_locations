@@ -8,8 +8,8 @@ The project implements automatic generation of interior 3D scenes from a room pl
 
 ## Thesis Materials
 
-- [Final thesis text](Final%20file%20of%20Thesis.pdf)
-- [Defense presentation](Презентация_Григин_И_А.pdf)
+- [Final thesis text](thesis.pdf)
+- [Defense presentation](defense_presentation.pdf)
 - [Pipeline diagram](diagram.drawio.png)
 
 ## Motivation
